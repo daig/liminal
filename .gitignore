@@ -1,0 +1,73 @@
+# Xcode
+##
+.DS_Store
+*.swp
+*.lock
+profile
+xcuserdata/
+DerivedData/
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.xcworkspace
+!default.xcworkspace
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+*.xcscmblueprint
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/xcuserdata/
+!*.xcworkspace/contents.xcworkspacedata
+
+# Swift Package Manager
+##
+.build/
+Packages/
+Package.pins
+Package.resolved
+*.xcodeproj
+.swiftpm/
+
+# CocoaPods
+##
+Pods/
+*.xcworkspace
+
+# Carthage
+##
+Carthage/Build/
+
+# fastlane
+##
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Code Injection
+##
+injected_container.swift
+
+# Other
+##
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+timeline.xctimeline
+playground.xcworkspace
+
+# Environment variables
+##
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local 
