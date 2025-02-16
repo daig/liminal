@@ -1,0 +1,19 @@
+{
+	"name": "xcode build server",
+	"version": "0.2",
+	"bspVersion": "2.0",
+	"languages": [
+		"c",
+		"cpp",
+		"objective-c",
+		"objective-cpp",
+		"swift"
+	],
+	"argv": [
+		"/opt/homebrew/bin/xcode-build-server"
+	],
+	"workspace": "/Users/davidgirardo/Documents/liminal/liminal.xcodeproj/project.xcworkspace",
+	"build_root": "/Users/davidgirardo/Library/Developer/Xcode/DerivedData/liminal-fdqlrkqxeurpcrfilkyrkbqztdnd",
+	"scheme": "liminal",
+	"kind": "xcode"
+}
