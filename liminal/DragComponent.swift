@@ -1,5 +1,5 @@
 /*
-See the LICENSE.txt file for this sample’s licensing information.
+See the LICENSE.txt file for this sample's licensing information.
 
 Abstract:
 A component that handles standard drag, rotate, and scale gestures for an entity.
@@ -11,20 +11,15 @@ import SwiftUI
 @MainActor
 public final class DragGestureState {
     static let shared = DragGestureState()
-    
-    struct DraggingState {
-        var target: Entity
-        var startPosition: SIMD3<Float>
-        var startOrientation: simd_quatf
-    }
-    
-    var state: DraggingState? = nil
-    
+
+    var target: Entity? = nil
+    var startPosition: SIMD3<Float> = .zero
+    var isDragging: Bool = false
  }
 
 /// A component that handles gesture logic for an entity.
 
-public struct GestureComponent: Component, Codable {
+public struct DragComponent: Component, Codable {
     
     /// A Boolean value that indicates whether a gesture can drag the entity.
     public var canDrag: Bool = true
@@ -37,29 +32,41 @@ public struct GestureComponent: Component, Codable {
         
         let state = DragGestureState.shared
 
-        if state.state == nil {
+        if state.target == nil {
             // Start dragging
-            state.state = DragGestureState.DraggingState(
-                target: value.entity,
-                startPosition: value.entity.scenePosition,
-                startOrientation: value.entity.orientation(relativeTo: nil)
-            )
+            state.target = value.entity
+        }
+
+        guard let target = state.target else { fatalError("No drag target found") }
+
+        if !state.isDragging {
+            state.isDragging = true
+            state.startPosition = target.scenePosition
         }
         
-        if let draggingState = state.state {
-            let translation3D = value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
-            let offset = SIMD3<Float>(x: Float(translation3D.x),
-                                    y: Float(translation3D.y),
-                                    z: Float(translation3D.z))
-            
-            draggingState.target.scenePosition = draggingState.startPosition + offset
-            draggingState.target.setOrientation(draggingState.startOrientation, relativeTo: nil)
-        }
+        let translation3D = value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
+        let offset = SIMD3<Float>(Float(translation3D.x), Float(translation3D.y), Float(translation3D.z))
+
+        // let offset - value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
+
+        target.scenePosition = state.startPosition + offset
+
+        // target.move(
+        //     to: Transform(
+        //         rotation: state.startOrientation,
+        //         translation: targetPosition
+        //     ),
+        //     relativeTo: state.target!.parent!,
+        //     duration: 0.1,
+        //     timingFunction: .linear
+        // )
+        
     }
     
     @MainActor
     mutating func onEnded(value: EntityTargetValue<DragGesture.Value>) {
-        DragGestureState.shared.state = nil
+        DragGestureState.shared.isDragging = false
+        DragGestureState.shared.target = nil
     }
 }
 

@@ -8,18 +8,16 @@
 import SwiftUI
 import RealityKit
 
+enum NodeShape { case sphere; case cube }
+
 struct ContentView: View {
 
-    @State private var sphere: ModelEntity = {
-        let sphereMesh = MeshResource.generateSphere(radius: 0.1)
-        let material = SimpleMaterial(color: .red, isMetallic: false)
-        let entity = ModelEntity(mesh: sphereMesh, materials: [material])
-        entity.components.set(InputTargetComponent(allowedInputTypes: .indirect))
-        entity.generateCollisionShapes(recursive: true)
-        entity.components.set(GroundingShadowComponent(castsShadow: true))
-        entity.components.set(GestureComponent())
-        return entity
-    }()
+    @State private var sphere: ModelEntity
+    = createNodeEntity(position: [0,1,-1],
+                       groupId: 0,
+                       size: 5,
+                       shape: .sphere)
+
 
     var body: some View {
         RealityView { content in
@@ -27,12 +25,8 @@ struct ContentView: View {
         }
         .gesture(
             DragGesture()
-                .targetedToEntity(sphere)
+                .targetedToAnyEntity()
                 .useGestureComponent()
         )
     }
 }
-
-#Preview("ImmersiveStyle", immersionStyle: .automatic, body: {
-    ContentView()
-})
