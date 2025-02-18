@@ -49,17 +49,17 @@ public struct DragComponent: Component, Codable {
 
         // let offset - value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
 
-        target.scenePosition = state.startPosition + offset
+        // target.scenePosition = state.startPosition + offset
 
-        // target.move(
-        //     to: Transform(
-        //         rotation: state.startOrientation,
-        //         translation: targetPosition
-        //     ),
-        //     relativeTo: state.target!.parent!,
-        //     duration: 0.1,
-        //     timingFunction: .linear
-        // )
+        target.move(
+            to: Transform(
+                rotation: target.sceneOrientation,
+                translation: state.startPosition + offset
+            ),
+            relativeTo: nil,
+            duration: 0.1,
+            timingFunction: .linear
+        )
         
     }
     
