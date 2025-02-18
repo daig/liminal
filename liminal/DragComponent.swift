@@ -55,15 +55,17 @@ public struct DragComponent: Component, Codable {
         let translation3D = value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
         let offset = SIMD3<Float>(Float(translation3D.x), Float(translation3D.y), Float(translation3D.z))
 
-        target.move(
-            to: Transform(
-                rotation: target.sceneOrientation,
-                translation: state.startPosition + offset
-            ),
-            relativeTo: nil,
-            duration: 0.1,
-            timingFunction: .linear
-        )
+        target.scenePosition = state.startPosition + offset
+
+        // target.move(
+        //     to: Transform(
+        //         rotation: target.sceneOrientation,
+        //         translation: state.startPosition + offset
+        //     ),
+        //     relativeTo: nil,
+        //     duration: 0.1,
+        //     timingFunction: .linear
+        // )
     }
     
     @MainActor
