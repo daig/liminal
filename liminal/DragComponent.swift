@@ -42,14 +42,18 @@ public struct DragComponent: Component, Codable {
         if !state.isDragging {
             state.isDragging = true
             state.startPosition = target.scenePosition
+            
+            // Only update material when dragging starts
+            if var model = target.components[ModelComponent.self],
+               var material = model.materials.first as? PhysicallyBasedMaterial {
+                material.baseColor.tint = UIColor(white: 0.7, alpha: 0.2)
+                model.materials = [material]
+                target.components.set(model)
+            }
         }
         
         let translation3D = value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
         let offset = SIMD3<Float>(Float(translation3D.x), Float(translation3D.y), Float(translation3D.z))
-
-        // let offset - value.convert(value.gestureValue.translation3D, from: .local, to: .scene)
-
-        // target.scenePosition = state.startPosition + offset
 
         target.move(
             to: Transform(
@@ -60,13 +64,23 @@ public struct DragComponent: Component, Codable {
             duration: 0.1,
             timingFunction: .linear
         )
-        
     }
     
     @MainActor
     mutating func onEnded(value: EntityTargetValue<DragGesture.Value>) {
         DragGestureState.shared.isDragging = false
         DragGestureState.shared.target = nil
+
+        if var model = value.entity.components[ModelComponent.self],
+                   var material = model.materials.first as? PhysicallyBasedMaterial {
+                    withAnimation(.easeInOut(duration: 1)) {
+                        material.baseColor.tint = .gray
+                        model.materials = [material]
+                        value.entity.components.set(model)
+                    }
+                }
+
+
     }
 }
 
