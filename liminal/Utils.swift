@@ -56,3 +56,14 @@ public extension Gesture where Value == EntityTargetValue<DragGesture.Value> {
         }
     }
 }
+
+public extension RealityView {
+    func installDrag() -> some View {
+        simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .targetedToAnyEntity()
+                .useGestureComponent()
+        )
+
+    }
+}

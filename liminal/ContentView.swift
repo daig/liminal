@@ -12,21 +12,21 @@ enum NodeShape { case sphere; case cube }
 
 struct ContentView: View {
 
-    @State private var sphere: ModelEntity
-    = createNodeEntity(position: [0,1,-1],
-                       groupId: 0,
-                       size: 5,
-                       shape: .sphere)
-
+    let positions: [Float] = [0.5,0.7,1,1.2,1.4]
 
     var body: some View {
         RealityView { content in
-            content.add(sphere)
+            for y in positions {
+                let node = createNodeEntity(
+                    position: [0, y, -1],
+                    groupId: 0,
+                    size: 5,
+                    shape: .sphere
+                )
+                content.add(node)
+            }
+            
         }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .targetedToAnyEntity()
-                .useGestureComponent()
-        )
+        .installDrag()
     }
 }
