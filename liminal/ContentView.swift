@@ -24,7 +24,7 @@ struct ContentView: View {
             content.add(sphere)
         }
         .gesture(
-            DragGesture()
+            DragGesture(minimumDistance: 0)
                 .targetedToAnyEntity()
                 .useGestureComponent()
         )
