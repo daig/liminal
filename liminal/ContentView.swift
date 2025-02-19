@@ -16,19 +16,26 @@ struct ContentView: View {
     var body: some View {
         RealityView { content in
 
-            let gravity = ForceEffect(
-                effect: Gravity(),
+            // Create spring force effect
+            let spring = ForceEffect(
+                effect: Spring(),
                 strengthScale: 1,
                 mask: CollisionGroup.all
-                )    
+            )
 
-            for y in positions {
+            for (index, y) in positions.enumerated() {
                 let node = Entity.makeNode(
                     position: [0, y, -1],
                     groupId: 0,
                     size: 5,
                     shape: .sphere
                 )
+                
+                // Add spring force to middle node (index 2 since positions array has 5 elements)
+                if index == 2 {
+                    node.components.set(ForceEffectComponent(effect: spring))
+                }
+                
                 content.add(node)
             }
             
