@@ -10,31 +10,36 @@ import RealityKit
 
 
 struct ContentView: View {
-
-    let positions: [Float] = [0.5,0.7,1,1.2,1.4]
-
+    let nodeCount = 5
+    
     var body: some View {
         RealityView { content in
-
+            
             // Create spring force effect
             let spring = ForceEffect(
                 effect: Spring(),
                 strengthScale: 1,
                 mask: CollisionGroup.all
             )
-
-            for (index, y) in positions.enumerated() {
+            
+            // Calculate positions in a circle
+            let radius: Float = 0.5 // Distance between nodes
+            let angleStep = 2 * Float.pi / Float(nodeCount)
+            let center = SIMD3<Float>(0, 0.7, -1) // Center position in front of player
+            
+            for i in 0..<nodeCount {
+                let angle = angleStep * Float(i)
+                let x = center.x + radius * cos(angle)
+                let y = center.y + radius * sin(angle)
+                
                 let node = Entity.makeNode(
-                    position: [0, y, -1],
-                    groupId: 0,
-                    size: 5,
+                    position: [x, y, center.z],
+                    groupId: i,
+                    size: 2,
                     shape: .sphere
                 )
                 
-                // Add spring force to middle node (index 2 since positions array has 5 elements)
-                if index == 2 {
-                    node.components.set(ForceEffectComponent(effect: spring))
-                }
+                node.components.set(ForceEffectComponent(effect: spring))
                 
                 content.add(node)
             }

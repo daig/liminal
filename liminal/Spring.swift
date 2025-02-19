@@ -16,7 +16,7 @@ struct Spring: ForceEffectProtocol {
 
     var magnitude: Float = 0.1
     var minimumDistance: Float = 0.2
-    var springDistance: Float = 0.2 // meters
+    var springDistance: Float = 0.3 // meters
 
     func update(parameters: inout ForceEffectParameters) {
 
