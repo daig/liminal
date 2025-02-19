@@ -8,7 +8,6 @@
 import SwiftUI
 import RealityKit
 
-enum NodeShape { case sphere; case cube }
 
 struct ContentView: View {
 
@@ -16,8 +15,15 @@ struct ContentView: View {
 
     var body: some View {
         RealityView { content in
+
+            let gravity = ForceEffect(
+                effect: Gravity(),
+                strengthScale: 1,
+                mask: CollisionGroup.all
+                )    
+
             for y in positions {
-                let node = createNodeEntity(
+                let node = Entity.makeNode(
                     position: [0, y, -1],
                     groupId: 0,
                     size: 5,
