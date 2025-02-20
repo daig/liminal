@@ -21,6 +21,7 @@ struct ContentView: View {
         return edges
     }
     
+    
     // Calculate positions in a circle layout
     func calculateCircleLayout(nodeCount: Int, radius: Float, center: SIMD3<Float>) -> [(Int, SIMD3<Float>)] {
         let angleStep = 2 * Float.pi / Float(nodeCount)
@@ -37,6 +38,10 @@ struct ContentView: View {
 
             // Generate ring edges
             let edges = generateRingEdges(nodeCount: nodeCount)
+            let edgesArray = edges.map { edge in
+                let nodes = Array(edge)
+                return EdgeID(source: NodeID(id: nodes[0]), target: NodeID(id: nodes[1]))
+            }
             
             // Convert edges to node connections mapping
             var nodeConnections: [Int: Set<Int>] = [:]
@@ -45,22 +50,6 @@ struct ContentView: View {
                 nodeConnections[nodeArray[0], default: []].insert(nodeArray[1])
                 nodeConnections[nodeArray[1], default: []].insert(nodeArray[0])
             }
-            
-            /*
-            // Create spring force effect for connected nodes
-            func makeSpringForce(nodeId: Int) -> ForceEffect<Spring> {
-                let connectedNodes = nodeConnections[nodeId] ?? []
-                let mask = connectedNodes.reduce(CollisionGroup()) {
-                    $0.union(CollisionGroup(rawValue: 1 << $1))
-                }
-                let spring = Spring()
-                return ForceEffect(
-                    effect: spring,
-                    strengthScale: 1,
-                    mask: mask
-                )
-            }
-             */
             
             
             let center = SIMD3<Float>(0, 1.5, -1.5)
@@ -81,6 +70,12 @@ struct ContentView: View {
             
             forceContainer.components.set(ForceEffectComponent(effect: centerForce))
             forceContainer.components.set(ForceEffectComponent(effect: manyBodyForce))
+            let linkForce = ForceEffect(
+                effect: LinkForce(links: edgesArray),
+                strengthScale: 1,
+                mask: .all
+            )
+            forceContainer.components.set(ForceEffectComponent(effect:linkForce ))
 
 //            centerAnchor.addChild(forceContainer)
             content.add(forceContainer)
