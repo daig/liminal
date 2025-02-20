@@ -7,5 +7,5 @@
 
 import Foundation
 
-struct NodeID : Hashable, Identifiable {let id: Int}
-struct EdgeID: Hashable { let source: NodeID; let target: NodeID }
+public struct NodeID : Hashable, Identifiable {public let id: Int}
+public struct EdgeID: Hashable { public let source: NodeID; public let target: NodeID }

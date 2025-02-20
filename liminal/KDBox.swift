@@ -4,6 +4,7 @@
 //
 //  Created by David Girardo on 2/19/25.
 import simd
+import RealityFoundation
 
 /// A box in N-dimensional space.
 ///
@@ -71,8 +72,11 @@ extension KDBox {
     ///            The boundary test is similar to ..< operator.
     @inlinable
     @inline(__always)
-    func contains(_ point: V) -> Bool {
-        return !any((p0 .> point) .| (point .>= p1)) }
+//    func contains(_ point: V) -> Bool {
+//        return !any((p0 .> point) .| (point .>= p1)) }
+        func contains(_ point: V) -> Bool {
+            return !any((p0 .> point) .| (point .> p1)) // Inclusive upper bound
+        }
 
     
     @inlinable func getCorner(of direction: Int) -> V {
@@ -121,4 +125,22 @@ extension KDBox {
             _p1 = pointwiseMax(p, _p1) }
         return Self(_p0, _p1 + 1)
     }
+    
+    /// Get the small box that contains a buffer of points (UnsafeForceEffectBuffer version).
+        @inlinable
+        public static func cover(of buffer: UnsafeForceEffectBuffer<SIMD3<Float>>, count: Int) -> Self {
+            precondition(count > 0, "Cannot compute cover of an empty buffer")
+            var _p0 = buffer[0]
+            var _p1 = buffer[0]
+            for i in 1..<count {
+                let p = buffer[i]
+                _p0 = pointwiseMin(p, _p0)
+                _p1 = pointwiseMax(p, _p1)
+            }
+            #if DEBUG
+                let _box = Self(_p0, _p1)
+                assert((0..<count).allSatisfy { i in _box.contains(buffer[i]) })
+            #endif
+            return Self(_p0, _p1)
+        }
 }

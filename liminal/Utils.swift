@@ -45,3 +45,32 @@ public extension RealityView {
 
     }
 }
+
+extension SIMD3<Float> {
+    public static var clusterDistance: Float {
+        return 1e-5
+    }
+    public static var clusterDistanceSquared: Float {
+        return clusterDistance * clusterDistance
+    }
+    @inlinable
+    public func distanceSquared(to point: SIMD3<Scalar>) -> Scalar {
+        return simd_distance_squared(self, point)
+    }
+
+    @inlinable
+    public func distance(to point: SIMD3<Scalar>) -> Scalar {
+        return simd_distance(self, point)
+    }
+
+    @inlinable
+    public func lengthSquared() -> Scalar {
+        return simd_length_squared(self)
+    }
+
+    @inlinable
+    public func length() -> Scalar {
+        return simd_fast_length(self)
+    }
+
+}

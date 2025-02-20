@@ -64,9 +64,15 @@ struct ContentView: View {
             
             
             let center = SIMD3<Float>(0, 1.5, -1.5)
+//            let center: SIMD3<Float> = .zero
             let centerForce = ForceEffect(
                 effect: CenterForce(),
                 strengthScale: 0.1,
+                mask: .all
+            )
+            let manyBodyForce = ForceEffect(
+                effect: ManyBodyForce(strength: 1, theta: 0.9, distanceMin: 1),
+                strengthScale: 1.0,
                 mask: .all
             )
 //            let centerAnchor = AnchorEntity(world: .zero)
@@ -74,9 +80,10 @@ struct ContentView: View {
             forceContainer.position = center
             
             forceContainer.components.set(ForceEffectComponent(effect: centerForce))
+            forceContainer.components.set(ForceEffectComponent(effect: manyBodyForce))
+
 //            centerAnchor.addChild(forceContainer)
             content.add(forceContainer)
-//            centerAnchor.components.set(ForceEffectComponent(effect: centerForce))
 
             
             // Calculate node positions
