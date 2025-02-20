@@ -36,6 +36,7 @@ struct ContentView: View {
     var body: some View {
         RealityView { content in
 
+            var nodeEntities: [Entity] = []
             // Generate ring edges
             let edges = generateRingEdges(nodeCount: nodeCount)
             let edgesArray = edges.map { edge in
@@ -95,17 +96,20 @@ struct ContentView: View {
                     center: center
                 )
                 
+                nodeEntities.append(node)
                 forceContainer.addChild(node)
             }
             
-            /*
             // Create and add edges
             for edge in edges {
                 let edgeArray = Array(edge)
-                guard let startNode = nodeEntities[edgeArray[0]],
-                      let endNode = nodeEntities[edgeArray[1]] else {
+                guard edgeArray[0] < nodeEntities.count,
+                      edgeArray[1] < nodeEntities.count else {
                     continue
                 }
+                
+                let startNode = nodeEntities[edgeArray[0]]
+                let endNode = nodeEntities[edgeArray[1]]
                 
                 let edgeEntity = Entity.makeEdge(
                     from: startNode.position,
@@ -115,10 +119,13 @@ struct ContentView: View {
                 
                 // Update edge position and orientation when nodes move
                 content.subscribe(to: SceneEvents.Update.self) { event in
-                    guard let startNode = nodeEntities[edgeArray[0]],
-                          let endNode = nodeEntities[edgeArray[1]] else {
+                    guard edgeArray[0] < nodeEntities.count,
+                          edgeArray[1] < nodeEntities.count else {
                         return
                     }
+                    
+                    let startNode = nodeEntities[edgeArray[0]]
+                    let endNode = nodeEntities[edgeArray[1]]
                     
                     // Calculate new edge properties using world-space positions
                     let startPos = startNode.scenePosition
@@ -143,7 +150,6 @@ struct ContentView: View {
                     }
                 }
             }
-             */
         }
         .installDrag()
     }
