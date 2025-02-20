@@ -14,9 +14,9 @@ struct Spring: ForceEffectProtocol {
 
     //MARK: - Custom properties
 
-    var magnitude: Float = 0.1
-    var minimumDistance: Float = 0.2
-    var springDistance: Float = 0.3 // meters
+    let magnitude: Float = 1
+    let minimumDistance: Float = 0.2
+    let springDistance: Float = 0.588 // meters
 
     func update(parameters: inout ForceEffectParameters) {
 
