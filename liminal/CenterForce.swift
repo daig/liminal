@@ -19,7 +19,6 @@ struct CenterForce: ForceEffectProtocol {
     var forceMode: ForceMode { .velocity }
 
     //MARK: - Custom properties
-    let strength: Float = 1000
 
     func update(parameters: inout ForceEffectParameters) {
         guard let positions = parameters.positions else {return}
@@ -28,7 +27,7 @@ struct CenterForce: ForceEffectProtocol {
         for i in 0..<N {
             meanPosition += positions[i]  //.position
         }
-        let delta : SIMD3<Float> = meanPosition * (self.strength / Float(Double(N) * parameters.elapsedTime))
+        let delta : SIMD3<Float> = meanPosition / Float(Double(N) * parameters.elapsedTime)
 
         for i in 0..<N {
             parameters.setForce(-delta, index: i)

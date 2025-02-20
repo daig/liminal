@@ -21,7 +21,8 @@ extension Entity {
         position: SIMD3<Float>,
         groupId: Int,
         size: Float = 1,
-        shape: NodeShape
+        shape: NodeShape,
+        center: SIMD3<Float>
     ) -> ModelEntity {
         let mesh : MeshResource
         switch shape {
@@ -71,7 +72,7 @@ extension Entity {
         //        entity.components.set(ForceEffectComponent(effects: forces))
         //    }
         
-        entity.position = position
+        entity.position = position - center
         
         return entity
     }

@@ -34,6 +34,7 @@ struct ContentView: View {
     
     var body: some View {
         RealityView { content in
+
             // Generate ring edges
             let edges = generateRingEdges(nodeCount: nodeCount)
             
@@ -60,19 +61,27 @@ struct ContentView: View {
                 )
             }
              */
+            
+            
+            let center = SIMD3<Float>(0, 1.5, -1.5)
             let centerForce = ForceEffect(
                 effect: CenterForce(),
-                strengthScale: 1,
+                strengthScale: 0.1,
                 mask: .all
             )
+//            let centerAnchor = AnchorEntity(world: .zero)
+            let forceContainer = Entity()
+            forceContainer.position = center
+            
+            forceContainer.components.set(ForceEffectComponent(effect: centerForce))
+//            centerAnchor.addChild(forceContainer)
+            content.add(forceContainer)
+//            centerAnchor.components.set(ForceEffectComponent(effect: centerForce))
+
             
             // Calculate node positions
             let radius: Float = 0.5
-            let center = SIMD3<Float>(0, 0.7, -1)
             let nodePositions = calculateCircleLayout(nodeCount: nodeCount, radius: radius, center: center)
-            
-            // Dictionary to store node entities by their ID
-            var nodeEntities: [Int: Entity] = [:]
             
             // Create and add nodes
             for (index, position) in nodePositions {
@@ -80,13 +89,11 @@ struct ContentView: View {
                     position: position,
                     groupId: index,
                     size: 2,
-                    shape: .sphere
+                    shape: .sphere,
+                    center: center
                 )
                 
-//                node.components.set(ForceEffectComponent(effect: makeSpringForce(nodeId: index)))
-                node.components.set(ForceEffectComponent(effect: centerForce))
-                content.add(node)
-                nodeEntities[index] = node
+                forceContainer.addChild(node)
             }
             
             /*
