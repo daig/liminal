@@ -62,7 +62,7 @@ struct ContentView: View {
             )
             let manyBodyForce = ForceEffect(
                 effect: ManyBodyForce(strength: 1, theta: 0.9, distanceMin: 1),
-                strengthScale: 1.0,
+                strengthScale: 0.005,
                 mask: .all
             )
 //            let centerAnchor = AnchorEntity(world: .zero)
@@ -76,7 +76,7 @@ struct ContentView: View {
                 strengthScale: 1,
                 mask: .all
             )
-            forceContainer.components.set(ForceEffectComponent(effect:linkForce ))
+//            forceContainer.components.set(ForceEffectComponent(effect:linkForce ))
 
 //            centerAnchor.addChild(forceContainer)
             content.add(forceContainer)
@@ -101,6 +101,7 @@ struct ContentView: View {
             }
             
             // Create and add edges
+            /*
             for edge in edges {
                 let edgeArray = Array(edge)
                 guard edgeArray[0] < nodeEntities.count,
@@ -150,6 +151,7 @@ struct ContentView: View {
                     }
                 }
             }
+             */
         }
         .installDrag()
     }

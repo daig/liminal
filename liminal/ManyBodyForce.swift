@@ -30,11 +30,9 @@ struct MassDelegate: KDTreeDelegate {
 
 /// A many-body force effect that applies repulsive or attractive forces between all nodes.
 struct ManyBodyForce: ForceEffectProtocol {
-    // Required properties for ForceEffectProtocol
-    var parameterTypes: PhysicsBodyParameterTypes { [.position, .mass] }
-    var forceMode: ForceMode { .force }
+    var parameterTypes: PhysicsBodyParameterTypes { [.position, .velocity] }
+    var forceMode: ForceMode { .velocity }
     
-    // Custom properties
     let strength: Float    // Negative for repulsion, positive for attraction
     let theta: Float      // Barnes-Hut approximation threshold
     let distanceMin: Float // Minimum distance to prevent singularities
@@ -53,10 +51,10 @@ struct ManyBodyForce: ForceEffectProtocol {
         self.distanceMax = distanceMax
     }
     
-    /// Updates the forces applied to each physics body.
+    /// Updates the velocities of each physics body based on the computed forces.
     func update(parameters: inout ForceEffectParameters) {
         guard let positions = parameters.positions,
-              let masses = parameters.masses else { return }
+              var velocities = parameters.velocities else { return }
         let N = parameters.physicsBodyCount
         
         // Precompute squared values for efficiency
@@ -64,10 +62,10 @@ struct ManyBodyForce: ForceEffectProtocol {
         let distanceMin2 = distanceMin * distanceMin
         let distanceMax2 = distanceMax * distanceMax
         
-        // Build the KDTree with current positions and masses
-        let massProvider: (NodeID) -> Float = { index in masses[index.id] }
+        // Use a constant mass of 1 for all bodies
+        let massProvider: (NodeID) -> Float = { _ in 1 }
         let rootDelegate = MassDelegate(massProvider: massProvider)
-        let coveringBox = KDBox.cover(of: positions, count: parameters.physicsBodyCount)
+        let coveringBox = KDBox.cover(of: positions, count: N)
         var tree = BufferedKDTree<MassDelegate>(
             rootBox: coveringBox,
             nodeCapacity: N,
@@ -77,7 +75,7 @@ struct ManyBodyForce: ForceEffectProtocol {
             tree.add(nodeIndex: NodeID(id: i), at: positions[i])
         }
         
-        // Compute force for each body
+        // Compute force and update velocity for each body
         for i in 0..<N {
             let pos = positions[i]
             var f: SIMD3<Float> = .zero
@@ -127,8 +125,10 @@ struct ManyBodyForce: ForceEffectProtocol {
                 }
             }
             
-            // Apply the computed force
-            parameters.setForce(f, index: i)
+            // Compute velocity change and update velocity
+            let dv = f * Float(parameters.elapsedTime)
+            
+            parameters.setForce(velocities[i] + dv, index: i)
         }
     }
 }
