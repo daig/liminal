@@ -54,31 +54,31 @@ struct ContentView: View {
             
             
             let center = SIMD3<Float>(0, 1.5, -1.5)
-//            let center: SIMD3<Float> = .zero
-            let centerForce = ForceEffect(
-                effect: CenterForce(),
-                strengthScale: 0.1,
+            
+            // Create the combined force effect with strength parameters matching the original individual forces
+            let graphForce = ForceEffect(
+                effect: GraphForce(
+                    // Center force: original strengthScale was 0.1
+                    centerStrength: 0.1,  // Matches original centerForce strengthScale
+                    
+                    // Many-body force: original strengthScale was 0.005, strength was 1
+                    manyBodyStrength: -0.0005,  // Combined original strength (1) with strengthScale (0.005)
+                    theta: 0.9,
+                    distanceMin: 1.0,
+                    
+                    // Link force: original strengthScale was 1.0
+                    links: edgesArray,
+                    linkStiffness: 0.5,
+                    linkLength: 0.5
+                ),
+                strengthScale: 1.0,  // Using 1.0 since we incorporated scales into parameters
                 mask: .all
             )
-            let manyBodyForce = ForceEffect(
-                effect: ManyBodyForce(strength: 1, theta: 0.9, distanceMin: 1),
-                strengthScale: 0.005,
-                mask: .all
-            )
-//            let centerAnchor = AnchorEntity(world: .zero)
+            
+            // Create and set up the force container
             let forceContainer = Entity()
             forceContainer.position = center
-            
-            forceContainer.components.set(ForceEffectComponent(effect: centerForce))
-            forceContainer.components.set(ForceEffectComponent(effect: manyBodyForce))
-            let linkForce = ForceEffect(
-                effect: LinkForce(links: edgesArray),
-                strengthScale: 1,
-                mask: .all
-            )
-//            forceContainer.components.set(ForceEffectComponent(effect:linkForce ))
-
-//            centerAnchor.addChild(forceContainer)
+            forceContainer.components.set(ForceEffectComponent(effect: graphForce))
             content.add(forceContainer)
 
             
