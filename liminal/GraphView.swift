@@ -140,11 +140,11 @@ struct GraphView: View {
                         }
         }
         .installGestures()
-//        .overlay(alignment: .bottom) {
-//            Button("Open 2D Window") {
-//                openWindow(id: "my2DWindow")
-//            }
-//            .padding()
-//        }
+        .overlay(alignment: .bottom) {
+            Button("Open 2D Window") {
+                openWindow(id: "my2DWindow")
+            }
+            .padding()
+        }
     }
 }

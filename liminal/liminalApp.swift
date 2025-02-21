@@ -22,9 +22,9 @@ struct liminalApp: App {
     init() { GestureComponent.registerComponent() }
 
     var body: some Scene {
-//        WindowGroup {
-//            My2DWindowView()
-//        }
+        WindowGroup(id: "my2DWindow"){
+            My2DWindowView()
+        }
         WindowGroup {
             GraphView()
         }
