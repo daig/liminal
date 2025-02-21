@@ -13,11 +13,14 @@ struct liminalApp: App {
     static let volumeLength = 3000.0
     let volumeSize = Size3D(width: volumeLength, height: volumeLength, depth: volumeLength)
 
-    init() { GestureComponent.registerComponent() }
+    init() {
+        GestureComponent.registerComponent()
+        NodeComponent.registerComponent()
+    }
 
     var body: some Scene {
         WindowGroup(id: "my2DWindow"){
-            ContentView()
+            ContentView(text: "")
                 .frame(minWidth: 300, minHeight: 200)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -30,5 +33,14 @@ struct liminalApp: App {
         }
         .windowStyle(.volumetric)
         .windowResizability(.contentSize) //default
+        
+        // Add new WindowGroup for editor windows
+        WindowGroup(id: "editor", for: String.self) { $text in
+            ContentView(text: text ?? "")
+                .frame(minWidth: 300, minHeight: 200)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.all, 16)
+        }
     }
 }

@@ -4,6 +4,10 @@ import UIKit
 struct ContentView: View {
     @State private var text: String = ""
     
+    init(text: String) {
+        _text = State(initialValue: text)
+    }
+    
     var body: some View {
         ObsidianTextEditor(text: $text)
     }

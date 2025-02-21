@@ -36,7 +36,7 @@ public extension Entity {
 }
 
 public extension RealityView {
-    func installGestures() -> some View {
+    internal func installGestures(graphData: GraphData, openWindow: OpenWindowAction) -> some View {
         simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .targetedToAnyEntity()
@@ -44,8 +44,16 @@ public extension RealityView {
         )
         .simultaneousGesture(
             MagnifyGesture()
-            .targetedToAnyEntity()
-            .useGestureComponent())
+                .targetedToAnyEntity()
+                .onEnded { value in
+                    let entity = value.entity
+                    if let nodeComponent = entity.components[NodeComponent.self] {
+                        let nodeIndex = nodeComponent.index
+                        let text = graphData.bodies[nodeIndex.id]
+                        openWindow(id: "editor", value: text)
+                    }
+                }
+        )
 
     }
 }

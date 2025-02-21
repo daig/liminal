@@ -22,7 +22,7 @@ struct GraphView: View {
     }
     @Environment(\.openWindow) private var openWindow
     
-    var body: some View {
+    var body : some View {
         RealityView { content, attachments in
             let nodePositions = NodeLayout.circleLayout(graphData: graphData, radius: radius)
             
@@ -57,6 +57,8 @@ struct GraphView: View {
                     shape: .sphere,
                     name: graphData.names[index]
                 )
+                // Add NodeComponent with the node's index
+                node.components.set(NodeComponent(index: NodeID(id: index)))
                 nodeEntities.append(node)
                 forceContainer.addChild(node)
                 
@@ -141,7 +143,7 @@ struct GraphView: View {
                 }
             }
         }
-        .installGestures()
+        .installGestures(graphData: graphData, openWindow: openWindow)
         .overlay(alignment: .bottom) {
             Button("Open 2D Window") {
                 openWindow(id: "my2DWindow")
