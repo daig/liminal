@@ -10,7 +10,8 @@ import SwiftUI
 
 @main
 struct liminalApp: App {
-    let volumeSize = 2.0
+    static let volumeLength = 3000.0
+    let volumeSize = Size3D(width: volumeLength, height: volumeLength, depth: volumeLength)
 
     init() { GestureComponent.registerComponent() }
 
@@ -24,8 +25,10 @@ struct liminalApp: App {
         }
         WindowGroup {
             GraphView()
+                .frame(minWidth: volumeSize.width, minHeight: volumeSize.height)
+                .frame(minDepth: volumeSize.depth)
         }
         .windowStyle(.volumetric)
-        .defaultSize(width: volumeSize, height: volumeSize, depth: volumeSize, in: .meters)
+        .windowResizability(.contentSize) //default
     }
 }
