@@ -7,13 +7,6 @@
 
 import SwiftUI
 
-struct My2DWindowView: View {
-    var body: some View {
-        Text("This is a 2D Window")
-            .font(.largeTitle)
-            .padding()
-    }
-}
 
 @main
 struct liminalApp: App {
@@ -23,7 +16,7 @@ struct liminalApp: App {
 
     var body: some Scene {
         WindowGroup(id: "my2DWindow"){
-            My2DWindowView()
+            ContentView()
         }
         WindowGroup {
             GraphView()
