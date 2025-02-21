@@ -73,6 +73,8 @@ struct GraphForce: ForceEffectProtocol {
         // Apply link force
         applyLinkForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         
+        applyBoxBoundaryForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
+        
         // Apply all accumulated forces
         for i in 0..<parameters.physicsBodyCount {
             parameters.setForce(accumulatedForces[i], index: i)
