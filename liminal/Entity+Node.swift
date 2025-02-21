@@ -62,8 +62,8 @@ extension Entity {
             
             var physicsBody = PhysicsBodyComponent(shapes: [collisionShape],mass: 1, mode: .dynamic)
             physicsBody.isAffectedByGravity = false
-            physicsBody.linearDamping = 1
-            physicsBody.angularDamping = 0
+            physicsBody.linearDamping = 1.5
+            physicsBody.angularDamping = 1
             entity.components.set(physicsBody)
         }
         

@@ -14,57 +14,33 @@ struct EdgeConnection {
 }
 
 struct ContentView: View {
-    let nodeCount = 6
-    
-    // Generate edges for a ring configuration
-    func generateRingEdges(nodeCount: Int) -> Set<Set<Int>> {
-        var edges = Set<Set<Int>>()
-        for i in 0..<nodeCount {
-            let nextNode = (i + 1) % nodeCount
-            edges.insert(Set([i, nextNode]))
-        }
-        return edges
-    }
-    
-    
-    // Calculate positions in a circle layout
-    func calculateCircleLayout(nodeCount: Int, radius: Float, center: SIMD3<Float>) -> [(Int, SIMD3<Float>)] {
-        let angleStep = 2 * Float.pi / Float(nodeCount)
-        return (0..<nodeCount).map { i in
-            let angle = angleStep * Float(i)
-            let x = center.x + radius * cos(angle)
-            let y = center.y + radius * sin(angle)
-            return (i, SIMD3<Float>(x, y, center.z))
-        }
-    }
+    let nodeCount = 20
+    let radius: Float = 0.5
+    let center = SIMD3<Float>(0, 1.5, -1.5)
     
     var body: some View {
         RealityView { content in
+            // Create graph data for a small-world network
+            let graphData = GraphData.smallWorldGraph(nodeCount: nodeCount, extraEdgeCount: 9)
+            let nodePositions = NodeLayout.circleLayout(graphData: graphData, radius: radius, center: center)
+            
             var nodeEntities: [Entity] = []
-            let edges = generateRingEdges(nodeCount: nodeCount)
-            let edgesArray = edges.map { edge in
+            
+            // Create edgesArray for force simulation
+            let edgesArray = graphData.edges.map { edge in
                 let nodes = Array(edge)
                 return EdgeID(source: NodeID(id: nodes[0]), target: NodeID(id: nodes[1]))
             }
             
-            var nodeConnections: [Int: Set<Int>] = [:]
-            for edge in edges {
-                let nodeArray = Array(edge)
-                nodeConnections[nodeArray[0], default: []].insert(nodeArray[1])
-                nodeConnections[nodeArray[1], default: []].insert(nodeArray[0])
-            }
-            
-            let center = SIMD3<Float>(0, 1.5, -1.5)
-            
-            // Set up force container and graph force (unchanged)
+            // Set up force container and graph force
             let graphForce = ForceEffect(
                 effect: GraphForce(
-                    centerStrength: 0.1,
+                    centerStrength: 1,
                     manyBodyStrength: -0.0005,
                     theta: 0.9,
                     distanceMin: 1.0,
                     links: edgesArray,
-                    linkStiffness: 0.5,
+                    linkStiffness: 1,
                     linkLength: 0.5
                 ),
                 strengthScale: 1.0,
@@ -76,9 +52,7 @@ struct ContentView: View {
             forceContainer.components.set(ForceEffectComponent(effect: graphForce))
             content.add(forceContainer)
             
-            // Calculate and add nodes (unchanged)
-            let radius: Float = 0.5
-            let nodePositions = calculateCircleLayout(nodeCount: nodeCount, radius: radius, center: center)
+            // Create node entities
             for (index, position) in nodePositions {
                 let node = Entity.makeNode(
                     position: position,
@@ -93,7 +67,7 @@ struct ContentView: View {
             
             // Create edge entities with fixed meshes
             var edgeConnections: [EdgeConnection] = []
-            for edge in edges {
+            for edge in graphData.edges {
                 let edgeArray = Array(edge)
                 guard edgeArray[0] < nodeEntities.count, edgeArray[1] < nodeEntities.count else {
                     continue
