@@ -23,7 +23,7 @@ struct GraphView: View {
     init(nodeCount: Int = 20, radius: Float = 0.5) {
         self.nodeCount = nodeCount
         self.radius = radius
-        self.graphData = GraphData.smallWorldGraph(nodeCount: nodeCount, extraEdgeCount: 9)
+        self.graphData = GraphData.smallWorldGraph(nodeCount: nodeCount, extraEdgeCount: 20)
     }
 
     @Environment(\.openWindow) private var openWindow
@@ -45,12 +45,12 @@ struct GraphView: View {
             let graphForce = ForceEffect(
                 effect: GraphForce(
                     centerStrength: 1,
-                    manyBodyStrength: -0.0005,
+                    manyBodyStrength: -0.1,
                     theta: 0.9,
-                    distanceMin: 1.0,
+                    distanceMin: 0,
                     links: edgesArray,
                     linkStiffness: 1,
-                    linkLength: 0.2
+                    linkLength: 0.1
                 ),
                 strengthScale: 1.0,
                 mask: .all
@@ -66,7 +66,7 @@ struct GraphView: View {
                 let node = Entity.makeNode(
                     position: position,
                     groupId: index,
-                    size: 2,
+                    size: 3,
                     shape: .sphere,
                     name: graphData.names[index]
                 )

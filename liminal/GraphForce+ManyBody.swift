@@ -81,7 +81,8 @@ extension GraphForce {
             
             // Apply force
             let velocityChange = force * Float(parameters.elapsedTime)
-            accumulatedForces[i] += velocityChange
+            let nsq = Float(N) * Float(N)
+            accumulatedForces[i] += velocityChange / [nsq,nsq,nsq]
         }
     }
 } 

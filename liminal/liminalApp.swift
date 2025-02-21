@@ -17,7 +17,7 @@ struct My2DWindowView: View {
 
 @main
 struct liminalApp: App {
-    let volumeSize = 10.0
+    let volumeSize = 2.0
 
     init() { GestureComponent.registerComponent() }
 
