@@ -17,6 +17,10 @@ struct liminalApp: App {
     var body: some Scene {
         WindowGroup(id: "my2DWindow"){
             ContentView()
+                .frame(minWidth: 300, minHeight: 200)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.all, 16)
         }
         WindowGroup {
             GraphView()

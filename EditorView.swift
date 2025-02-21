@@ -5,20 +5,14 @@ struct ContentView: View {
     @State private var text: String = ""
     
     var body: some View {
-        VStack {
-            ObsidianTextEditor(text: $text)
-                .frame(minWidth: 300, minHeight: 200)
-                .padding()
-                // Apply glass material background at the container level
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .padding()
-        }
+        ObsidianTextEditor(text: $text)
     }
 }
 
 struct ObsidianTextEditor: UIViewRepresentable {
     @Binding var text: String
     private let linkPattern = "\\[\\[([^\\]]+)\\]\\]"
+    static let font: UIFont = .preferredFont(forTextStyle: .body).withSize(30)
     
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -26,16 +20,20 @@ struct ObsidianTextEditor: UIViewRepresentable {
         textView.isEditable = true
         textView.isSelectable = true
         
-        // Typography updates for visionOS
-        textView.font = .preferredFont(forTextStyle: .body) // Retains dynamic type support
-        textView.textColor = .white // White text as per request
+        // Typography for visionOS
+        textView.font = ObsidianTextEditor.font
+        textView.textColor = .white
+        textView.backgroundColor = .clear // Ensure no background color
+        textView.tintColor = .white
         
-        // Transparent background to allow SwiftUI material to show through
-        textView.backgroundColor = .clear
-        textView.layer.cornerRadius = 8
+        // Padding inside the text view
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         
-        // Ensure text is readable over glass material
-        textView.tintColor = .white // Cursor and selection color
+        // Explicitly remove all borders and shadows
+        textView.layer.borderWidth = 0
+        
+        // Disable any default appearance quirks
+        textView.layer.backgroundColor = nil // Ensure layer has no color
         
         return textView
     }
@@ -60,10 +58,9 @@ struct ObsidianTextEditor: UIViewRepresentable {
         let nsRange = NSRange(rawText.startIndex..<rawText.endIndex, in: rawText)
         let matches = regex.matches(in: rawText, range: nsRange)
         
-        // Default attributes for all text
         attributedString.addAttributes([
             .foregroundColor: UIColor.white,
-            .font: UIFont.preferredFont(forTextStyle: .body)
+            .font: ObsidianTextEditor.font
         ], range: NSRange(location: 0, length: attributedString.length))
         
         for match in matches {
@@ -76,7 +73,7 @@ struct ObsidianTextEditor: UIViewRepresentable {
             
             if !isCursorInLink {
                 attributedString.addAttributes([
-                    .foregroundColor: UIColor.systemBlue, // Adjusted for visibility on glass
+                    .foregroundColor: UIColor.systemBlue,
                     .underlineStyle: NSUnderlineStyle.single.rawValue,
                     .link: URL(string: "obsidian://\(linkText)")!
                 ], range: fullRange)
