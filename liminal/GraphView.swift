@@ -7,16 +7,19 @@ struct EdgeConnection {
 }
 
 struct GraphView: View {
-    let nodeCount: Int
     let radius: Float
     let graphData: GraphData
     
-    init(nodeCount: Int = 20, radius: Float = 0.5) {
-        self.nodeCount = nodeCount
+    init(radius: Float = 0.5) {
+        do {
+            let mdFiles = Bundle.main.urls(forResourcesWithExtension: "md", subdirectory: nil) ?? []
+            self.graphData = try parseGraphDataFromBundleRoot(mdFiles: mdFiles)
+        } catch {
+            print("Error parsing from root: \(error)")
+            self.graphData = GraphData(nodeCount: 0, edges: [])
+        }
         self.radius = radius
-        self.graphData = GraphData.smallWorldGraph(nodeCount: nodeCount, extraEdgeCount: 20)
     }
-
     @Environment(\.openWindow) private var openWindow
     
     var body: some View {
@@ -128,7 +131,7 @@ struct GraphView: View {
                 }
             }
         } attachments: {
-            ForEach(0..<nodeCount, id: \.self) { index in
+            ForEach(0..<graphData.nodeCount, id: \.self) { index in
                 Attachment(id: "node_\(index)") {
                     Text(graphData.names[index])
                         .font(.caption)
