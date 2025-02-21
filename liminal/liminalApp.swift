@@ -10,7 +10,7 @@ import SwiftUI
 @main
 struct liminalApp: App {
 
-    init() { DragComponent.registerComponent() }
+    init() { GestureComponent.registerComponent() }
 
     var body: some Scene {
         ImmersiveSpace {

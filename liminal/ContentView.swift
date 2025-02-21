@@ -133,6 +133,6 @@ struct ContentView: View {
                 }
             }
         }
-        .installDrag()
+        .installGestures()
     }
 }

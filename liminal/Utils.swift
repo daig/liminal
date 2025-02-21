@@ -3,9 +3,9 @@ import SwiftUI
 
 
 public extension Entity {
-    var dragComponent: DragComponent? {
-        get { components[DragComponent.self] }
-        set { components[DragComponent.self] = newValue }
+    var gestureComponent: GestureComponent? {
+        get { components[GestureComponent.self] }
+        set { components[GestureComponent.self] = newValue }
     }
     
     /// Returns the position of the entity specified in the app's coordinate system. On
@@ -36,12 +36,16 @@ public extension Entity {
 }
 
 public extension RealityView {
-    func installDrag() -> some View {
+    func installGestures() -> some View {
         simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .targetedToAnyEntity()
                 .useGestureComponent()
         )
+        .simultaneousGesture(
+            MagnifyGesture()
+            .targetedToAnyEntity()
+            .useGestureComponent())
 
     }
 }

@@ -52,7 +52,7 @@ extension Entity {
         let hoverEffect = HoverEffectComponent(.highlight(highlightStyle))
         entity.components.set(hoverEffect)
         
-        entity.components.set(DragComponent())
+        entity.components.set(GestureComponent())
         
         //Set customgroup based on groupId[],
          
