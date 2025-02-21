@@ -22,7 +22,7 @@ extension Entity {
         groupId: Int,
         size: Float = 1,
         shape: NodeShape,
-        center: SIMD3<Float>
+        name: String
     ) -> ModelEntity {
         let mesh : MeshResource
         switch shape {
@@ -43,6 +43,7 @@ extension Entity {
         material.emissiveIntensity = 0.4
         
         let entity = ModelEntity(mesh: mesh, materials: [material])
+        entity.name = name
         
         entity.components.set(InputTargetComponent(allowedInputTypes: .indirect))
         
@@ -72,7 +73,7 @@ extension Entity {
         //        entity.components.set(ForceEffectComponent(effects: forces))
         //    }
         
-        entity.position = position - center
+        entity.position = position
         
         return entity
     }

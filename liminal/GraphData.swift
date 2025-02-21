@@ -1,14 +1,21 @@
 import Foundation
 
-/// Represents the data structure for a graph, including the number of nodes and the edges.
+/// Represents the data structure for a graph, including the number of nodes, edges, and node names.
 struct GraphData {
     let nodeCount: Int
     let edges: Set<Set<Int>>
+    let names: [String] // Array of short names for each node
     
-    /// Initializes a GraphData instance with the given node count and edges.
-    init(nodeCount: Int, edges: Set<Set<Int>>) {
+    /// Initializes a GraphData instance with the given node count, edges, and optional names.
+    init(nodeCount: Int, edges: Set<Set<Int>>, names: [String]? = nil) {
         self.nodeCount = nodeCount
         self.edges = edges
+        // If names aren't provided, generate default ones like "N1", "N2", etc.
+        if let providedNames = names, providedNames.count == nodeCount {
+            self.names = providedNames
+        } else {
+            self.names = (0..<nodeCount).map { "N\($0 + 1)" }
+        }
     }
     
     /// Generates a ring graph where each node is connected to its immediate neighbors in a circular fashion.
