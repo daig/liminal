@@ -1,5 +1,6 @@
 import RealityKit
 import SwiftUI
+import UIKit
 
 
 public extension Entity {
@@ -49,12 +50,16 @@ public extension RealityView {
                     let entity = value.entity
                     if let nodeComponent = entity.components[NodeComponent.self] {
                         let nodeIndex = nodeComponent.index
-                        let text = graphData.bodies[nodeIndex.id]
-                        openWindow(id: "editor", value: text)
+                        switch graphData.contents[nodeIndex.id] {
+                        case .markdown(let text):
+                            openWindow(id: "editor", value: text)
+                        case .pdf(let url):
+                            // Open PDF using UIApplication
+                            UIApplication.shared.open(url)
+                        }
                     }
                 }
         )
-
     }
 }
 

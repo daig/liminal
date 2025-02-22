@@ -1,13 +1,19 @@
 import Foundation
 
+// Define NodeContent enum to represent different types of content
+public enum NodeContent {
+    case markdown(String)
+    case pdf(URL)
+}
+
 // Define GraphData structure (provided in the context)
 struct GraphData {
     let nodeCount: Int
     let edges: [EdgeID]
     let names: [String]
-    let bodies: [String]
+    let contents: [NodeContent]
     
-    init(nodeCount: Int, edges: [EdgeID], names: [String]? = nil, bodies: [String]? = nil) {
+    init(nodeCount: Int, edges: [EdgeID], names: [String]? = nil, contents: [NodeContent]? = nil) {
         self.nodeCount = nodeCount
         self.edges = edges
         if let providedNames = names, providedNames.count == nodeCount {
@@ -15,10 +21,11 @@ struct GraphData {
         } else {
             self.names = (0..<nodeCount).map { "N\($0 + 1)" }
         }
-        if let providedBodies = bodies, providedBodies.count == nodeCount {
-            self.bodies = providedBodies
+        if let providedContents = contents, providedContents.count == nodeCount {
+            self.contents = providedContents
         } else {
-            self.bodies = (0..<nodeCount).map { _ in "" }
+            // Default to empty markdown content
+            self.contents = (0..<nodeCount).map { _ in .markdown("") }
         }
     }
 }
@@ -27,57 +34,72 @@ struct GraphData {
 func parseGraphData(from directoryURL: URL) throws -> GraphData {
     let fileManager = FileManager.default
     
-    // Get all .md files in the directory
-    let mdFiles = try fileManager.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "md" }
+    // Get all .md and .pdf files in the directory
+    let files = try fileManager.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil)
+        .filter { $0.pathExtension == "md" || $0.pathExtension == "pdf" }
     
     // Extract node names and create a mapping to indices
-    let nodeCount = mdFiles.count
-    let names = mdFiles.map { $0.deletingPathExtension().lastPathComponent }
+    let nodeCount = files.count
+    let names = files.map { $0.deletingPathExtension().lastPathComponent }
     let nameToIndex = Dictionary(uniqueKeysWithValues: names.enumerated().map { ($1, $0) })
     
-    // Initialize arrays for bodies and edges
-    var bodies: [String] = []
+    // Initialize arrays for contents and edges
+    var contents: [NodeContent] = []
     var edges: [EdgeID] = []
     
-    // Process each .md file
-    for (index, mdFileURL) in mdFiles.enumerated() {
-        let content = try String(contentsOf: mdFileURL)
-        let body = parseBody(content) // Assume this function extracts the body content
-        bodies.append(body)
-        
-        let links = extractLinks(from: body) // Assume this function extracts links
-        for link in links {
-            if let targetIndex = nameToIndex[link] {
-                let source = NodeID(id: index)
-                let target = NodeID(id: targetIndex)
-                let edge = EdgeID(source: source, target: target)
-                edges.append(edge)
+    // Process each file
+    for (index, fileURL) in files.enumerated() {
+        if fileURL.pathExtension == "md" {
+            // Process markdown file
+            let content = try String(contentsOf: fileURL)
+            let body = parseBody(content)
+            contents.append(.markdown(body))
+            
+            // Extract links from markdown content
+            let links = extractLinks(from: body)
+            for link in links {
+                if let targetIndex = nameToIndex[link] {
+                    let source = NodeID(id: index)
+                    let target = NodeID(id: targetIndex)
+                    let edge = EdgeID(source: source, target: target)
+                    edges.append(edge)
+                }
             }
+        } else {
+            // Process PDF file - store the URL
+            contents.append(.pdf(fileURL))
+            // Note: PDF files don't contain links, so we don't add any edges
         }
     }
     
-    return GraphData(nodeCount: nodeCount, edges: edges, names: names, bodies: bodies)
+    return GraphData(nodeCount: nodeCount, edges: edges, names: names, contents: contents)
 }
-func parseGraphDataFromBundleRoot(mdFiles: [URL]) throws -> GraphData {
-    let names = mdFiles.map { $0.deletingPathExtension().lastPathComponent }
+
+func parseGraphDataFromBundleRoot(files: [URL]) throws -> GraphData {
+    let names = files.map { $0.deletingPathExtension().lastPathComponent }
     let nameToIndex = Dictionary(uniqueKeysWithValues: names.enumerated().map { ($1, $0) })
-    var bodies: [String] = []
+    var contents: [NodeContent] = []
     var edges: [EdgeID] = []
     
-    for (index, url) in mdFiles.enumerated() {
-        let content = try String(contentsOf: url)
-        let body = parseBody(content)
-        bodies.append(body)
-        let links = extractLinks(from: body)
-        for link in links {
-            if let targetIndex = nameToIndex[link] {
-                edges.append(EdgeID(source: NodeID(id: index), target: NodeID(id: targetIndex)))
+    for (index, url) in files.enumerated() {
+        if url.pathExtension == "md" {
+            let content = try String(contentsOf: url)
+            let body = parseBody(content)
+            contents.append(.markdown(body))
+            let links = extractLinks(from: body)
+            for link in links {
+                if let targetIndex = nameToIndex[link] {
+                    edges.append(EdgeID(source: NodeID(id: index), target: NodeID(id: targetIndex)))
+                }
             }
+        } else if url.pathExtension == "pdf" {
+            contents.append(.pdf(url))
+            // PDFs don't contain links, so we don't add any edges
         }
     }
-    return GraphData(nodeCount: mdFiles.count, edges: edges, names: names, bodies: bodies)
+    return GraphData(nodeCount: files.count, edges: edges, names: names, contents: contents)
 }
+
 // Helper function to parse body, excluding front matter
 func parseBody(_ content: String) -> String {
     // Use regex to match front matter (starts with "---\n" and ends with "\n---\n")
