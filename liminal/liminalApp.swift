@@ -7,7 +7,6 @@
 
 import SwiftUI
 
-
 @main
 struct liminalApp: App {
     static let volumeLength = 3000.0
@@ -19,28 +18,34 @@ struct liminalApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: "my2DWindow"){
-            ContentView(text: "")
-                .frame(minWidth: 300, minHeight: 200)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding(.all, 16)
-        }
         WindowGroup {
             GraphView()
                 .frame(minWidth: volumeSize.width, minHeight: volumeSize.height)
                 .frame(minDepth: volumeSize.depth)
         }
         .windowStyle(.volumetric)
-        .windowResizability(.contentSize) //default
+        .windowResizability(.contentSize)
         
-        // Add new WindowGroup for editor windows
+        // Existing WindowGroup for editor windows
         WindowGroup(id: "editor", for: String.self) { $text in
             ContentView(text: text ?? "")
                 .frame(minWidth: 300, minHeight: 200)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.all, 16)
+        }
+        
+        // New WindowGroup for PDF viewer windows
+        WindowGroup(id: "pdfViewer", for: URL.self) { $url in
+            if let url = url {
+                PDFViewer(url: url)
+                    .frame(minWidth: 300, minHeight: 200)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.all, 16)
+            } else {
+                Text("No PDF to display")
+            }
         }
     }
 }

@@ -54,8 +54,7 @@ public extension RealityView {
                         case .markdown(let text):
                             openWindow(id: "editor", value: text)
                         case .pdf(let url):
-                            // Open PDF using UIApplication
-                            UIApplication.shared.open(url)
+                            openWindow(id: "pdfViewer", value: url)
                         }
                     }
                 }
