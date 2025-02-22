@@ -77,6 +77,7 @@ struct PDFViewer: View {
     @State private var pdfData: PDFData
     @State private var showError = false
     @State private var errorMessage = ""
+    @State private var isLoading = true
     var onSave: ((PDFData) -> Void)?
     
     init(url: URL, onSave: ((PDFData) -> Void)? = nil) {
@@ -92,9 +93,20 @@ struct PDFViewer: View {
                 .padding()
                 .background(.ultraThinMaterial)
             
-            // PDF view
-            PDFViewRepresentable(url: pdfData.url)
-                .id(pdfData.url) // Force view refresh when URL changes
+            if isLoading {
+                Spacer()
+                ProgressView("Loading PDF...")
+                    .task {
+                        // Simulate a small delay to ensure UI is responsive
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        isLoading = false
+                    }
+                Spacer()
+            } else {
+                // PDF view
+                PDFViewRepresentable(url: pdfData.url)
+                    .id(pdfData.url) // Force view refresh when URL changes
+            }
         }
         .toolbar {
             ToolbarItem(placement: .bottomOrnament) {
@@ -128,12 +140,26 @@ private struct PDFViewRepresentable: UIViewRepresentable {
     
     func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
-        pdfView.document = PDFDocument(url: url)
         pdfView.autoScales = true
+        
+        // Load the PDF document asynchronously
+        Task {
+            let document = PDFDocument(url: url)
+            await MainActor.run {
+                pdfView.document = document
+            }
+        }
+        
         return pdfView
     }
     
     func updateUIView(_ uiView: PDFView, context: Context) {
-        uiView.document = PDFDocument(url: url)
+        // Load the PDF document asynchronously when URL changes
+        Task {
+            let document = PDFDocument(url: url)
+            await MainActor.run {
+                uiView.document = document
+            }
+        }
     }
 }
