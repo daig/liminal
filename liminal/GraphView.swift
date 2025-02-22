@@ -13,10 +13,17 @@ struct GraphView: View {
     
     init(radius: Float = 0.5) {
         do {
-            let mdFiles = Bundle.main.urls(forResourcesWithExtension: "md", subdirectory: nil) ?? []
-            self.graphData = try parseGraphDataFromBundleRoot(mdFiles: mdFiles)
+            // Attempt to access the iCloud container
+            guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.dai.liminal") else {
+                throw NSError(domain: "iCloudContainerError", code: 0, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available"])
+            }
+            let documentsURL = containerURL.appendingPathComponent("Documents")
+            
+            // Parse .md files from the iCloud Documents folder
+            self.graphData = try parseGraphData(from: documentsURL)
         } catch {
-            print("Error parsing from root: \(error)")
+            print("Error parsing from iCloud: \(error)")
+            // Fallback to an empty graph if iCloud fails or no files exist
             self.graphData = GraphData(nodeCount: 0, edges: [])
         }
         self.radius = radius
