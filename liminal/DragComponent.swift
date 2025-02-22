@@ -17,7 +17,8 @@ public final class GestureState {
     var startScale: SIMD3<Float> = .one
     var isDragging: Bool = false
     var isScaling: Bool = false
- }
+    var storedPhysicsBody: PhysicsBodyComponent? = nil
+}
 
 /// A component that handles gesture logic for an entity.
 
@@ -34,16 +35,16 @@ public struct GestureComponent: Component, Codable {
         guard canDrag, !state.isScaling else { return }
         if state.target == nil {
             state.target = value.entity
+            // Store and remove physics body when drag starts
+            if let physicsBody = value.entity.components[PhysicsBodyComponent.self] {
+                state.storedPhysicsBody = physicsBody
+                value.entity.components.remove(PhysicsBodyComponent.self)
+            }
         }
         guard let target = state.target else { fatalError("No drag target found") }
         if !state.isDragging {
             state.isDragging = true
             state.startPosition = target.scenePosition
-            // Set physics body to kinematic when dragging starts
-            if var physicsBody = target.components[PhysicsBodyComponent.self] {
-                physicsBody.mode = .kinematic
-                target.components.set(physicsBody)
-            }
             // Update material when dragging starts
             if var model = target.components[ModelComponent.self],
                var material = model.materials.first as? PhysicallyBasedMaterial {
@@ -61,12 +62,14 @@ public struct GestureComponent: Component, Codable {
     mutating func onEnded(value: EntityTargetValue<DragGesture.Value>) {
         let state = GestureState.shared
         state.isDragging = false
-        state.target = nil
-        // Set physics body back to dynamic when dragging ends
-        if var physicsBody = value.entity.components[PhysicsBodyComponent.self] {
-            physicsBody.mode = .dynamic
-            value.entity.components.set(physicsBody)
+        
+        // Restore physics body when drag ends
+        if let storedPhysicsBody = state.storedPhysicsBody {
+            value.entity.components.set(storedPhysicsBody)
+            state.storedPhysicsBody = nil
         }
+        
+        state.target = nil
         // Reset material when dragging ends
         if var model = value.entity.components[ModelComponent.self],
            var material = model.materials.first as? PhysicallyBasedMaterial {
