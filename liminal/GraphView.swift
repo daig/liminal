@@ -1,5 +1,7 @@
 import RealityKit
 import SwiftUI
+import Speech
+import AVFoundation
 
 struct EdgeConnection {
     let entity: Entity
@@ -13,12 +15,16 @@ struct EditorContext: Hashable, Codable {
 
 struct GraphView: View {
     @State private var showFilters = false
+    @State private var voiceCommandHandler: VoiceCommandHandler
+    
     let radius: Float
     let graphData: GraphData
     
     init(radius: Float = 0.5, graphData: GraphData) {
         self.radius = radius
         self.graphData = graphData
+        let openAIClient = OpenAIClient(apiKey: ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "")
+        _voiceCommandHandler = State(wrappedValue: VoiceCommandHandler(openAIClient: openAIClient))
     }
     @Environment(\.openWindow) private var openWindow
     
@@ -147,6 +153,30 @@ struct GraphView: View {
         .installGestures(graphData: graphData, openWindow: openWindow)
         .toolbar {
             ToolbarItemGroup() {
+                Button(action: {
+                    Task {
+                        do {
+                            if voiceCommandHandler.isRecording {
+                                print("Stopping recording via button")
+                                voiceCommandHandler.stopRecording()
+                            } else {
+                                print("Starting recording via button")
+                                try await voiceCommandHandler.startRecording()
+                            }
+                        } catch {
+                            print("Error in voice command: \(error.localizedDescription)")
+                        }
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: voiceCommandHandler.isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                            .foregroundColor(voiceCommandHandler.isRecording ? .red : .blue)
+                        if voiceCommandHandler.isProcessing {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                }
                 Button("Filter") { showFilters.toggle() }
                 Button("Upload") { }
                 Button("Compose") {
