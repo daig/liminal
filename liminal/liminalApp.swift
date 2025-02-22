@@ -27,8 +27,8 @@ struct liminalApp: App {
         .windowResizability(.contentSize)
         
         // Existing WindowGroup for editor windows
-        WindowGroup(id: "editor", for: String.self) { $text in
-            ContentView(text: text ?? "")
+        WindowGroup(id: "editor", for: NoteData.self) { $noteData in
+            ContentView(noteData: noteData ?? NoteData(title: "", content: ""))
                 .frame(minWidth: 300, minHeight: 200)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 12))

@@ -2,22 +2,31 @@ import SwiftUI
 import UIKit
 
 struct ContentView: View {
-    @State private var text: String = ""
+    @State private var noteData: NoteData
     
-    init(text: String) {
-        _text = State(initialValue: text)
+    init(noteData: NoteData) {
+        _noteData = State(initialValue: noteData)
     }
     
     var body: some View {
-        ObsidianTextEditor(text: $text)
-            .onOpenURL { url in
-                if url.scheme == "liminal" {
-                    let fileName = url.host ?? url.path // Extract the file name
-                    print("Navigating to file: \(fileName)")
-                    // Add logic to open the file in your graph, e.g.:
-                    // navigateToFile(fileName)
+        VStack(spacing: 0) {
+            // Title editor
+            TextField("Title", text: $noteData.title)
+                .font(.title)
+                .padding()
+                .background(.ultraThinMaterial)
+            
+            // Content editor
+            ObsidianTextEditor(text: $noteData.content)
+                .onOpenURL { url in
+                    if url.scheme == "liminal" {
+                        let fileName = url.host ?? url.path // Extract the file name
+                        print("Navigating to file: \(fileName)")
+                        // Add logic to open the file in your graph, e.g.:
+                        // navigateToFile(fileName)
+                    }
                 }
-            }
+        }
     }
 }
 
