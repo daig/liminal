@@ -7,6 +7,7 @@ struct EdgeConnection {
 }
 
 struct GraphView: View {
+    @State private var showFilters = false
     let radius: Float
     let graphData: GraphData
     
@@ -144,11 +145,23 @@ struct GraphView: View {
             }
         }
         .installGestures(graphData: graphData, openWindow: openWindow)
+        .toolbar {
+            ToolbarItemGroup() {
+                Button("Filter") { showFilters.toggle() }
+                Button("Upload") { }
+                Button("Compose") { }
+            }
+        }
         .overlay(alignment: .bottom) {
             Button("Open 2D Window") {
                 openWindow(id: "my2DWindow")
             }
             .padding()
+        }
+        .ornament(attachmentAnchor: .scene(.leading)) {
+            if showFilters {
+                FiltersView()
+            }
         }
     }
 }
