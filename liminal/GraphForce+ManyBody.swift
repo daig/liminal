@@ -5,8 +5,7 @@ extension GraphForce {
     /// Applies repulsive or attractive forces between all nodes using Barnes-Hut approximation.
     /// Complexity: O(n log n) where n is the number of nodes.
     func applyManyBodyForce(parameters: inout ForceEffectParameters, accumulatedForces: inout [SIMD3<Float>]) {
-        guard let positions = parameters.positions,
-              var velocities = parameters.velocities else { return }
+        guard let positions = parameters.positions else { return }
         let N = parameters.physicsBodyCount
         
         // Precompute squared values for efficiency
@@ -57,8 +56,10 @@ extension GraphForce {
                 if farEnough {
                     // Approximate distant nodes as a single mass
                     if distanceSquared < distanceMax2 {
-                        let k = manyBodyStrength * t.delegate.accumulatedMass / distanceSquared
-                        force += vec * k
+                        // F = GMm/r^2 * direction
+                        let direction = normalize(vec)
+                        let forceMagnitude = manyBodyStrength * t.delegate.accumulatedMass / distanceSquared
+                        force += direction * forceMagnitude
                     }
                     return false // No need to visit children
                 } else if t.childrenBufferPointer != nil {
@@ -71,18 +72,17 @@ extension GraphForce {
                         return false // Skip self-interaction
                     }
                     let massAcc = t.delegate.accumulatedMass
-                    let k = manyBodyStrength * massAcc / distanceSquared
-                    force += vec * k
+                    // F = GMm/r^2 * direction
+                    let direction = normalize(vec)
+                    let forceMagnitude = manyBodyStrength * massAcc / distanceSquared
+                    force += direction * forceMagnitude
                     return false
                 } else {
                     return true
                 }
             }
             
-            // Apply force
-            let velocityChange = force * Float(parameters.elapsedTime)
-            let nsq = Float(N) * Float(N)
-            accumulatedForces[i] += velocityChange / [nsq,nsq,nsq]
+            accumulatedForces[i] += force
         }
     }
 } 

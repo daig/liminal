@@ -5,8 +5,7 @@ extension GraphForce {
     /// Applies spring forces between connected nodes to maintain target distances.
     /// Complexity: O(e) where e is the number of links.
     func applyLinkForce(parameters: inout ForceEffectParameters, accumulatedForces: inout [SIMD3<Float>]) {
-        guard let positions = parameters.positions,
-              let velocities = parameters.velocities else { return }
+        guard let positions = parameters.positions else { return }
         
         // Compute bias based on node degrees
         let linkLookup = LinkLookup(links: links)
@@ -17,7 +16,7 @@ extension GraphForce {
             return total > 0 ? sourceCount / total : 0.5
         }
         
-        // Apply forces for each iteration
+        // Apply spring forces for each link
         for i in links.indices {
             let link = links[i]
             let sourceIndex = link.source.id
@@ -34,17 +33,19 @@ extension GraphForce {
             let targetPos = positions[targetIndex]
             var vec = targetPos - sourcePos
             
-            // Compute current length and adjustment
+            // Compute current length
             let length = vec.length()
             guard length > 0 else { continue } // Avoid division by zero
             
-            // Force magnitude: proportional to deviation from target length
+            // Original force calculation converted to force mode:
+            // The original calculated (l = (length - linkLength) / length * linkStiffness)
+            // and applied it as vec *= l
+            // In force mode, we want F = -k(x/|x|)(|x| - x₀)
             let l = (length - linkLength) / length * linkStiffness
             vec *= l
             
-            // Apply forces with bias
+            // Apply forces with bias (note: vec already points from source to target)
             let b = bias[i]
-            
             accumulatedForces[targetIndex] += -vec * b
             accumulatedForces[sourceIndex] += vec * (1 - b)
         }

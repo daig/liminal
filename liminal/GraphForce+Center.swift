@@ -8,19 +8,19 @@ extension GraphForce {
         guard let positions = parameters.positions else { return }
         let N = parameters.physicsBodyCount
         
-        // Calculate mean position
+        // Calculate mean position (center of mass)
         var meanPosition: SIMD3<Float> = .zero
         for i in 0..<N {
             meanPosition += positions[i]
         }
+        meanPosition /= Float(N)
         
-        // Calculate center force
-        let delta = meanPosition / Float(Double(N) * parameters.elapsedTime)
-        let centerForce = -delta * centerStrength
-        
-        // Apply force to each node
+        // Apply spring-like force towards center for each node
         for i in 0..<N {
-            accumulatedForces[i] += centerForce
+            let displacement = meanPosition - positions[i]
+            // F = -kx where k is centerStrength
+            let force = displacement * centerStrength
+            accumulatedForces[i] += force
         }
     }
 } 

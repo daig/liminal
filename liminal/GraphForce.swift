@@ -13,7 +13,7 @@ import SwiftUI
 struct GraphForce: ForceEffectProtocol {
     // Required by ForceEffectProtocol
     var parameterTypes: PhysicsBodyParameterTypes { [.position, .velocity, .distance] }
-    var forceMode: ForceMode { .velocity }
+    var forceMode: ForceMode { .force }
     
     // Center force properties
     let centerStrength: Float
@@ -71,7 +71,9 @@ struct GraphForce: ForceEffectProtocol {
         applyManyBodyForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         
         // Apply link force
-        applyLinkForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
+        for _ in 0..<linkIterations {
+            applyLinkForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
+        }
         
         applyBoxBoundaryForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         

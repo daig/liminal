@@ -18,6 +18,7 @@ public final class GestureState {
     var isDragging: Bool = false
     var isScaling: Bool = false
     var storedPhysicsBody: PhysicsBodyComponent? = nil
+    var massResetTask: Task<Void, Never>? = nil
 }
 
 /// A component that handles gesture logic for an entity.
@@ -63,9 +64,29 @@ public struct GestureComponent: Component, Codable {
         let state = GestureState.shared
         state.isDragging = false
         
-        // Restore physics body when drag ends
+        // Cancel any existing mass reset task
+        state.massResetTask?.cancel()
+        
+        // Restore physics body when drag ends with increased mass
         if let storedPhysicsBody = state.storedPhysicsBody {
-            value.entity.components.set(storedPhysicsBody)
+            var modifiedBody = storedPhysicsBody
+            // Temporarily increase mass by 10x
+            modifiedBody.massProperties.mass *= 10
+            value.entity.components.set(modifiedBody)
+            
+            // Schedule task to reset mass after 1 second
+            state.massResetTask = Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        if var currentBody = value.entity.components[PhysicsBodyComponent.self] {
+                            currentBody.massProperties.mass = storedPhysicsBody.massProperties.mass
+                            value.entity.components.set(currentBody)
+                        }
+                    }
+                }
+            }
+            
             state.storedPhysicsBody = nil
         }
         

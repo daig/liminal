@@ -31,7 +31,7 @@ struct GraphView: View {
                     theta: 0.9,
                     distanceMin: 0,
                     links: graphData.edges,
-                    linkStiffness: 1,
+                    linkStiffness: 10,
                     linkLength: 0.1
                 ),
                 strengthScale: 1.0,
