@@ -157,13 +157,6 @@ struct GraphView: View {
                 Button("Filter") { showFilters.toggle() }
                 Button("Upload") { }
                 Button("Compose") { }
-                Button("Copy to iCloud") {
-                    do {
-                        let mdFiles = Bundle.main.urls(forResourcesWithExtension: "md", subdirectory: nil) ?? []
-                        let pdfFiles = Bundle.main.urls(forResourcesWithExtension: "pdf", subdirectory: nil) ?? []
-                        try GraphView.copyFilesToICloud(files: mdFiles + pdfFiles)
-                    } catch { print("Error copying files to iCloud: \(error)") }
-                }
             }
         }
         .overlay(alignment: .bottom) {
