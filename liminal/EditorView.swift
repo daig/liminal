@@ -7,6 +7,11 @@ struct ContentView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var isEditing: Bool = false // New state for edit/view mode
+    @State private var showingSummary = false
+    @State private var summary = ""
+    @State private var isGeneratingSummary = false
+    @State private var showingSettings = false
+    @AppStorage("openAIKey") private var apiKey = ""
     var onSave: ((NoteData) -> Void)?
     
     init(noteData: NoteData, onSave: ((NoteData) -> Void)? = nil, isEditing: Bool = false) {
@@ -39,6 +44,28 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .bottomOrnament) {
+                // Settings button
+                Button(action: {
+                    showingSettings = true
+                }) {
+                    Label("Settings", systemImage: "gear")
+                }
+                
+                // AI Summary button
+                Button(action: {
+                    if apiKey.isEmpty {
+                        errorMessage = "Please set your OpenAI API key in settings"
+                        showError = true
+                    } else {
+                        Task {
+                            await generateSummary()
+                        }
+                    }
+                }) {
+                    Label("AI Summary", systemImage: "sparkles.rectangle.stack")
+                }
+                .disabled(isGeneratingSummary)
+                
                 // Toggle button between edit and view modes
                 Button(action: {
                     isEditing.toggle()
@@ -58,10 +85,30 @@ struct ContentView: View {
                 }
             }
         }
-        .alert("Error Saving", isPresented: $showError) {
+        .alert("Error", isPresented: $showError) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(errorMessage)
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView()
+        }
+        .sheet(isPresented: $showingSummary) {
+            NavigationView {
+                ScrollView {
+                    Text(summary)
+                        .padding()
+                }
+                .navigationTitle("AI Summary")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showingSummary = false
+                        }
+                    }
+                }
+            }
         }
         .onOpenURL { url in
             if url.scheme == "liminal" {
@@ -70,6 +117,19 @@ struct ContentView: View {
                 // Add navigation logic here if needed
             }
         }
+    }
+    
+    private func generateSummary() async {
+        isGeneratingSummary = true
+        do {
+            let client = OpenAIClient(apiKey: apiKey)
+            summary = try await client.generateSummary(text: noteData.content)
+            showingSummary = true
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+        isGeneratingSummary = false
     }
 }
 
