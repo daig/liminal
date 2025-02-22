@@ -6,6 +6,11 @@ struct EdgeConnection {
     let nodeIndices: (Int, Int)
 }
 
+struct EditorContext: Hashable, Codable {
+    let noteData: NoteData
+    let isEditing: Bool
+}
+
 struct GraphView: View {
     @State private var showFilters = false
     let radius: Float
@@ -156,8 +161,9 @@ struct GraphView: View {
                             try newNote.save()
                             // Wait a brief moment to ensure file is written
                             try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                            // Then open the editor window
-                            openWindow(id: "editor", value: newNote)
+                            // Then open the editor window in edit mode
+                            let context = EditorContext(noteData: newNote, isEditing: true)
+                            openWindow(id: "editor", value: context)
                         } catch {
                             print("Error creating new note: \(error)")
                         }

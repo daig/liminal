@@ -52,7 +52,9 @@ public extension RealityView {
                         let nodeIndex = nodeComponent.index
                         switch graphData.contents[nodeIndex.id] {
                         case .markdown(let text):
-                            openWindow(id: "editor", value: NoteData(title: graphData.names[nodeIndex.id], content: text))
+                            let noteData = NoteData(title: graphData.names[nodeIndex.id], content: text)
+                            let context = EditorContext(noteData: noteData, isEditing: false)
+                            openWindow(id: "editor", value: context)
                         case .pdf(let url):
                             openWindow(id: "pdfViewer", value: url)
                         }

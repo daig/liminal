@@ -1,42 +1,56 @@
 import SwiftUI
 import UIKit
+import Down
 
 struct ContentView: View {
     @State private var noteData: NoteData
     @State private var showError = false
     @State private var errorMessage = ""
+    @State private var isEditing: Bool = false // New state for edit/view mode
     var onSave: ((NoteData) -> Void)?
     
-    init(noteData: NoteData, onSave: ((NoteData) -> Void)? = nil) {
+    init(noteData: NoteData, onSave: ((NoteData) -> Void)? = nil, isEditing: Bool = false) {
         _noteData = State(initialValue: noteData)
         self.onSave = onSave
+        _isEditing = State(initialValue: isEditing)
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            // Title editor
-            TextField("Title", text: $noteData.title)
-                .font(.title)
-                .padding()
-                .background(.ultraThinMaterial)
+            // Title editor: Editable in edit mode, read-only in view mode
+            if isEditing {
+                TextField("Title", text: $noteData.title)
+                    .font(.title)
+                    .padding()
+                    .background(.ultraThinMaterial)
+            } else {
+                Text(noteData.title)
+                    .font(.title)
+                    .padding()
+                    .background(.ultraThinMaterial)
+            }
             
-            // Content editor
-            ObsidianTextEditor(text: $noteData.content)
-                .onOpenURL { url in
-                    if url.scheme == "liminal" {
-                        let fileName = url.host ?? url.path // Extract the file name
-                        print("Navigating to file: \(fileName)")
-                        // Add logic to open the file in your graph, e.g.:
-                        // navigateToFile(fileName)
-                    }
-                }
+            // Content: Editor in edit mode, rendered markdown in view mode
+            if isEditing {
+                ObsidianTextEditor(text: $noteData.content)
+            } else {
+                MarkdownViewer(markdown: noteData.content)
+            }
         }
         .toolbar {
-            ToolbarItem(placement: .bottomOrnament){
+            ToolbarItemGroup(placement: .bottomOrnament) {
+                // Toggle button between edit and view modes
+                Button(action: {
+                    isEditing.toggle()
+                }) {
+                    Text(isEditing ? "View" : "Edit")
+                }
+                
+                // Existing Save button
                 Button("Save") {
                     do {
-                        try noteData.save()  // This will now mutate noteData
-                        onSave?(noteData)  // Pass the updated noteData to the callback
+                        try noteData.save()
+                        onSave?(noteData)
                     } catch {
                         errorMessage = error.localizedDescription
                         showError = true
@@ -48,6 +62,13 @@ struct ContentView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(errorMessage)
+        }
+        .onOpenURL { url in
+            if url.scheme == "liminal" {
+                let fileName = url.host ?? url.path
+                print("Navigating to file: \(fileName)")
+                // Add navigation logic here if needed
+            }
         }
     }
 }

@@ -44,9 +44,9 @@ struct liminalApp: App {
         .windowResizability(.contentSize)
         
         // Existing WindowGroup for editor windows
-        WindowGroup(id: "editor", for: NoteData.self) { $noteData in
-            if let noteData = noteData {
-                ContentView(noteData: noteData) { savedNote in
+        WindowGroup(id: "editor", for: EditorContext.self) { $context in
+            if let context = context {
+                ContentView(noteData: context.noteData, onSave: { savedNote in
                     // When a note is saved, reload the graph data
                     Task {
                         do {
@@ -59,7 +59,7 @@ struct liminalApp: App {
                             print("Error reloading graph: \(error)")
                         }
                     }
-                }
+                }, isEditing: context.isEditing)
                 .frame(minWidth: 300, minHeight: 200)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
