@@ -28,7 +28,6 @@ struct GraphForce: ForceEffectProtocol {
     let links: [EdgeID]
     let linkStiffness: Float
     let linkLength: Float
-    let linkIterations: UInt
     
     /// Initializes the combined graph force with customizable parameters for all three forces.
     init(
@@ -44,8 +43,7 @@ struct GraphForce: ForceEffectProtocol {
         // Link force parameters
         links: [EdgeID],
         linkStiffness: Float = 0.5,
-        linkLength: Float = 0.5,
-        linkIterations: UInt = 1
+        linkLength: Float = 0.4
     ) {
         self.centerStrength = centerStrength
         self.manyBodyStrength = manyBodyStrength
@@ -55,25 +53,18 @@ struct GraphForce: ForceEffectProtocol {
         self.links = links
         self.linkStiffness = linkStiffness
         self.linkLength = linkLength
-        self.linkIterations = linkIterations
     }
     
     func update(parameters: inout ForceEffectParameters) {
         guard parameters.physicsBodyCount > 0 else { return }
         
-        // Initialize accumulated forces array
         var accumulatedForces = Array(repeating: SIMD3<Float>.zero, count: parameters.physicsBodyCount)
         
-        // Apply center force
         applyCenterForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         
-        // Apply many-body force
         applyManyBodyForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         
-        // Apply link force
-        for _ in 0..<linkIterations {
-            applyLinkForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
-        }
+        applyLinkForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         
         applyBoxBoundaryForce(parameters: &parameters, accumulatedForces: &accumulatedForces)
         
