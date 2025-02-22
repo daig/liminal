@@ -3,6 +3,8 @@ import UIKit
 
 struct ContentView: View {
     @State private var noteData: NoteData
+    @State private var showError = false
+    @State private var errorMessage = ""
     
     init(noteData: NoteData) {
         _noteData = State(initialValue: noteData)
@@ -26,6 +28,23 @@ struct ContentView: View {
                         // navigateToFile(fileName)
                     }
                 }
+        }
+        .toolbar {
+            ToolbarItem(placement: .bottomOrnament){
+                Button("Save") {
+                    do {
+                        try noteData.save()
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        showError = true
+                    }
+                }
+            }
+        }
+        .alert("Error Saving", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
         }
     }
 }
