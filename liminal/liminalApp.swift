@@ -11,6 +11,7 @@ import SwiftUI
 struct liminalApp: App {
     static let volumeLength = 3000.0
     let volumeSize = Size3D(width: volumeLength, height: volumeLength, depth: volumeLength)
+    @State private var graphData: GraphData?
 
     init() {
         GestureComponent.registerComponent()
@@ -19,20 +20,51 @@ struct liminalApp: App {
 
     var body: some Scene {
         WindowGroup {
-            GraphView()
-                .frame(minWidth: volumeSize.width, minHeight: volumeSize.height)
-                .frame(minDepth: volumeSize.depth)
+            if let data = graphData {
+                GraphView(graphData: data)
+                    .frame(minWidth: volumeSize.width, minHeight: volumeSize.height)
+                    .frame(minDepth: volumeSize.depth)
+            } else {
+                ProgressView("Loading graph...")
+                    .task {
+                        do {
+                            guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.dai.liminal") else {
+                                throw NSError(domain: "iCloudContainerError", code: 0, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available"])
+                            }
+                            let documentsURL = containerURL.appendingPathComponent("Documents")
+                            graphData = try parseGraphData(from: documentsURL)
+                        } catch {
+                            print("Error loading graph: \(error)")
+                            graphData = GraphData(nodeCount: 0, edges: [])
+                        }
+                    }
+            }
         }
         .windowStyle(.volumetric)
         .windowResizability(.contentSize)
         
         // Existing WindowGroup for editor windows
         WindowGroup(id: "editor", for: NoteData.self) { $noteData in
-            ContentView(noteData: noteData ?? NoteData(title: "", content: ""))
+            if let noteData = noteData {
+                ContentView(noteData: noteData) { savedNote in
+                    // When a note is saved, reload the graph data
+                    Task {
+                        do {
+                            guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.dai.liminal") else {
+                                throw NSError(domain: "iCloudContainerError", code: 0, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available"])
+                            }
+                            let documentsURL = containerURL.appendingPathComponent("Documents")
+                            graphData = try parseGraphData(from: documentsURL)
+                        } catch {
+                            print("Error reloading graph: \(error)")
+                        }
+                    }
+                }
                 .frame(minWidth: 300, minHeight: 200)
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .padding(.all, 16)
+            }
         }
         
         // New WindowGroup for PDF viewer windows

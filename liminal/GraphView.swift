@@ -11,22 +11,9 @@ struct GraphView: View {
     let radius: Float
     let graphData: GraphData
     
-    init(radius: Float = 0.5) {
-        do {
-            // Attempt to access the iCloud container
-            guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.dai.liminal") else {
-                throw NSError(domain: "iCloudContainerError", code: 0, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available"])
-            }
-            let documentsURL = containerURL.appendingPathComponent("Documents")
-            
-            // Parse .md files from the iCloud Documents folder
-            self.graphData = try parseGraphData(from: documentsURL)
-        } catch {
-            print("Error parsing from iCloud: \(error)")
-            // Fallback to an empty graph if iCloud fails or no files exist
-            self.graphData = GraphData(nodeCount: 0, edges: [])
-        }
+    init(radius: Float = 0.5, graphData: GraphData) {
         self.radius = radius
+        self.graphData = graphData
     }
     @Environment(\.openWindow) private var openWindow
     

@@ -5,9 +5,11 @@ struct ContentView: View {
     @State private var noteData: NoteData
     @State private var showError = false
     @State private var errorMessage = ""
+    var onSave: ((NoteData) -> Void)?
     
-    init(noteData: NoteData) {
+    init(noteData: NoteData, onSave: ((NoteData) -> Void)? = nil) {
         _noteData = State(initialValue: noteData)
+        self.onSave = onSave
     }
     
     var body: some View {
@@ -33,7 +35,8 @@ struct ContentView: View {
             ToolbarItem(placement: .bottomOrnament){
                 Button("Save") {
                     do {
-                        try noteData.save()
+                        try noteData.save()  // This will now mutate noteData
+                        onSave?(noteData)  // Pass the updated noteData to the callback
                     } catch {
                         errorMessage = error.localizedDescription
                         showError = true
