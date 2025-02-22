@@ -63,7 +63,8 @@ struct GraphView: View {
                     groupId: index,
                     size: 3,
                     shape: .sphere,
-                    name: graphData.names[index]
+                    name: graphData.names[index],
+                    content: graphData.contents[index]
                 )
                 // Add NodeComponent with the node's index
                 node.components.set(NodeComponent(index: NodeID(id: index)))
@@ -158,12 +159,6 @@ struct GraphView: View {
                 Button("Upload") { }
                 Button("Compose") { }
             }
-        }
-        .overlay(alignment: .bottom) {
-            Button("Open 2D Window") {
-                openWindow(id: "my2DWindow")
-            }
-            .padding()
         }
         .ornament(attachmentAnchor: .scene(.leading)) {
             if showFilters {

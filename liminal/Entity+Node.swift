@@ -22,7 +22,8 @@ extension Entity {
         groupId: Int,
         size: Float = 1,
         shape: NodeShape,
-        name: String
+        name: String,
+        content: NodeContent
     ) -> ModelEntity {
         let mesh : MeshResource
         switch shape {
@@ -32,17 +33,22 @@ extension Entity {
             mesh = MeshResource.generateBox(size: .init(x: size * 0.0161, y: size * 0.0161, z: size * 0.0161))
         }
         
-        // Create a unique color based on the groupId
-//        var material = PhysicallyBasedMaterial()
-//        let colors: [UIColor] = [.systemRed, .systemBlue, .systemGreen, .systemYellow, .systemPurple, .systemOrange]
-//        let color = colors[groupId % colors.count]
-//        material.baseColor = PhysicallyBasedMaterial.BaseColor(tint: color)
-//        material.roughness = PhysicallyBasedMaterial.Roughness(floatLiteral: 1.0)
-//        material.metallic = PhysicallyBasedMaterial.Metallic(floatLiteral: 0.01)
-//        material.emissiveColor = PhysicallyBasedMaterial.EmissiveColor(color: color)
-//        material.emissiveIntensity = 0.4
+        // Create material based on content type
+        var material = PhysicallyBasedMaterial()
+        let color: UIColor
+        switch content {
+        case .pdf:
+            color = .systemBlue
+        case .markdown:
+            color = .gray
+        }
+        material.baseColor = PhysicallyBasedMaterial.BaseColor(tint: color)
+        material.roughness = PhysicallyBasedMaterial.Roughness(floatLiteral: 1.0)
+        material.metallic = PhysicallyBasedMaterial.Metallic(floatLiteral: 0.01)
+        material.emissiveColor = PhysicallyBasedMaterial.EmissiveColor(color: color)
+        material.emissiveIntensity = 0.4
         
-        let entity = ModelEntity(mesh: mesh, materials: [nodeMaterial])
+        let entity = ModelEntity(mesh: mesh, materials: [material])
         entity.name = name
         
         entity.components.set(InputTargetComponent(allowedInputTypes: .indirect))
