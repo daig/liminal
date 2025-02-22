@@ -37,6 +37,7 @@ func parseGraphData(from directoryURL: URL) throws -> GraphData {
     // Get all .md and .pdf files in the directory
     let files = try fileManager.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil)
         .filter { $0.pathExtension == "md" || $0.pathExtension == "pdf" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent } // Sort files for consistent ordering
     
     // Extract node names and create a mapping to indices
     let nodeCount = files.count
@@ -67,8 +68,8 @@ func parseGraphData(from directoryURL: URL) throws -> GraphData {
             }
         } else {
             // Process PDF file - store the URL
+            // Ensure we're using the URL relative to the Documents directory
             contents.append(.pdf(fileURL))
-            // Note: PDF files don't contain links, so we don't add any edges
         }
     }
     

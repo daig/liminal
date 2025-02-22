@@ -70,11 +70,24 @@ struct liminalApp: App {
         // New WindowGroup for PDF viewer windows
         WindowGroup(id: "pdfViewer", for: URL.self) { $url in
             if let url = url {
-                PDFViewer(url: url)
-                    .frame(minWidth: 300, minHeight: 200)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .padding(.all, 16)
+                PDFViewer(url: url) { savedPDF in
+                    // When a PDF is renamed, reload the graph data
+                    Task {
+                        do {
+                            guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: "iCloud.com.dai.liminal") else {
+                                throw NSError(domain: "iCloudContainerError", code: 0, userInfo: [NSLocalizedDescriptionKey: "iCloud container not available"])
+                            }
+                            let documentsURL = containerURL.appendingPathComponent("Documents")
+                            graphData = try parseGraphData(from: documentsURL)
+                        } catch {
+                            print("Error reloading graph after PDF rename: \(error)")
+                        }
+                    }
+                }
+                .frame(minWidth: 300, minHeight: 200)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.all, 16)
             } else {
                 Text("No PDF to display")
             }
