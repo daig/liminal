@@ -39,6 +39,11 @@ public struct GestureComponent: Component, Codable {
         if !state.isDragging {
             state.isDragging = true
             state.startPosition = target.scenePosition
+            // Set physics body to kinematic when dragging starts
+            if var physicsBody = target.components[PhysicsBodyComponent.self] {
+                physicsBody.mode = .kinematic
+                target.components.set(physicsBody)
+            }
             // Update material when dragging starts
             if var model = target.components[ModelComponent.self],
                var material = model.materials.first as? PhysicallyBasedMaterial {
@@ -57,6 +62,11 @@ public struct GestureComponent: Component, Codable {
         let state = GestureState.shared
         state.isDragging = false
         state.target = nil
+        // Set physics body back to dynamic when dragging ends
+        if var physicsBody = value.entity.components[PhysicsBodyComponent.self] {
+            physicsBody.mode = .dynamic
+            value.entity.components.set(physicsBody)
+        }
         // Reset material when dragging ends
         if var model = value.entity.components[ModelComponent.self],
            var material = model.materials.first as? PhysicallyBasedMaterial {
