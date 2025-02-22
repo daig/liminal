@@ -144,7 +144,25 @@ struct GraphView: View {
             ToolbarItemGroup() {
                 Button("Filter") { showFilters.toggle() }
                 Button("Upload") { }
-                Button("Compose") { }
+                Button("Compose") {
+                    // Create a new note with a unique name based on timestamp
+                    let timestamp = Int(Date().timeIntervalSince1970)
+                    let newNoteName = "Note-\(timestamp)"
+                    var newNote = NoteData(title: newNoteName, content: "")
+                    
+                    // First save the note to create the file
+                    Task {
+                        do {
+                            try newNote.save()
+                            // Wait a brief moment to ensure file is written
+                            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                            // Then open the editor window
+                            openWindow(id: "editor", value: newNote)
+                        } catch {
+                            print("Error creating new note: \(error)")
+                        }
+                    }
+                }
             }
         }
         .ornament(attachmentAnchor: .scene(.leading)) {
