@@ -14,6 +14,11 @@ struct EditorContext: Hashable, Codable {
 struct GraphView: View {
     @State private var showFilters = false
     @State private var showCommandInput = false
+    @State private var showSearch = false
+    @State private var searchText = ""
+    @State private var isProcessingSearch = false
+    @State private var searchError: String? = nil
+    @State private var searchResults: [String]? = nil
     @State private var commandText = ""
     @State private var isProcessingCommand = false
     @State private var commandError: String? = nil
@@ -157,6 +162,16 @@ struct GraphView: View {
         .toolbar {
             ToolbarItemGroup() {
                 Button("Filter") { showFilters.toggle() }
+                Button("Search") {
+                    if apiKey.isEmpty {
+                        openWindow(id: "settings")
+                    } else {
+                        showSearch.toggle()
+                        searchText = ""
+                        searchError = nil
+                        searchResults = nil
+                    }
+                }
                 Button("Upload") { }
                 Button("Command") { 
                     if apiKey.isEmpty {
@@ -263,6 +278,78 @@ struct GraphView: View {
                 .padding()
                 .background(.ultraThinMaterial)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else if showSearch {
+                VStack(spacing: 16) {
+                    Text("Search Files")
+                        .font(.title2)
+                        .padding(.top)
+                    
+                    if let results = searchResults {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Relevant files:")
+                                    .font(.headline)
+                                    .padding(.bottom, 4)
+                                
+                                ForEach(results, id: \.self) { filename in
+                                    Text(filename)
+                                        .font(.body)
+                                }
+                            }
+                            .padding()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 300)
+                        
+                        HStack {
+                            Button("New Search") {
+                                searchText = ""
+                                searchError = nil
+                                searchResults = nil
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Close") {
+                                showSearch = false
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.bottom)
+                    } else {
+                        TextField("Enter search query...", text: $searchText)
+                            .textFieldStyle(.roundedBorder)
+                            .padding(.horizontal)
+                        
+                        if let error = searchError {
+                            Text(error)
+                                .foregroundColor(.red)
+                                .font(.caption)
+                                .padding(.horizontal)
+                        }
+                        
+                        HStack {
+                            Button("Cancel") {
+                                searchText = ""
+                                searchError = nil
+                                showSearch = false
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Search") {
+                                Task {
+                                    await processSearch(searchText)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(searchText.isEmpty || isProcessingSearch)
+                        }
+                        .padding(.bottom)
+                    }
+                }
+                .frame(width: 400)
+                .padding()
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
         }
     }
@@ -322,5 +409,32 @@ struct GraphView: View {
         }
         
         isProcessingCommand = false
+    }
+    
+    private func processSearch(_ query: String) async {
+        guard !query.isEmpty else { return }
+        guard !apiKey.isEmpty else {
+            searchError = "Error: OpenAI API key not set. Please set it in Settings."
+            return
+        }
+        
+        isProcessingSearch = true
+        searchError = nil
+        
+        do {
+            // Use analyzeCommand to find relevant files
+            let relevantFiles = try await openAIClient.analyzeCommand(
+                command: query,
+                availableFiles: graphData.names
+            )
+            
+            searchResults = relevantFiles
+            
+        } catch {
+            print("Search processing error:", error)
+            searchError = "Error: \(error.localizedDescription)"
+        }
+        
+        isProcessingSearch = false
     }
 }
