@@ -1,0 +1,6 @@
+---
+description: when making a model or popup or sheet view on swiftui
+globs: 
+alwaysApply: false
+---
+you are on visionOS so .sheet doesn't work. instead, prefer popovers for transient text notifications, and alerts for interactive or important modals.
