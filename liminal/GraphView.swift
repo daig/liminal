@@ -26,6 +26,7 @@ struct GraphView: View {
     @State private var commandError: String? = nil
     @State private var commandResponse: String? = nil
     @State private var showSettings = false
+    @State private var viewKey = UUID()
     @AppStorage("openAIKey") private var apiKey = ""
     
     // Define collision groups
@@ -237,8 +238,17 @@ struct GraphView: View {
                     Image(systemName: "gear")
                 }
                 .buttonStyle(.borderless)
+
+                Button {
+                    // Force recreation of the RealityView
+                    viewKey = UUID()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
             }
         }
+        .id(viewKey)
         .ornament(attachmentAnchor: .scene(.leading)) {
             if showFilters {
                 FiltersView()
