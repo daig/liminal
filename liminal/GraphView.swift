@@ -173,8 +173,7 @@ struct GraphView: View {
         .installGestures(graphData: graphData, openWindow: openWindow)
         .toolbar {
             ToolbarItemGroup() {
-                Button("Filter") { showFilters.toggle() }
-                Button("Search") {
+                Button {
                     if apiKey.isEmpty {
                         openWindow(id: "settings")
                     } else {
@@ -183,9 +182,18 @@ struct GraphView: View {
                         searchError = nil
                         searchResults = nil
                     }
+                } label: {
+                    Image(systemName: "magnifyingglass")
                 }
-                Button("Upload") { }
-                Button("Command") { 
+                .buttonStyle(.borderless)
+
+                Button {
+                } label: {
+                    Image(systemName: "arrow.up.doc")
+                }
+                .buttonStyle(.borderless)
+
+                Button { 
                     if apiKey.isEmpty {
                         openWindow(id: "settings")
                     } else {
@@ -194,8 +202,12 @@ struct GraphView: View {
                         commandError = nil
                         commandResponse = nil
                     }
+                } label: {
+                    Image(systemName: "terminal")
                 }
-                Button("Compose") {
+                .buttonStyle(.borderless)
+
+                Button {
                     // Create a new note with a unique name based on timestamp
                     let timestamp = Int(Date().timeIntervalSince1970)
                     let newNoteName = "Note-\(timestamp)"
@@ -214,10 +226,17 @@ struct GraphView: View {
                             print("Error creating new note: \(error)")
                         }
                     }
+                } label: {
+                    Image(systemName: "square.and.pencil")
                 }
-                Button("Settings") {
+                .buttonStyle(.borderless)
+
+                Button {
                     openWindow(id: "settings")
+                } label: {
+                    Image(systemName: "gear")
                 }
+                .buttonStyle(.borderless)
             }
         }
         .ornament(attachmentAnchor: .scene(.leading)) {
