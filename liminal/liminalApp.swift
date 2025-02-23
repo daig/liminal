@@ -58,8 +58,8 @@ struct liminalApp: App {
         
         // Existing WindowGroup for editor windows
         WindowGroup(id: "editor", for: EditorContext.self) { $context in
-            if let context = context {
-                ContentView(noteData: context.noteData, onSave: { savedNote in
+            if let context = context, let data = graphData {
+                ContentView(noteData: context.noteData, graphData: data, onSave: { savedNote in
                     // When a note is saved, reload the graph data
                     Task {
                         do {

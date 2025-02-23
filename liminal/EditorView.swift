@@ -12,11 +12,15 @@ struct ContentView: View {
     @State private var isGeneratingSummary = false
     @State private var showingSettings = false
     @State private var isExtractingTerms = false
+    @State private var showingTermMatches = false
+    @State private var termMatches: [(term: String, match: String?, reason: String?)] = []
     @AppStorage("openAIKey") private var apiKey = ""
+    let graphData: GraphData
     var onSave: ((NoteData) -> Void)?
     
-    init(noteData: NoteData, onSave: ((NoteData) -> Void)? = nil, isEditing: Bool = false) {
+    init(noteData: NoteData, graphData: GraphData, onSave: ((NoteData) -> Void)? = nil, isEditing: Bool = false) {
         _noteData = State(initialValue: noteData)
+        self.graphData = graphData
         self.onSave = onSave
         _isEditing = State(initialValue: isEditing)
     }
@@ -126,6 +130,48 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingTermMatches) {
+            NavigationView {
+                List {
+                    ForEach(termMatches, id: \.term) { item in
+                        VStack(alignment: .leading) {
+                            Text(item.term)
+                                .font(.headline)
+                            if let match = item.match {
+                                Text("→ \(match)")
+                                    .foregroundColor(.secondary)
+                                if let reason = item.reason {
+                                    Text(reason)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                }
+                            } else {
+                                if let reason = item.reason {
+                                    Text(reason)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                } else {
+                                    Text("No definitional match found")
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .navigationTitle("Extracted Terms")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showingTermMatches = false
+                        }
+                    }
+                }
+            }
+        }
         .onOpenURL { url in
             if url.scheme == "liminal" {
                 let fileName = url.host ?? url.path
@@ -150,10 +196,54 @@ struct ContentView: View {
     
     private func extractSignificantTerms() async {
         isExtractingTerms = true
+        termMatches = []
         do {
             let client = OpenAIClient(apiKey: apiKey)
+            
+            // First, extract the significant terms
+            print("\n=== Extracting Significant Terms ===")
             let terms = try await client.extractSignificantTerms(text: noteData.content)
-            print("Extracted significant terms:", terms)
+            print("Extracted terms:", terms)
+            print("===========================\n")
+            
+            // Debug information about GraphData
+            print("=== Debug GraphData ===")
+            print("Total nodes in graph:", graphData.nodeCount)
+            print("Names array count:", graphData.names.count)
+            print("Contents array count:", graphData.contents.count)
+            print("First few names in graph:")
+            for (index, name) in graphData.names.prefix(5).enumerated() {
+                print("[\(index)]: '\(name)'")
+            }
+            if graphData.names.count > 5 {
+                print("... and \(graphData.names.count - 5) more")
+            }
+            print("===========================\n")
+            
+            // Wait a moment to prevent rate limits
+            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            
+            // Then, find matches for all terms at once
+            print("\n=== Finding Definitional Matches ===")
+            termMatches = try await client.matchTermsToFiles(terms: terms, filenames: graphData.names)
+            
+            // Print matches
+            for match in termMatches {
+                print("Term: \(match.term)")
+                if let filename = match.match {
+                    print("  → Match: \(filename)")
+                    if let reason = match.reason {
+                        print("  → Reason: \(reason)")
+                    }
+                } else if let reason = match.reason {
+                    print("  → No match: \(reason)")
+                } else {
+                    print("  → No match found")
+                }
+            }
+            print("===========================\n")
+            
+            showingTermMatches = true
         } catch {
             errorMessage = error.localizedDescription
             showError = true
