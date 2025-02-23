@@ -35,6 +35,10 @@ class OpenAIClient {
         let total_tokens: Int
     }
     
+    struct FileResponse: Codable {
+        let relevantFiles: [String]
+    }
+    
     struct APIError: Codable {
         struct ErrorDetail: Codable {
             let message: String
@@ -65,11 +69,54 @@ class OpenAIClient {
         Available files:
         \(availableFiles.joined(separator: "\n"))
         
-        Return only the list of relevant filenames, one per line.
+        Return the relevant filenames as a JSON object with a 'relevantFiles' array.
         """
         
-        let response = try await sendChatCompletion(prompt: prompt)
-        return response.split(separator: "\n").map(String.init)
+        var request = URLRequest(url: URL(string: endpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "model": "gpt-4o",
+            "messages": [
+                ["role": "system", "content": "You are a helpful assistant that provides structured output. Return only the list of relevant filenames."],
+                ["role": "user", "content": prompt]
+            ],
+            "temperature": 0.7,
+            "max_tokens": maxCompletionTokens,
+            "response_format": ["type": "json_object"]
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Debug: Print the raw response
+        if let httpResponse = response as? HTTPURLResponse {
+            print("API Response Status:", httpResponse.statusCode)
+        }
+        if let jsonString = String(data: data, encoding: .utf8) {
+            print("API Response:", jsonString)
+        }
+        
+        // Check for API error response
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let apiError = try JSONDecoder().decode(APIError.self, from: data)
+            throw NSError(domain: "OpenAIError", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: apiError.error.message
+            ])
+        }
+        
+        let completion = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+        
+        guard let content = completion.choices.first?.message.content,
+              let jsonData = content.data(using: .utf8) else {
+            throw NSError(domain: "OpenAIError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No content generated"])
+        }
+        
+        let fileResponse = try JSONDecoder().decode(FileResponse.self, from: jsonData)
+        return fileResponse.relevantFiles
     }
     
     func executeCommand(command: String, fileContexts: [String: String]) async throws -> String {
@@ -125,7 +172,7 @@ class OpenAIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let body: [String: Any] = [
-            "model": "gpt-4o",
+            "model": "gpt-4o-mini",
             "messages": [
                 ["role": "system", "content": "You are a helpful assistant that provides concise responses."],
                 ["role": "user", "content": prompt]
