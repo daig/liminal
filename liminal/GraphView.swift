@@ -19,6 +19,8 @@ struct GraphView: View {
     @State private var isProcessingSearch = false
     @State private var searchError: String? = nil
     @State private var searchResults: [String]? = nil
+    @State private var highlightedNodes: [Entity] = []
+    @State private var previouslyHighlightedIndices: Set<Int> = []
     @State private var commandText = ""
     @State private var isProcessingCommand = false
     @State private var commandError: String? = nil
@@ -81,6 +83,11 @@ struct GraphView: View {
                     attachment.position = [0, 0.05, 0]
                     node.addChild(attachment)
                 }
+            }
+            
+            // Store the node entities for highlighting
+            Task { @MainActor in
+                highlightedNodes = nodeEntities
             }
             
             // Create edges (rendering as undirected lines)
@@ -306,11 +313,13 @@ struct GraphView: View {
                                 searchText = ""
                                 searchError = nil
                                 searchResults = nil
+                                resetNodeHighlighting()
                             }
                             .buttonStyle(.bordered)
                             
                             Button("Close") {
                                 showSearch = false
+                                resetNodeHighlighting()
                             }
                             .buttonStyle(.bordered)
                         }
@@ -332,6 +341,7 @@ struct GraphView: View {
                                 searchText = ""
                                 searchError = nil
                                 showSearch = false
+                                resetNodeHighlighting()
                             }
                             .buttonStyle(.bordered)
                             
@@ -430,11 +440,84 @@ struct GraphView: View {
             
             searchResults = relevantFiles
             
+            // Update node highlighting
+            await MainActor.run {
+                // First reset previously highlighted nodes
+                resetNodeHighlighting()
+                
+                // Track which nodes we're highlighting
+                var newHighlightedIndices = Set<Int>()
+                
+                // Highlight matching nodes with the bright highlight color
+                for node in highlightedNodes {
+                    if let nodeComponent = node.components[NodeComponent.self],
+                       nodeComponent.index.id < graphData.names.count,
+                       relevantFiles.contains(graphData.names[nodeComponent.index.id]) {
+                        if var modelComponent = node.components[ModelComponent.self] {
+                            let highlightMaterial = SimpleMaterial(
+                                color: .init(red: 1.0, green: 0.85, blue: 0.4, alpha: 1.0),
+                                roughness: 0.4,
+                                isMetallic: false
+                            )
+                            modelComponent.materials = [highlightMaterial]
+                            node.components.set(modelComponent)
+                            newHighlightedIndices.insert(nodeComponent.index.id)
+                        }
+                    }
+                }
+                
+                // Update our tracking of highlighted indices
+                previouslyHighlightedIndices = newHighlightedIndices
+            }
+            
         } catch {
             print("Search processing error:", error)
             searchError = "Error: \(error.localizedDescription)"
         }
         
         isProcessingSearch = false
+    }
+    
+    private func resetNodeHighlighting() {
+        // Only reset nodes that were previously highlighted
+        for node in highlightedNodes {
+            if let nodeComponent = node.components[NodeComponent.self],
+               previouslyHighlightedIndices.contains(nodeComponent.index.id) {
+                if var modelComponent = node.components[ModelComponent.self] {
+                    let nodeIndex = nodeComponent.index.id
+                    let defaultColor: UIColor = {
+                        if nodeIndex < graphData.contents.count {
+                            switch graphData.contents[nodeIndex] {
+                            case .pdf:
+                                return .systemBlue
+                            case .markdown:
+                                return .white
+                            }
+                        }
+                        return .white
+                    }()
+                    
+                    // Only modify the material, preserving all other components
+                    let defaultMaterial = SimpleMaterial(
+                        color: defaultColor,
+                        roughness: 0.8,
+                        isMetallic: false
+                    )
+                    modelComponent.materials = [defaultMaterial]
+                    node.components.set(modelComponent)
+                    
+                    // Ensure physics properties are maintained
+                    if var physicsBody = node.components[PhysicsBodyComponent.self] {
+                        physicsBody.mode = .dynamic
+                        physicsBody.isAffectedByGravity = false
+                        physicsBody.linearDamping = 3
+                        physicsBody.angularDamping = Float.infinity
+                        node.components.set(physicsBody)
+                    }
+                }
+            }
+        }
+        // Clear the set of highlighted indices
+        previouslyHighlightedIndices.removeAll()
     }
 }
