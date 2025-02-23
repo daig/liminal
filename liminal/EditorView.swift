@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var summary = ""
     @State private var isGeneratingSummary = false
     @State private var showingSettings = false
+    @State private var isExtractingTerms = false
     @AppStorage("openAIKey") private var apiKey = ""
     var onSave: ((NoteData) -> Void)?
     
@@ -50,6 +51,21 @@ struct ContentView: View {
                 }) {
                     Label("Settings", systemImage: "gear")
                 }
+                
+                // Extract Terms button
+                Button(action: {
+                    if apiKey.isEmpty {
+                        errorMessage = "Please set your OpenAI API key in settings"
+                        showError = true
+                    } else {
+                        Task {
+                            await extractSignificantTerms()
+                        }
+                    }
+                }) {
+                    Label("Extract Terms", systemImage: "text.magnifyingglass")
+                }
+                .disabled(isExtractingTerms)
                 
                 // AI Summary button
                 Button(action: {
@@ -130,6 +146,19 @@ struct ContentView: View {
             showError = true
         }
         isGeneratingSummary = false
+    }
+    
+    private func extractSignificantTerms() async {
+        isExtractingTerms = true
+        do {
+            let client = OpenAIClient(apiKey: apiKey)
+            let terms = try await client.extractSignificantTerms(text: noteData.content)
+            print("Extracted significant terms:", terms)
+        } catch {
+            errorMessage = error.localizedDescription
+            showError = true
+        }
+        isExtractingTerms = false
     }
 }
 

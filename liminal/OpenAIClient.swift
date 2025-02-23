@@ -39,6 +39,10 @@ class OpenAIClient {
         let relevantFiles: [String]
     }
     
+    struct SignificantTermsResponse: Codable {
+        let terms: [String]
+    }
+    
     struct APIError: Codable {
         struct ErrorDetail: Codable {
             let message: String
@@ -123,7 +127,7 @@ class OpenAIClient {
         // Calculate available tokens for content
         let systemPrompt = "You are a helpful assistant that provides concise responses."
         let basePrompt = """
-        Given the following query knowledgebase context, ans
+        Given the following query knowledgebase context, answer the query helpfully and concisely.
         
         <Query>
         \(command)
@@ -163,6 +167,60 @@ class OpenAIClient {
         let prompt = basePrompt + "\n" + contextString + "\n\nProvide a clear explanation of what should be implemented and any specific code changes needed."
         
         return try await sendChatCompletion(prompt: prompt)
+    }
+    
+    func extractSignificantTerms(text: String) async throws -> [String] {
+        let prompt = """
+        Analyze the following text and extract a list of significant terms, including:
+        - Technical terms and concepts
+        - Place names
+        - People names
+        - Important phrases or keywords
+        - Domain-specific terminology
+        
+        Return ONLY a JSON object with a 'terms' array containing these terms.
+        
+        Text to analyze:
+        \(text)
+        """
+        
+        var request = URLRequest(url: URL(string: endpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "model": "gpt-4o-mini",
+            "messages": [
+                ["role": "system", "content": "You are a helpful assistant that extracts significant terms from text. Return only a JSON object with a 'terms' array."],
+                ["role": "user", "content": prompt]
+            ],
+            "temperature": 0.7,
+            "max_tokens": maxCompletionTokens,
+            "response_format": ["type": "json_object"]
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check for API error response
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            let apiError = try JSONDecoder().decode(APIError.self, from: data)
+            throw NSError(domain: "OpenAIError", code: httpResponse.statusCode, userInfo: [
+                NSLocalizedDescriptionKey: apiError.error.message
+            ])
+        }
+        
+        let completion = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+        
+        guard let content = completion.choices.first?.message.content,
+              let jsonData = content.data(using: .utf8) else {
+            throw NSError(domain: "OpenAIError", code: -1, userInfo: [NSLocalizedDescriptionKey: "No content generated"])
+        }
+        
+        let termsResponse = try JSONDecoder().decode(SignificantTermsResponse.self, from: jsonData)
+        return termsResponse.terms
     }
     
     private func sendChatCompletion(prompt: String) async throws -> String {
