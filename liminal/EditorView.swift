@@ -243,6 +243,45 @@ struct ContentView: View {
             }
             print("===========================\n")
             
+            // Update the note content with wiki-style links
+            var updatedContent = noteData.content
+            for match in termMatches {
+                guard let filename = match.match else { continue }
+                
+                // Create a regex pattern that matches the term with word boundaries
+                // and is case-insensitive
+                let pattern = "\\b\(NSRegularExpression.escapedPattern(for: match.term))\\b"
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+                    continue
+                }
+                
+                // Get all matches in the content
+                let range = NSRange(updatedContent.startIndex..<updatedContent.endIndex, in: updatedContent)
+                let matches = regex.matches(in: updatedContent, range: range)
+                
+                // Process matches from last to first to avoid invalidating ranges
+                for match in matches.reversed() {
+                    let matchRange = match.range
+                    guard let textRange = Range(matchRange, in: updatedContent) else { continue }
+                    let originalText = String(updatedContent[textRange])
+                    
+                    // If the filename is identical (ignoring case) to the matched text,
+                    // use simple [[Term]] format, otherwise use [[Term|display text]]
+                    let replacement: String
+                    if filename.lowercased() == originalText.lowercased() {
+                        replacement = "[[\(filename)]]"
+                    } else {
+                        replacement = "[[\(filename)|\(originalText)]]"
+                    }
+                    
+                    updatedContent.replaceSubrange(textRange, with: replacement)
+                }
+            }
+            
+            // Update the note content
+            noteData.content = updatedContent
+            
+            // Show the term matches sheet
             showingTermMatches = true
         } catch {
             errorMessage = error.localizedDescription
