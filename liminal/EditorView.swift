@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var showingTermMatches = false
     @State private var termMatches: [(term: String, match: String?, reason: String?)] = []
     @AppStorage("openAIKey") private var apiKey = ""
+    @Environment(\.openWindow) private var openWindow
     let graphData: GraphData
     var onSave: ((NoteData) -> Void)?
     
@@ -150,14 +151,71 @@ struct ContentView: View {
                                         .italic()
                                 }
                             } else {
-                                if let reason = item.reason {
-                                    Text(reason)
-                                        .foregroundColor(.secondary)
-                                        .italic()
-                                } else {
-                                    Text("No definitional match found")
-                                        .foregroundColor(.secondary)
-                                        .italic()
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        if let reason = item.reason {
+                                            Text(reason)
+                                                .foregroundColor(.secondary)
+                                                .italic()
+                                        } else {
+                                            Text("No definitional match found")
+                                                .foregroundColor(.secondary)
+                                                .italic()
+                                        }
+                                    }
+                                    Spacer()
+                                    Button(action: {
+                                        // Create a new note with the term as the title
+                                        var newNote = NoteData(title: item.term, content: "")
+                                        
+                                        // First save the note to create the file
+                                        Task {
+                                            do {
+                                                try newNote.save()
+                                                // Wait a brief moment to ensure file is written
+                                                try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                                                
+                                                // Update the current note's content with the link
+                                                var updatedContent = noteData.content
+                                                let pattern = "\\b\(NSRegularExpression.escapedPattern(for: item.term))\\b"
+                                                guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+                                                    throw NSError(domain: "RegexError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to create regex pattern"])
+                                                }
+                                                
+                                                // Get all matches in the content
+                                                let range = NSRange(updatedContent.startIndex..<updatedContent.endIndex, in: updatedContent)
+                                                let matches = regex.matches(in: updatedContent, range: range)
+                                                
+                                                // Process matches from last to first to avoid invalidating ranges
+                                                for match in matches.reversed() {
+                                                    let matchRange = match.range
+                                                    guard let textRange = Range(matchRange, in: updatedContent) else { continue }
+                                                    let originalText = String(updatedContent[textRange])
+                                                    
+                                                    // If the term is identical (ignoring case) to the matched text,
+                                                    // use simple [[Term]] format
+                                                    let replacement = "[[\(item.term)]]"
+                                                    updatedContent.replaceSubrange(textRange, with: replacement)
+                                                }
+                                                
+                                                // Update the note content
+                                                noteData.content = updatedContent
+                                                try noteData.save()
+                                                
+                                                // Then open the editor window in edit mode
+                                                let context = EditorContext(noteData: newNote, isEditing: true)
+                                                openWindow(id: "editor", value: context)
+                                                showingTermMatches = false
+                                            } catch {
+                                                print("Error creating new note: \(error)")
+                                                errorMessage = "Failed to create new note: \(error.localizedDescription)"
+                                                showError = true
+                                            }
+                                        }
+                                    }) {
+                                        Label("Create Link", systemImage: "link.badge.plus")
+                                    }
+                                    .buttonStyle(.bordered)
                                 }
                             }
                         }
