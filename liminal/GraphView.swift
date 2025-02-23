@@ -27,6 +27,11 @@ struct GraphView: View {
     @State private var commandResponse: String? = nil
     @State private var showSettings = false
     @AppStorage("openAIKey") private var apiKey = ""
+    
+    // Define collision groups
+    private static let defaultGroup: CollisionGroup = .default
+    private static let selectedGroup: CollisionGroup = CollisionGroup(rawValue: 1 << 1)
+    
     let radius: Float
     let graphData: GraphData
     let openAIClient: OpenAIClient
@@ -448,12 +453,13 @@ struct GraphView: View {
                 // Track which nodes we're highlighting
                 var newHighlightedIndices = Set<Int>()
                 
-                // Highlight matching nodes with the bright highlight color
+                // Highlight matching nodes and apply radial force
                 for node in highlightedNodes {
                     if let nodeComponent = node.components[NodeComponent.self],
                        nodeComponent.index.id < graphData.names.count,
                        relevantFiles.contains(graphData.names[nodeComponent.index.id]) {
                         if var modelComponent = node.components[ModelComponent.self] {
+                            // Update material
                             let highlightMaterial = SimpleMaterial(
                                 color: .init(red: 1.0, green: 0.85, blue: 0.4, alpha: 1.0),
                                 roughness: 0.4,
@@ -461,6 +467,24 @@ struct GraphView: View {
                             )
                             modelComponent.materials = [highlightMaterial]
                             node.components.set(modelComponent)
+                            
+                            // Update collision component for selected nodes
+                            if var collision = node.components[CollisionComponent.self] {
+                                collision.filter = CollisionFilter(group: GraphView.selectedGroup, mask: [GraphView.selectedGroup])
+                                node.components.set(collision)
+                            }
+                            
+                            // Add radial force effect
+                            let radialForce = RadialForceEffect(
+                                strength: 5.0,
+                                restDistance: 0.1
+                            )
+                            let forceEffect = ForceEffect(
+                                effect: radialForce,
+                                mask: [GraphView.selectedGroup]
+                            )
+                            node.components.set(ForceEffectComponent(effect: forceEffect))
+                            
                             newHighlightedIndices.insert(nodeComponent.index.id)
                         }
                     }
@@ -497,7 +521,7 @@ struct GraphView: View {
                         return .white
                     }()
                     
-                    // Only modify the material, preserving all other components
+                    // Only modify the material, preserving other components
                     let defaultMaterial = SimpleMaterial(
                         color: defaultColor,
                         roughness: 0.8,
@@ -506,14 +530,14 @@ struct GraphView: View {
                     modelComponent.materials = [defaultMaterial]
                     node.components.set(modelComponent)
                     
-                    // Ensure physics properties are maintained
-                    if var physicsBody = node.components[PhysicsBodyComponent.self] {
-                        physicsBody.mode = .dynamic
-                        physicsBody.isAffectedByGravity = false
-                        physicsBody.linearDamping = 3
-                        physicsBody.angularDamping = Float.infinity
-                        node.components.set(physicsBody)
+                    // Reset collision filter
+                    if var collision = node.components[CollisionComponent.self] {
+                        collision.filter = CollisionFilter(group: GraphView.defaultGroup, mask: [GraphView.defaultGroup])
+                        node.components.set(collision)
                     }
+                    
+                    // Remove the radial force effect
+                    node.components.remove(ForceEffectComponent.self)
                 }
             }
         }
