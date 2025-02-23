@@ -1,7 +1,5 @@
 import RealityKit
 import SwiftUI
-import Speech
-import AVFoundation
 
 struct EdgeConnection {
     let entity: Entity
@@ -15,18 +13,23 @@ struct EditorContext: Hashable, Codable {
 
 struct GraphView: View {
     @State private var showFilters = false
-    @State private var voiceCommandHandler: VoiceCommandHandler
-    
+    @State private var showCommandInput = false
+    @State private var commandText = ""
+    @State private var isProcessingCommand = false
+    @State private var commandError: String? = nil
+    @State private var commandResponse: String? = nil
+    @State private var showSettings = false
+    @AppStorage("openAIKey") private var apiKey = ""
     let radius: Float
     let graphData: GraphData
+    let openAIClient: OpenAIClient
+    @Environment(\.openWindow) private var openWindow
     
-    init(radius: Float = 0.5, graphData: GraphData) {
+    init(radius: Float = 0.5, graphData: GraphData, openAIClient: OpenAIClient) {
         self.radius = radius
         self.graphData = graphData
-        let openAIClient = OpenAIClient(apiKey: ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "")
-        _voiceCommandHandler = State(wrappedValue: VoiceCommandHandler(openAIClient: openAIClient))
+        self.openAIClient = openAIClient
     }
-    @Environment(\.openWindow) private var openWindow
     
     var body : some View {
         RealityView { content, attachments in
@@ -153,32 +156,18 @@ struct GraphView: View {
         .installGestures(graphData: graphData, openWindow: openWindow)
         .toolbar {
             ToolbarItemGroup() {
-                Button(action: {
-                    Task {
-                        do {
-                            if voiceCommandHandler.isRecording {
-                                print("Stopping recording via button")
-                                voiceCommandHandler.stopRecording()
-                            } else {
-                                print("Starting recording via button")
-                                try await voiceCommandHandler.startRecording()
-                            }
-                        } catch {
-                            print("Error in voice command: \(error.localizedDescription)")
-                        }
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: voiceCommandHandler.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                            .foregroundColor(voiceCommandHandler.isRecording ? .red : .blue)
-                        if voiceCommandHandler.isProcessing {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-                    }
-                }
                 Button("Filter") { showFilters.toggle() }
                 Button("Upload") { }
+                Button("Command") { 
+                    if apiKey.isEmpty {
+                        openWindow(id: "settings")
+                    } else {
+                        showCommandInput.toggle()
+                        commandText = ""
+                        commandError = nil
+                        commandResponse = nil
+                    }
+                }
                 Button("Compose") {
                     // Create a new note with a unique name based on timestamp
                     let timestamp = Int(Date().timeIntervalSince1970)
@@ -199,6 +188,9 @@ struct GraphView: View {
                         }
                     }
                 }
+                Button("Settings") {
+                    openWindow(id: "settings")
+                }
             }
         }
         .ornament(attachmentAnchor: .scene(.leading)) {
@@ -206,5 +198,129 @@ struct GraphView: View {
                 FiltersView()
             }
         }
+        .ornament(attachmentAnchor: .scene(.trailing)) {
+            if showCommandInput {
+                VStack(spacing: 16) {
+                    Text("Enter Command")
+                        .font(.title2)
+                        .padding(.top)
+                    
+                    if let response = commandResponse {
+                        ScrollView {
+                            Text(response)
+                                .font(.body)
+                                .padding()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 300)
+                        
+                        HStack {
+                            Button("New Command") {
+                                commandText = ""
+                                commandError = nil
+                                commandResponse = nil
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Close") {
+                                showCommandInput = false
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.bottom)
+                    } else {
+                        TextField("Type your command here...", text: $commandText)
+                            .textFieldStyle(.roundedBorder)
+                            .padding(.horizontal)
+                        
+                        if let error = commandError {
+                            Text(error)
+                                .foregroundColor(.red)
+                                .font(.caption)
+                                .padding(.horizontal)
+                        }
+                        
+                        HStack {
+                            Button("Cancel") {
+                                commandText = ""
+                                commandError = nil
+                                showCommandInput = false
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Execute") {
+                                Task {
+                                    await processCommand(commandText)
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(commandText.isEmpty || isProcessingCommand)
+                        }
+                        .padding(.bottom)
+                    }
+                }
+                .frame(width: 400)
+                .padding()
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+    
+    private func processCommand(_ command: String) async {
+        guard !command.isEmpty else { return }
+        guard !apiKey.isEmpty else {
+            commandError = "Error: OpenAI API key not set. Please set it in Settings."
+            return
+        }
+        
+        isProcessingCommand = true
+        commandError = nil
+        
+        do {
+            print("Available files:", graphData.names)
+            
+            // First, analyze which files are relevant to the command
+            let relevantFiles = try await openAIClient.analyzeCommand(
+                command: command,
+                availableFiles: graphData.names
+            )
+            
+            print("LLM requested files:", relevantFiles)
+            
+            // Create a context map of file contents
+            var fileContexts: [String: String] = [:]
+            for filename in relevantFiles {
+                print("Looking for file:", filename)
+                if let index = graphData.names.firstIndex(of: filename) {
+                    print("Found file at index:", index)
+                    if case .markdown(let content) = graphData.contents[index] {
+                        print("Successfully extracted markdown content for:", filename)
+                        fileContexts[filename] = content
+                    } else {
+                        print("File is not markdown:", filename)
+                    }
+                } else {
+                    print("File not found in graph data:", filename)
+                }
+            }
+            
+            print("Final file contexts:", fileContexts.keys)
+            
+            // Execute the command with the file contexts
+            let result = try await openAIClient.executeCommand(
+                command: command,
+                fileContexts: fileContexts
+            )
+            
+            // Display the result
+            commandResponse = result
+            
+        } catch {
+            print("Command processing error:", error)
+            commandError = "Error: \(error.localizedDescription)"
+        }
+        
+        isProcessingCommand = false
     }
 }

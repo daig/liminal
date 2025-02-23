@@ -1,8 +1,9 @@
 import Foundation
 import Speech
+import Observation
 
 @Observable
-class VoiceCommandHandler: NSObject, SFSpeechRecognizerDelegate {
+final class VoiceCommandHandler: NSObject, SFSpeechRecognizerDelegate, Codable {
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -15,6 +16,26 @@ class VoiceCommandHandler: NSObject, SFSpeechRecognizerDelegate {
     var isProcessing = false
     var relevantFiles: [String] = []
     var recognizedText: String?
+    var partialResult: String = ""
+    
+    enum CodingKeys: String, CodingKey {
+        case isRecording, errorMessage, commandResponse, isProcessing, relevantFiles, recognizedText, partialResult
+    }
+    
+    required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isRecording = try container.decode(Bool.self, forKey: .isRecording)
+        errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        commandResponse = try container.decodeIfPresent(String.self, forKey: .commandResponse)
+        isProcessing = try container.decode(Bool.self, forKey: .isProcessing)
+        relevantFiles = try container.decode([String].self, forKey: .relevantFiles)
+        recognizedText = try container.decodeIfPresent(String.self, forKey: .recognizedText)
+        partialResult = try container.decode(String.self, forKey: .partialResult)
+        
+        openAIClient = OpenAIClient(apiKey: ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "")
+        super.init()
+        speechRecognizer.delegate = self
+    }
     
     init(openAIClient: OpenAIClient) {
         self.openAIClient = openAIClient
@@ -22,8 +43,21 @@ class VoiceCommandHandler: NSObject, SFSpeechRecognizerDelegate {
         speechRecognizer.delegate = self
     }
     
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(isRecording, forKey: .isRecording)
+        try container.encode(errorMessage, forKey: .errorMessage)
+        try container.encode(commandResponse, forKey: .commandResponse)
+        try container.encode(isProcessing, forKey: .isProcessing)
+        try container.encode(relevantFiles, forKey: .relevantFiles)
+        try container.encode(recognizedText, forKey: .recognizedText)
+        try container.encode(partialResult, forKey: .partialResult)
+    }
+    
     func startRecording() async throws {
         print("Starting recording...")
+        partialResult = ""
+        
         // Request authorization
         guard await requestAuthorization() else {
             print("Speech recognition not authorized")
@@ -78,12 +112,12 @@ class VoiceCommandHandler: NSObject, SFSpeechRecognizerDelegate {
             
             if let result {
                 let text = result.bestTranscription.formattedString
+                self.partialResult = text
                 print("Speech recognized: \(text)")
                 
                 if result.isFinal {
                     print("Final result received")
                     self.recognizedText = text
-                    // Only process and stop if we haven't already stopped recording
                     if self.isRecording {
                         self.processCommand(text)
                         self.stopRecording()
@@ -94,7 +128,7 @@ class VoiceCommandHandler: NSObject, SFSpeechRecognizerDelegate {
     }
     
     func stopRecording() {
-        guard isRecording else { return }  // Only stop if actually recording
+        guard isRecording else { return }
         
         print("Stopping recording...")
         audioEngine.stop()

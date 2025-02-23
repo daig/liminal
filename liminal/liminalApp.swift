@@ -12,6 +12,10 @@ struct liminalApp: App {
     static let volumeLength = 3000.0
     let volumeSize = Size3D(width: volumeLength, height: volumeLength, depth: volumeLength)
     @State private var graphData: GraphData?
+    @AppStorage("openAIKey") private var apiKey = ""
+    private var openAIClient: OpenAIClient {
+        OpenAIClient(apiKey: apiKey)
+    }
 
     init() {
         GestureComponent.registerComponent()
@@ -21,7 +25,7 @@ struct liminalApp: App {
     var body: some Scene {
         WindowGroup {
             if let data = graphData {
-                GraphView(graphData: data)
+                GraphView(graphData: data, openAIClient: openAIClient)
                     .frame(minWidth: volumeSize.width, minHeight: volumeSize.height)
                     .frame(minDepth: volumeSize.depth)
             } else {
@@ -42,6 +46,15 @@ struct liminalApp: App {
         }
         .windowStyle(.volumetric)
         .windowResizability(.contentSize)
+        
+        // Settings window
+        WindowGroup(id: "settings") {
+            SettingsView()
+                .frame(minWidth: 400, minHeight: 300)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.all, 16)
+        }
         
         // Existing WindowGroup for editor windows
         WindowGroup(id: "editor", for: EditorContext.self) { $context in
