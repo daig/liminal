@@ -192,6 +192,11 @@ struct ContentView: View {
                                                     guard let textRange = Range(matchRange, in: updatedContent) else { continue }
                                                     let originalText = String(updatedContent[textRange])
                                                     
+                                                    // Skip if this term is already part of a wiki link
+                                                    if isTermAlreadyLinked(term: originalText, in: updatedContent, at: textRange) {
+                                                        continue
+                                                    }
+                                                    
                                                     // If the term is identical (ignoring case) to the matched text,
                                                     // use simple [[Term]] format
                                                     let replacement = "[[\(item.term)]]"
@@ -326,6 +331,11 @@ struct ContentView: View {
                     guard let textRange = Range(matchRange, in: updatedContent) else { continue }
                     let originalText = String(updatedContent[textRange])
                     
+                    // Skip if this term is already part of a wiki link
+                    if isTermAlreadyLinked(term: originalText, in: updatedContent, at: textRange) {
+                        continue
+                    }
+                    
                     // If the filename is identical (ignoring case) to the matched text,
                     // use simple [[Term]] format, otherwise use [[Term|display text]]
                     let replacement: String
@@ -349,6 +359,30 @@ struct ContentView: View {
             showError = true
         }
         isExtractingTerms = false
+    }
+    
+    // Helper function to check if a term is already part of a wiki link
+    private func isTermAlreadyLinked(term: String, in content: String, at range: Range<String.Index>) -> Bool {
+        // Find all wiki links in the content using regex
+        let wikiLinkPattern = "\\[\\[([^\\]]+)\\]\\]"
+        guard let regex = try? NSRegularExpression(pattern: wikiLinkPattern, options: []) else {
+            return false
+        }
+        
+        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
+        let matches = regex.matches(in: content, range: nsRange)
+        
+        // Convert the term's range to NSRange for comparison
+        let termNSRange = NSRange(range, in: content)
+        
+        // Check if the term's range overlaps with any wiki link
+        for match in matches {
+            if NSIntersectionRange(match.range, termNSRange).length > 0 {
+                return true
+            }
+        }
+        
+        return false
     }
 }
 
