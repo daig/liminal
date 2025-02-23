@@ -96,10 +96,13 @@ struct ContentView: View {
                 // Existing Save button
                 Button("Save") {
                     do {
+                        print("Attempting to save note: \(noteData.title)")
                         try noteData.save()
+                        print("Note saved successfully, calling onSave callback")
                         onSave?(noteData)
                     } catch {
-                        errorMessage = error.localizedDescription
+                        print("Error saving note: \(error.localizedDescription)")
+                        errorMessage = "Failed to save note: \(error.localizedDescription)"
                         showError = true
                     }
                 }

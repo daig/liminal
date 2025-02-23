@@ -27,12 +27,9 @@ struct PDFData {
         let documentsURL = containerURL.appendingPathComponent("Documents")
         
         // Create safe file names
-        let safeOriginalTitle = originalTitle.replacingOccurrences(of: " ", with: "-")
-            .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-")).inverted)
-            .joined()
-        let safeNewTitle = title.replacingOccurrences(of: " ", with: "-")
-            .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-")).inverted)
-            .joined()
+        let invalidCharacters = CharacterSet(charactersIn: ":/\\?%*|\"<>")
+        let safeOriginalTitle = originalTitle.components(separatedBy: invalidCharacters).joined()
+        let safeNewTitle = title.components(separatedBy: invalidCharacters).joined()
         
         // Check if we're working with a file in the Documents directory
         let oldFileURL: URL
