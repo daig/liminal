@@ -1,0 +1,7 @@
+---
+description: when choosing an openAI gpt model
+globs: 
+alwaysApply: false
+---
+the correct models are gpt-4o and gpt-4o-mini. gpt-4 is now outdated so you should never ever use it.
+never replace existing model choices even if you think they're a typo
