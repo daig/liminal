@@ -225,7 +225,7 @@ struct GraphView: View {
                 FiltersView()
             }
         }
-        .ornament(attachmentAnchor: .scene(.trailing)) {
+        .ornament(attachmentAnchor: .scene(.bottom)) {
             if showCommandInput {
                 VStack(spacing: 16) {
                     Text("Enter Command")
@@ -247,7 +247,7 @@ struct GraphView: View {
                                 commandError = nil
                                 commandResponse = nil
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.borderedProminent)
                             
                             Button("Close") {
                                 showCommandInput = false
@@ -289,7 +289,8 @@ struct GraphView: View {
                 .frame(width: 400)
                 .padding()
                 .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(radius: 10)
             } else if showSearch {
                 VStack(spacing: 16) {
                     Text("Search Files")
@@ -320,7 +321,7 @@ struct GraphView: View {
                                 searchResults = nil
                                 resetNodeHighlighting()
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.borderedProminent)
                             
                             Button("Close") {
                                 showSearch = false
@@ -364,7 +365,8 @@ struct GraphView: View {
                 .frame(width: 400)
                 .padding()
                 .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(radius: 10)
             }
         }
     }
