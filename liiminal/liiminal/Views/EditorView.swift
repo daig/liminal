@@ -79,6 +79,17 @@ struct EditorView: NSViewRepresentable {
             self.editorViewModel = editorViewModel
         }
 
+        // Convert tab key presses to spaces
+        func textView(
+            _ textView: NSTextView, doCommandBy commandSelector: Selector
+        ) -> Bool {
+            if commandSelector == #selector(NSResponder.insertTab(_:)) {
+                textView.insertText("    ", replacementRange: textView.selectedRange())
+                return true
+            }
+            return false
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !isHighlighting else { return }
             guard let textView = notification.object as? NSTextView else { return }
@@ -111,8 +122,48 @@ struct EditorView: NSViewRepresentable {
                 offset += blockLen
             }
 
+            // Flag special whitespace characters
+            highlightSpecialWhitespace(in: textStorage, length: length)
+
             textStorage.endEditing()
             isHighlighting = false
+        }
+
+        private func highlightSpecialWhitespace(
+            in storage: NSTextStorage, length: Int
+        ) {
+            let nsText = storage.string as NSString
+            for i in 0..<nsText.length {
+                let ch = nsText.character(at: i)
+                guard let info = HighlightTheme.specialWhitespace[ch] else { continue }
+                let range = NSRange(location: i, length: 1)
+
+                if info.zeroWidth {
+                    // Zero-width characters: red underline spanning adjacent chars
+                    // so there's a visible marker even though the glyph has no width
+                    let markerStart = max(0, i - 1)
+                    let markerEnd = min(length, i + 2)
+                    let markerRange = NSRange(
+                        location: markerStart, length: markerEnd - markerStart)
+                    storage.addAttribute(
+                        .underlineStyle,
+                        value: NSUnderlineStyle.thick.rawValue,
+                        range: markerRange)
+                    storage.addAttribute(
+                        .underlineColor,
+                        value: NSColor.systemRed.withAlphaComponent(0.6),
+                        range: markerRange)
+                } else {
+                    // Visible-width characters: red background
+                    storage.addAttribute(
+                        .backgroundColor,
+                        value: NSColor.systemRed.withAlphaComponent(0.25),
+                        range: range)
+                }
+
+                // Tooltip for all — shows name + codepoint on hover
+                storage.addAttribute(.toolTip, value: info.name, range: range)
+            }
         }
 
         private func highlightBlock(
@@ -422,6 +473,30 @@ enum HighlightTheme {
     static let blockquoteColor = NSColor.secondaryLabelColor
     static let checkboxColor = NSColor.systemBlue
     static let tableColor = NSColor.systemIndigo
+
+    // MARK: - Special Whitespace
+
+    struct WhitespaceInfo {
+        let name: String
+        let zeroWidth: Bool
+    }
+
+    /// Lookup by UTF-16 code unit for special whitespace characters.
+    static let specialWhitespace: [UInt16: WhitespaceInfo] = [
+        0x0009: WhitespaceInfo(name: "Tab (U+0009)", zeroWidth: false),
+        0x00A0: WhitespaceInfo(name: "No-Break Space (U+00A0)", zeroWidth: false),
+        0x2002: WhitespaceInfo(name: "En Space (U+2002)", zeroWidth: false),
+        0x2003: WhitespaceInfo(name: "Em Space (U+2003)", zeroWidth: false),
+        0x2007: WhitespaceInfo(name: "Figure Space (U+2007)", zeroWidth: false),
+        0x2008: WhitespaceInfo(name: "Punctuation Space (U+2008)", zeroWidth: false),
+        0x2009: WhitespaceInfo(name: "Thin Space (U+2009)", zeroWidth: false),
+        0x200A: WhitespaceInfo(name: "Hair Space (U+200A)", zeroWidth: false),
+        0x200B: WhitespaceInfo(name: "Zero-Width Space (U+200B)", zeroWidth: true),
+        0x202F: WhitespaceInfo(name: "Narrow No-Break Space (U+202F)", zeroWidth: false),
+        0x205F: WhitespaceInfo(name: "Medium Math Space (U+205F)", zeroWidth: false),
+        0x3000: WhitespaceInfo(name: "Ideographic Space (U+3000)", zeroWidth: false),
+        0xFEFF: WhitespaceInfo(name: "BOM / Zero-Width No-Break Space (U+FEFF)", zeroWidth: true),
+    ]
     static let embedColor = NSColor.systemTeal
 
     static let defaultAttributes: [NSAttributedString.Key: Any] = [
