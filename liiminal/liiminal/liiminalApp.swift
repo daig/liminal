@@ -1,0 +1,23 @@
+import SwiftUI
+
+@main
+struct liiminalApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+        .defaultSize(width: 1000, height: 700)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open Vault...") {
+                    NotificationCenter.default.post(name: .openVault, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let openVault = Notification.Name("openVault")
+}

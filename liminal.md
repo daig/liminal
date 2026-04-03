@@ -1,5 +1,9 @@
 Liminal is a modern "personal knowledge base" / note taking system based on obsidian and roam research.
 
+## Known Architecture Decisions
+
+- targeting apple platforms only (initially macOS only, then iOS etc. for v2)
+- built in swift/swiftui/uikit/appkit using modern best practices
 
 ## Features
 
@@ -37,6 +41,8 @@ Liminal is a modern "personal knowledge base" / note taking system based on obsi
 
 - Canvas
 
+- no need for app store compliance. v1 will be built for source code distribution to developers (since i will use it personally mostly)
+
 
 ### Future work
 
@@ -57,3 +63,6 @@ Liminal is a modern "personal knowledge base" / note taking system based on obsi
 
 - sync functionality (probably backed by apple cloud, but need to think about the right format / sync behavior eg in light of collaberative edit)
 - collaberative live editing (google docs style) but structure-aware (need to think about what structure aware means here - depends on the eventual enhanced data model)
+
+- git integration for version control
+    - need to think of good knowledgebase-focused ui for managing git history / trees more simply than full (developer focused) git interface.
