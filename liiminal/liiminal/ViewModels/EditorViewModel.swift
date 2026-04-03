@@ -4,6 +4,7 @@ import Foundation
 final class EditorViewModel {
     var currentNote: Note?
     var isDirty: Bool = false
+    var document: Document = Document(blocks: [])
 
     let fileService: FileSystemService
     private var saveTask: Task<Void, Never>?
@@ -13,21 +14,21 @@ final class EditorViewModel {
     }
 
     func openNote(_ note: Note) {
-        // Save current note before switching
         if isDirty { save() }
 
-        // Load fresh content from disk
         var loaded = note
         if let content = try? fileService.readFile(at: note.id) {
             loaded.content = content
         }
         currentNote = loaded
         isDirty = false
+        document = Document(blocks: BlockParser.parse(loaded.content))
     }
 
     func textDidChange(_ newText: String) {
         currentNote?.content = newText
         isDirty = true
+        document = Document(blocks: BlockParser.parse(newText))
         scheduleSave()
     }
 
