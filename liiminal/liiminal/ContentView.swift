@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var vaultViewModel = VaultViewModel()
     @State private var editorViewModel: EditorViewModel?
+    @State private var showPreview = false
 
     var body: some View {
         Group {
@@ -11,7 +12,27 @@ struct ContentView: View {
                     SidebarView(vaultViewModel: vaultViewModel)
                 } detail: {
                     if let editorVM = editorViewModel, editorVM.currentNote != nil {
-                        EditorView(editorViewModel: editorVM)
+                        Group {
+                            if showPreview {
+                                RenderedDocumentView(document: editorVM.document)
+                            } else {
+                                EditorView(editorViewModel: editorVM)
+                            }
+                        }
+                        .toolbar {
+                            ToolbarItem(placement: .automatic) {
+                                Button {
+                                    showPreview.toggle()
+                                } label: {
+                                    Image(
+                                        systemName: showPreview
+                                            ? "pencil.line" : "eye"
+                                    )
+                                }
+                                .keyboardShortcut("e", modifiers: .command)
+                                .help(showPreview ? "Edit" : "Preview")
+                            }
+                        }
                     } else {
                         Text("Select a note")
                             .foregroundStyle(.secondary)
