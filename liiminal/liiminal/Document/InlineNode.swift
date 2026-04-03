@@ -18,6 +18,7 @@ indirect enum InlineNode: Equatable, Sendable {
     case image(alt: String, url: String, title: String?)
     case comment(String)
     case inlineLatex(String)
+    case displayLatex(String)
     case blockReference(String)
     case autolink(String)
     case hardLineBreak
@@ -62,6 +63,8 @@ indirect enum InlineNode: Equatable, Sendable {
             return s.count + 4
         case .inlineLatex(let s):
             return s.count + 2
+        case .displayLatex(let s):
+            return s.count + 4
         case .inlineFootnote(let children):
             return children.totalSourceLength + 3
         case .blockReference(let id):
@@ -101,6 +104,8 @@ indirect enum InlineNode: Equatable, Sendable {
         case .comment:
             return 0
         case .inlineLatex(let s):
+            return s.count
+        case .displayLatex(let s):
             return s.count
         case .inlineFootnote(let children):
             return children.totalContentLength

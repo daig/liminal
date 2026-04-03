@@ -130,7 +130,16 @@ struct EditorView: NSViewRepresentable {
             case .thematicBreak(let t):
                 let range = NSRange(location: offset, length: t.sourceLength)
                 storage.addAttributes(HighlightTheme.syntaxAttributes, range: range)
-            case .blankLine, .blockquote, .htmlBlock:
+            case .blockquote(let bq):
+                highlightBlockquote(bq, at: offset, in: storage)
+            case .list(let l):
+                highlightList(l, at: offset, in: storage)
+            case .table(let t):
+                highlightTable(t, at: offset, in: storage)
+            case .displayLatex(let d):
+                let range = NSRange(location: offset, length: d.sourceLength)
+                storage.addAttributes(HighlightTheme.latexAttributes, range: range)
+            case .blankLine, .htmlBlock:
                 break
             }
         }
@@ -163,6 +172,66 @@ struct EditorView: NSViewRepresentable {
         ) {
             let range = NSRange(location: offset, length: f.sourceLength)
             storage.addAttributes(HighlightTheme.frontmatterAttributes, range: range)
+        }
+
+        private func highlightBlockquote(
+            _ bq: BlockquoteBlock, at offset: Int, in storage: NSTextStorage
+        ) {
+            // Dim the > prefix on each line
+            let range = NSRange(location: offset, length: bq.sourceLength)
+            storage.addAttribute(
+                .foregroundColor, value: HighlightTheme.blockquoteColor,
+                range: range)
+            // Highlight child blocks within the blockquote
+            var pos = offset
+            for child in bq.children {
+                // Account for "> " prefix per line — approximate by highlighting children
+                highlightBlock(child, at: pos, in: storage)
+                pos += child.sourceLength
+            }
+        }
+
+        private func highlightList(
+            _ l: ListBlock, at offset: Int, in storage: NSTextStorage
+        ) {
+            var pos = offset
+            for item in l.items {
+                // Dim the marker (- , * , 1. , [ ] etc.)
+                let markerRange = NSRange(location: pos, length: item.markerLength)
+                storage.addAttributes(HighlightTheme.syntaxAttributes, range: markerRange)
+                // Highlight checkbox if present
+                if item.checked != nil {
+                    storage.addAttribute(
+                        .foregroundColor, value: HighlightTheme.checkboxColor,
+                        range: markerRange)
+                }
+                // Highlight inline content
+                highlightInlines(item.content, at: pos + item.markerLength, in: storage)
+                pos += item.sourceLength
+            }
+        }
+
+        private func highlightTable(
+            _ t: TableBlock, at offset: Int, in storage: NSTextStorage
+        ) {
+            // Dim separator row
+            let sepRange = NSRange(
+                location: offset + t.separatorOffset, length: t.separatorLength)
+            storage.addAttributes(HighlightTheme.syntaxAttributes, range: sepRange)
+
+            // Highlight header cells
+            for cell in t.headerCells {
+                highlightInlines(
+                    cell.content, at: offset + cell.sourceOffset, in: storage)
+            }
+
+            // Highlight body cells
+            for row in t.bodyRows {
+                for cell in row {
+                    highlightInlines(
+                        cell.content, at: offset + cell.sourceOffset, in: storage)
+                }
+            }
         }
 
         private func highlightInlines(
@@ -308,6 +377,17 @@ struct EditorView: NSViewRepresentable {
                 let range = NSRange(location: offset, length: node.sourceLength)
                 storage.addAttributes(HighlightTheme.linkAttributes, range: range)
 
+            case .displayLatex:
+                let range = NSRange(location: offset, length: node.sourceLength)
+                storage.addAttributes(HighlightTheme.latexAttributes, range: range)
+                // Dim $$ delimiters
+                storage.addAttributes(
+                    HighlightTheme.syntaxAttributes,
+                    range: NSRange(location: offset, length: 2))
+                storage.addAttributes(
+                    HighlightTheme.syntaxAttributes,
+                    range: NSRange(location: offset + node.sourceLength - 2, length: 2))
+
             case .text, .hardLineBreak, .softLineBreak:
                 break
             }
@@ -339,6 +419,9 @@ enum HighlightTheme {
     static let latexColor = NSColor.systemOrange
     static let highlightColor = NSColor.systemYellow.withAlphaComponent(0.3)
     static let frontmatterColor = NSColor.systemPurple.withAlphaComponent(0.8)
+    static let blockquoteColor = NSColor.secondaryLabelColor
+    static let checkboxColor = NSColor.systemBlue
+    static let tableColor = NSColor.systemIndigo
     static let embedColor = NSColor.systemTeal
 
     static let defaultAttributes: [NSAttributedString.Key: Any] = [

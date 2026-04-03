@@ -88,6 +88,12 @@ struct InlineRenderer {
             attr.foregroundColor = RenderStyle.latexColor
             return attr
 
+        case .displayLatex(let latex):
+            var attr = AttributedString(latex)
+            attr.font = style.monospaced().font
+            attr.foregroundColor = RenderStyle.latexColor
+            return attr
+
         case .inlineFootnote(let children):
             // Render as superscript-styled parenthetical
             var result = render(children, style: style.sized(style.size * 0.8))

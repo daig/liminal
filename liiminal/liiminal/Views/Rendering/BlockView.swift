@@ -20,6 +20,12 @@ struct BlockView: View {
             Spacer().frame(height: 4)
         case .blockquote(let b):
             BlockquoteBlockView(blockquote: b)
+        case .list(let l):
+            ListBlockView(list: l)
+        case .table(let t):
+            TableBlockView(table: t)
+        case .displayLatex(let d):
+            DisplayLatexBlockView(latex: d)
         case .htmlBlock(let h):
             HTMLBlockView(block: h)
         }
@@ -206,6 +212,166 @@ struct BlockquoteBlockView: View {
         }
         .padding(.vertical, 4)
         .padding(.leading, 4)
+    }
+}
+
+// MARK: - HTML Block
+
+// MARK: - List
+
+struct ListBlockView: View {
+    let list: ListBlock
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(list.items.enumerated()), id: \.offset) { idx, item in
+                // Gap indicator for ordered lists: skipped numbers or start > 1
+                if list.ordered {
+                    let prevNumber = idx > 0 ? list.items[idx - 1].number : 0
+                    if idx == 0 && item.number > 1 {
+                        GapIndicator(indent: item.indent)
+                    } else if idx > 0 && item.number > prevNumber + 1 {
+                        GapIndicator(indent: item.indent)
+                    }
+                }
+
+                ListItemView(item: item, ordered: list.ordered)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct GapIndicator: View {
+    let indent: Int
+
+    var body: some View {
+        Text("⋯")
+            .font(.system(size: 11))
+            .foregroundStyle(.tertiary)
+            .padding(.leading, CGFloat(indent) * 20 + 6)
+            .padding(.vertical, 1)
+    }
+}
+
+struct ListItemView: View {
+    let item: ListItem
+    let ordered: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            // Number (for ordered lists — always shown, even with checkbox)
+            if ordered {
+                Text("\(item.number).")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 16, design: .monospaced))
+                    .frame(minWidth: 20, alignment: .trailing)
+            } else if item.checked == nil {
+                // Unordered bullet (only when no checkbox)
+                Text("•")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 16))
+                    .frame(minWidth: 12)
+            }
+
+            // Checkbox (alongside number for ordered, replaces bullet for unordered)
+            if let checked = item.checked {
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(checked ? .blue : .secondary)
+                    .font(.system(size: 14))
+            }
+
+            Text(InlineRenderer.render(item.content))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.leading, CGFloat(item.indent) * 20)
+    }
+}
+
+// MARK: - Table
+
+struct TableBlockView: View {
+    let table: TableBlock
+
+    var body: some View {
+        let columnCount = max(
+            table.headerCells.count,
+            table.bodyRows.first?.count ?? 0
+        )
+        guard columnCount > 0 else { return AnyView(EmptyView()) }
+
+        return AnyView(
+            VStack(alignment: .leading, spacing: 0) {
+                // Header row
+                HStack(spacing: 0) {
+                    ForEach(0..<columnCount, id: \.self) { col in
+                        let content = col < table.headerCells.count
+                            ? table.headerCells[col].content : []
+                        let alignment = col < table.alignments.count
+                            ? table.alignments[col] : nil
+                        Text(InlineRenderer.render(content, style: .body.bolded()))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: textAlignment(alignment))
+                            .padding(8)
+                    }
+                }
+                .background(Color(nsColor: .controlBackgroundColor))
+
+                Divider()
+
+                // Body rows
+                ForEach(Array(table.bodyRows.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 0) {
+                        ForEach(0..<columnCount, id: \.self) { col in
+                            let content = col < row.count ? row[col].content : []
+                            let alignment = col < table.alignments.count
+                                ? table.alignments[col] : nil
+                            Text(InlineRenderer.render(content))
+                                .textSelection(.enabled)
+                                .frame(
+                                    maxWidth: .infinity,
+                                    alignment: textAlignment(alignment))
+                                .padding(8)
+                        }
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+            )
+            .padding(.vertical, 4)
+        )
+    }
+
+    private func textAlignment(_ alignment: TableAlignment?) -> Alignment {
+        switch alignment {
+        case .left: return .leading
+        case .center: return .center
+        case .right: return .trailing
+        case nil: return .leading
+        }
+    }
+}
+
+// MARK: - Display LaTeX
+
+struct DisplayLatexBlockView: View {
+    let latex: DisplayLatexBlock
+
+    var body: some View {
+        // Show LaTeX source styled; actual math rendering is future work
+        Text(latex.latex)
+            .font(.system(size: 16, design: .monospaced))
+            .foregroundStyle(RenderStyle.latexColor)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity)
+            .padding(16)
+            .background(Color.orange.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.vertical, 4)
     }
 }
 

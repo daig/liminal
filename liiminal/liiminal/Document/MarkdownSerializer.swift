@@ -25,7 +25,52 @@ struct MarkdownSerializer {
         case .blankLine:
             return "\n"
         case .blockquote(let b):
-            return b.children.map { "> " + serializeBlock($0) }.joined()
+            let inner = b.children.map { serializeBlock($0) }.joined()
+            return inner.splitLinesPreservingTerminators()
+                .map { "> " + $0 }.joined()
+        case .list(let l):
+            return l.items.map { item in
+                let indent = String(repeating: "  ", count: item.indent)
+                let marker: String
+                if l.ordered {
+                    marker = "\(item.number). "
+                } else {
+                    marker = "- "
+                }
+                var prefix = indent + marker
+                if let checked = item.checked {
+                    prefix += checked ? "[x] " : "[ ] "
+                }
+                return prefix + serializeInlines(item.content) + "\n"
+            }.joined()
+        case .table(let t):
+            var result = ""
+            // Header
+            result +=
+                "| "
+                + t.headerCells.map { serializeInlines($0.content) }.joined(
+                    separator: " | ") + " |\n"
+            // Separator
+            result +=
+                "| "
+                + t.alignments.map { align in
+                    switch align {
+                    case .left: return ":---"
+                    case .center: return ":---:"
+                    case .right: return "---:"
+                    case nil: return "---"
+                    }
+                }.joined(separator: " | ") + " |\n"
+            // Body rows
+            for row in t.bodyRows {
+                result +=
+                    "| "
+                    + row.map { serializeInlines($0.content) }.joined(separator: " | ")
+                    + " |\n"
+            }
+            return result
+        case .displayLatex(let d):
+            return "$$\n" + d.latex + "$$\n"
         case .htmlBlock(let h):
             return h.rawHTML
         }
@@ -71,6 +116,8 @@ struct MarkdownSerializer {
             return "%%" + s + "%%"
         case .inlineLatex(let s):
             return "$" + s + "$"
+        case .displayLatex(let s):
+            return "$$" + s + "$$"
         case .inlineFootnote(let children):
             return "^[" + serializeInlines(children) + "]"
         case .blockReference(let id):

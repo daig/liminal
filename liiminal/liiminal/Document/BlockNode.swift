@@ -9,6 +9,9 @@ enum BlockNode: Equatable, Sendable {
     case frontmatter(FrontmatterBlock)
     case blankLine(BlankLineBlock)
     case blockquote(BlockquoteBlock)
+    case list(ListBlock)
+    case table(TableBlock)
+    case displayLatex(DisplayLatexBlock)
     case htmlBlock(HTMLBlock)
 
     /// Total characters this block occupies in the serialized source.
@@ -21,6 +24,9 @@ enum BlockNode: Equatable, Sendable {
         case .frontmatter(let b): return b.sourceLength
         case .blankLine(let b): return b.sourceLength
         case .blockquote(let b): return b.sourceLength
+        case .list(let b): return b.sourceLength
+        case .table(let b): return b.sourceLength
+        case .displayLatex(let b): return b.sourceLength
         case .htmlBlock(let b): return b.sourceLength
         }
     }
@@ -35,6 +41,14 @@ enum BlockNode: Equatable, Sendable {
         case .frontmatter(let b): return b.yaml.count
         case .blankLine: return 0
         case .blockquote(let b): return b.children.reduce(0) { $0 + $1.contentLength }
+        case .list(let b): return b.items.reduce(0) { $0 + $1.content.totalContentLength }
+        case .table(let b):
+            let header = b.headerCells.reduce(0) { $0 + $1.content.totalContentLength }
+            let body = b.bodyRows.reduce(0) { r, row in
+                r + row.reduce(0) { $0 + $1.content.totalContentLength }
+            }
+            return header + body
+        case .displayLatex(let b): return b.latex.count
         case .htmlBlock(let b): return b.rawHTML.count
         }
     }
@@ -89,6 +103,45 @@ struct BlankLineBlock: Equatable, Sendable {
 
 struct BlockquoteBlock: Equatable, Sendable {
     let children: [BlockNode]
+    let sourceLength: Int
+}
+
+struct ListBlock: Equatable, Sendable {
+    let ordered: Bool
+    let startNumber: Int
+    let items: [ListItem]
+    let sourceLength: Int
+}
+
+struct ListItem: Equatable, Sendable {
+    let content: [InlineNode]
+    let checked: Bool?
+    let indent: Int
+    let number: Int  // actual number from source (0 for unordered)
+    let sourceLength: Int
+    let markerLength: Int
+}
+
+struct TableCell: Equatable, Sendable {
+    let content: [InlineNode]
+    let sourceOffset: Int  // offset from start of the table block
+}
+
+struct TableBlock: Equatable, Sendable {
+    let headerCells: [TableCell]
+    let alignments: [TableAlignment?]
+    let bodyRows: [[TableCell]]
+    let sourceLength: Int
+    let separatorOffset: Int
+    let separatorLength: Int
+}
+
+enum TableAlignment: Equatable, Sendable {
+    case left, center, right
+}
+
+struct DisplayLatexBlock: Equatable, Sendable {
+    let latex: String
     let sourceLength: Int
 }
 

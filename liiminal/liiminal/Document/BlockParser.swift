@@ -13,18 +13,31 @@ struct BlockParser {
     }
 }
 
+// MARK: - List Item Info
+
+private struct ListItemInfo {
+    let indent: Int
+    let ordered: Bool
+    let number: Int
+    let checked: Bool?
+    let contentStart: Int
+}
+
 // MARK: - Parser State
 
 private struct ParserState {
     var blocks: [BlockNode] = []
     var mode: ParseMode = .toplevel
     var accumulator = LineAccumulator()
+    var listItems: [(line: String, info: ListItemInfo)] = []
+    var blockquoteLines: [String] = []
     var isFirstBlock = true
 
     enum ParseMode {
         case toplevel
         case fencedCode(fence: String, language: String?)
         case frontmatter
+        case displayLatex
     }
 
     mutating func processLine(_ line: String) {
@@ -33,6 +46,8 @@ private struct ParserState {
             processFencedCodeLine(line, fence: fence, language: language)
         case .frontmatter:
             processFrontmatterLine(line)
+        case .displayLatex:
+            processDisplayLatexLine(line)
         case .toplevel:
             processToplevelLine(line)
         }
@@ -41,7 +56,6 @@ private struct ParserState {
     mutating func finalize() {
         switch mode {
         case .fencedCode(let fence, let language):
-            // Unclosed code fence — emit as code block anyway
             let code = accumulator.joinedContent
             let sourceLength = accumulator.prefixLength + accumulator.sourceLength
             blocks.append(.fencedCode(FencedCodeBlock(
@@ -50,12 +64,21 @@ private struct ParserState {
             )))
             accumulator.reset()
         case .frontmatter:
-            // Unclosed frontmatter — treat accumulated lines as a paragraph
             let raw = accumulator.prefixText + accumulator.joinedContent
             accumulator.reset()
             accumulator.addLine(raw)
             flushParagraph()
+        case .displayLatex:
+            // Unclosed display latex — emit anyway
+            let latex = accumulator.joinedContent
+            let sourceLength = accumulator.prefixLength + accumulator.sourceLength
+            blocks.append(.displayLatex(DisplayLatexBlock(
+                latex: latex, sourceLength: sourceLength
+            )))
+            accumulator.reset()
         case .toplevel:
+            flushBlockquote()
+            flushList()
             flushParagraph()
         }
     }
@@ -65,24 +88,61 @@ private struct ParserState {
     private mutating func processToplevelLine(_ line: String) {
         let trimmed = line.trimmingTrailingNewline
 
-        // Blank line
+        // Blank line — ends all pending blocks
         if trimmed.allSatisfy(\.isWhitespace) || trimmed.isEmpty {
+            flushBlockquote()
+            flushList()
             flushParagraph()
             blocks.append(.blankLine(BlankLineBlock(sourceLength: line.count)))
             return
         }
 
-        // ATX heading: # ... ######
+        // Blockquote continuation
+        if trimmed.hasPrefix(">") {
+            flushList()
+            flushParagraph()
+            blockquoteLines.append(line)
+            return
+        }
+
+        // If we had blockquote lines and this isn't one, flush them
+        if !blockquoteLines.isEmpty {
+            flushBlockquote()
+        }
+
+        // List item
+        if let info = Self.tryParseListItem(line) {
+            flushParagraph()
+            listItems.append((line, info))
+            return
+        }
+
+        // If we had list items and this isn't one, flush them
+        if !listItems.isEmpty {
+            flushList()
+        }
+
+        // ATX heading
         if let heading = tryParseHeading(line) {
             flushParagraph()
             blocks.append(heading)
             return
         }
 
-        // Fenced code block opening: ``` or ~~~
+        // Fenced code block opening
         if let (fence, language) = tryParseFenceOpening(trimmed) {
             flushParagraph()
             mode = .fencedCode(fence: fence, language: language)
+            accumulator.reset()
+            accumulator.prefixText = line
+            accumulator.prefixLength = line.count
+            return
+        }
+
+        // Display LaTeX opening: $$ on its own line
+        if trimmed == "$$" {
+            flushParagraph()
+            mode = .displayLatex
             accumulator.reset()
             accumulator.prefixText = line
             accumulator.prefixLength = line.count
@@ -98,8 +158,8 @@ private struct ParserState {
             return
         }
 
-        // Thematic break: ---, ***, ___
-        if tryParseThematicBreak(trimmed) != nil {
+        // Thematic break
+        if Self.isThematicBreak(trimmed) {
             flushParagraph()
             blocks.append(.thematicBreak(ThematicBreakBlock(sourceText: line)))
             return
@@ -118,10 +178,7 @@ private struct ParserState {
         let fenceChar = fence.first!
         let fenceCount = fence.count
 
-        // Check for closing fence: same or more of the same character, nothing else
-        if trimmed.count >= fenceCount
-            && trimmed.allSatisfy({ $0 == fenceChar })
-        {
+        if trimmed.count >= fenceCount && trimmed.allSatisfy({ $0 == fenceChar }) {
             let code = accumulator.joinedContent
             let sourceLength =
                 accumulator.prefixLength + accumulator.sourceLength + line.count
@@ -142,7 +199,8 @@ private struct ParserState {
         let trimmed = line.trimmingTrailingNewline
         if trimmed == "---" {
             let yaml = accumulator.joinedContent
-            let sourceLength = accumulator.prefixLength + accumulator.sourceLength + line.count
+            let sourceLength =
+                accumulator.prefixLength + accumulator.sourceLength + line.count
             blocks.append(.frontmatter(FrontmatterBlock(
                 yaml: yaml, sourceLength: sourceLength
             )))
@@ -153,45 +211,128 @@ private struct ParserState {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Display LaTeX
+
+    private mutating func processDisplayLatexLine(_ line: String) {
+        let trimmed = line.trimmingTrailingNewline
+        if trimmed == "$$" {
+            let latex = accumulator.joinedContent
+            let sourceLength =
+                accumulator.prefixLength + accumulator.sourceLength + line.count
+            blocks.append(.displayLatex(DisplayLatexBlock(
+                latex: latex, sourceLength: sourceLength
+            )))
+            accumulator.reset()
+            mode = .toplevel
+        } else {
+            accumulator.addLine(line)
+        }
+    }
+
+    // MARK: - Flush Helpers
 
     private mutating func flushParagraph() {
         guard !accumulator.isEmpty else { return }
-        let raw = accumulator.joinedContent
-        let sourceLength = accumulator.sourceLength
+        let lines = accumulator.lines
+        let totalSourceLength = accumulator.sourceLength
 
-        // Strip trailing newline(s) for inline parsing
+        // Check if this is actually a table
+        if let (table, consumed) = Self.tryParseTable(from: lines) {
+            blocks.append(.table(table))
+            let remaining = Array(lines.dropFirst(consumed))
+            accumulator.reset()
+            if !remaining.isEmpty {
+                for l in remaining { accumulator.addLine(l) }
+                flushParagraph()
+            }
+            isFirstBlock = false
+            return
+        }
+
+        let raw = accumulator.joinedContent
         let trailingNewlines = raw.reversed().prefix(while: { $0 == "\n" }).count
         let contentText = String(raw.dropLast(trailingNewlines))
         let inlines = InlineParser.parse(contentText)
 
         blocks.append(.paragraph(ParagraphBlock(
-            content: inlines, sourceLength: sourceLength,
+            content: inlines, sourceLength: totalSourceLength,
             trailingNewlineCount: trailingNewlines
         )))
         accumulator.reset()
         isFirstBlock = false
     }
 
+    private mutating func flushList() {
+        guard !listItems.isEmpty else { return }
+
+        let isOrdered = listItems[0].info.ordered
+        let startNumber = listItems[0].info.number
+        var totalSourceLength = 0
+        var items: [ListItem] = []
+
+        for (line, info) in listItems {
+            let contentText =
+                String(line.dropFirst(info.contentStart)).trimmingTrailingNewline
+            let inlines = InlineParser.parse(contentText)
+            let indentLevel = info.indent / 2
+            items.append(ListItem(
+                content: inlines, checked: info.checked,
+                indent: indentLevel, number: info.number,
+                sourceLength: line.count, markerLength: info.contentStart
+            ))
+            totalSourceLength += line.count
+        }
+
+        blocks.append(.list(ListBlock(
+            ordered: isOrdered, startNumber: startNumber,
+            items: items, sourceLength: totalSourceLength
+        )))
+        listItems.removeAll()
+        isFirstBlock = false
+    }
+
+    private mutating func flushBlockquote() {
+        guard !blockquoteLines.isEmpty else { return }
+
+        let sourceLength = blockquoteLines.reduce(0) { $0 + $1.count }
+
+        // Strip "> " or ">" prefix from each line, then recursively parse
+        var strippedLines: [String] = []
+        for line in blockquoteLines {
+            let trimmed = line.trimmingTrailingNewline
+            if trimmed.hasPrefix("> ") {
+                strippedLines.append(String(trimmed.dropFirst(2)) + "\n")
+            } else if trimmed.hasPrefix(">") {
+                strippedLines.append(String(trimmed.dropFirst(1)) + "\n")
+            } else {
+                strippedLines.append(line)
+            }
+        }
+
+        let innerSource = strippedLines.joined()
+        let children = BlockParser.parse(innerSource)
+
+        blocks.append(.blockquote(BlockquoteBlock(
+            children: children, sourceLength: sourceLength
+        )))
+        blockquoteLines.removeAll()
+        isFirstBlock = false
+    }
+
+    // MARK: - Line Detectors
+
     private mutating func tryParseHeading(_ line: String) -> BlockNode? {
         let chars = Array(line)
         var i = 0
-
-        // Count leading #
         while i < chars.count && chars[i] == "#" && i < 6 { i += 1 }
         let level = i
         guard level >= 1 && level <= 6 else { return nil }
-
-        // Must be followed by space or end of line
         guard i < chars.count && chars[i] == " " else { return nil }
-        i += 1  // skip the space
+        i += 1
 
-        // Extract content (everything after "## " up to newline)
         let contentStart = i
         var contentEnd = chars.count
-        if contentEnd > 0 && chars[contentEnd - 1] == "\n" {
-            contentEnd -= 1
-        }
+        if contentEnd > 0 && chars[contentEnd - 1] == "\n" { contentEnd -= 1 }
 
         // Strip optional trailing # sequence
         var trailingEnd = contentEnd
@@ -206,7 +347,6 @@ private struct ParserState {
 
         let contentText = String(chars[contentStart..<contentEnd])
         let inlines = InlineParser.parse(contentText)
-
         isFirstBlock = false
         return .heading(HeadingBlock(
             level: level, content: inlines, sourceLength: line.count
@@ -218,25 +358,176 @@ private struct ParserState {
         guard !chars.isEmpty else { return nil }
         let fenceChar = chars[0]
         guard fenceChar == "`" || fenceChar == "~" else { return nil }
-
         var count = 0
         while count < chars.count && chars[count] == fenceChar { count += 1 }
         guard count >= 3 else { return nil }
-
         let fence = String(repeating: fenceChar, count: count)
         let rest = String(chars[count...]).trimmingCharacters(in: .whitespaces)
         let language = rest.isEmpty ? nil : rest
         return (fence, language)
     }
 
-    private func tryParseThematicBreak(_ trimmed: String) -> Bool? {
+    private static func isThematicBreak(_ trimmed: String) -> Bool {
         let chars = Array(trimmed.filter { !$0.isWhitespace })
-        guard chars.count >= 3 else { return nil }
+        guard chars.count >= 3 else { return false }
         guard let first = chars.first, first == "-" || first == "*" || first == "_" else {
+            return false
+        }
+        return chars.allSatisfy { $0 == first }
+    }
+
+    static func tryParseListItem(_ line: String) -> ListItemInfo? {
+        let chars = Array(line)
+        var i = 0
+
+        // Leading whitespace (indent)
+        while i < chars.count && chars[i] == " " { i += 1 }
+        let indent = i
+        guard i < chars.count else { return nil }
+
+        var ordered = false
+        var number = 0
+
+        if chars[i] == "-" || chars[i] == "*" || chars[i] == "+" {
+            // Unordered — but make sure it's not a thematic break
+            let marker = chars[i]
+            i += 1
+            // Must be followed by space
+            guard i < chars.count && chars[i] == " " else { return nil }
+            // Quick check: if the rest is only the same marker char + spaces, skip (thematic break)
+            let rest = String(chars[i...]).trimmingCharacters(in: .whitespaces)
+            if rest.allSatisfy({ $0 == marker }) && rest.count >= 2 { return nil }
+            i += 1
+        } else if chars[i].isNumber {
+            let numStart = i
+            while i < chars.count && chars[i].isNumber { i += 1 }
+            guard i < chars.count && chars[i] == "." else { return nil }
+            number = Int(String(chars[numStart..<i])) ?? 0
+            i += 1
+            guard i < chars.count && chars[i] == " " else { return nil }
+            i += 1
+            ordered = true
+        } else {
             return nil
         }
-        guard chars.allSatisfy({ $0 == first }) else { return nil }
-        return true
+
+        // Task list checkbox: [ ] or [x] or [X]
+        var checked: Bool? = nil
+        if i + 3 <= chars.count && chars[i] == "[" && chars[i + 2] == "]" {
+            let mark = chars[i + 1]
+            if mark == " " {
+                checked = false
+                i += 3
+                if i < chars.count && chars[i] == " " { i += 1 }
+            } else if mark == "x" || mark == "X" {
+                checked = true
+                i += 3
+                if i < chars.count && chars[i] == " " { i += 1 }
+            }
+        }
+
+        return ListItemInfo(
+            indent: indent, ordered: ordered, number: number,
+            checked: checked, contentStart: i
+        )
+    }
+
+    // MARK: - Table Detection
+
+    static func tryParseTable(from lines: [String]) -> (table: TableBlock, consumed: Int)? {
+        guard lines.count >= 2 else { return nil }
+
+        let headerLine = lines[0].trimmingTrailingNewline
+        let separatorLine = lines[1].trimmingTrailingNewline
+
+        guard headerLine.contains("|") else { return nil }
+        guard isTableSeparator(separatorLine) else { return nil }
+
+        var rowOffset = 0
+        let headerCells = parseTableRowCells(headerLine, rowOffset: rowOffset)
+        rowOffset += lines[0].count
+
+        let separatorOffset = rowOffset
+        let separatorLength = lines[1].count
+        let alignments = parseTableAlignments(separatorLine)
+        rowOffset += separatorLength
+
+        var consumed = 2
+        var bodyRows: [[TableCell]] = []
+
+        for i in 2..<lines.count {
+            let row = lines[i].trimmingTrailingNewline
+            guard row.contains("|") else { break }
+            bodyRows.append(parseTableRowCells(row, rowOffset: rowOffset))
+            rowOffset += lines[i].count
+            consumed += 1
+        }
+
+        let sourceLength = lines.prefix(consumed).reduce(0) { $0 + $1.count }
+        let table = TableBlock(
+            headerCells: headerCells, alignments: alignments,
+            bodyRows: bodyRows, sourceLength: sourceLength,
+            separatorOffset: separatorOffset, separatorLength: separatorLength
+        )
+        return (table, consumed)
+    }
+
+    private static func isTableSeparator(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("-") && trimmed.contains("|") else { return false }
+        return trimmed.allSatisfy { $0 == "|" || $0 == "-" || $0 == ":" || $0 == " " }
+    }
+
+    private static func parseTableRowCells(
+        _ line: String, rowOffset: Int
+    ) -> [TableCell] {
+        let chars = Array(line)
+        var pipePositions: [Int] = []
+        for (i, ch) in chars.enumerated() {
+            if ch == "|" { pipePositions.append(i) }
+        }
+        guard pipePositions.count >= 2 else { return [] }
+
+        var cells: [TableCell] = []
+        for i in 0..<(pipePositions.count - 1) {
+            let cellStart = pipePositions[i] + 1
+            let cellEnd = pipePositions[i + 1]
+
+            // Skip leading/trailing whitespace to find content bounds
+            var contentStart = cellStart
+            while contentStart < cellEnd && chars[contentStart] == " " {
+                contentStart += 1
+            }
+            var contentEnd = cellEnd
+            while contentEnd > contentStart && chars[contentEnd - 1] == " " {
+                contentEnd -= 1
+            }
+
+            let cellText = String(chars[contentStart..<contentEnd])
+            let content = InlineParser.parse(cellText)
+            cells.append(TableCell(
+                content: content,
+                sourceOffset: rowOffset + contentStart
+            ))
+        }
+        return cells
+    }
+
+    private static func parseTableAlignments(_ line: String) -> [TableAlignment?] {
+        var cells = line.split(
+            separator: "|", omittingEmptySubsequences: false
+        ).map { String($0).trimmingCharacters(in: .whitespaces) }
+        if cells.first?.isEmpty == true { cells.removeFirst() }
+        if cells.last?.isEmpty == true { cells.removeLast() }
+
+        return cells.map { cell in
+            let left = cell.hasPrefix(":")
+            let right = cell.hasSuffix(":")
+            if left && right { return .center }
+            if right { return .right }
+            if left { return .left }
+            return nil
+        }
     }
 }
 

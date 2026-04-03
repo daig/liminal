@@ -78,6 +78,10 @@ private struct InlineScanner {
         case "%" where peek() == "%":
             return tryParseComment()
 
+        // Display LaTeX $$...$$ (check before inline $)
+        case "$" where peek() == "$":
+            return tryParseDisplayLatex()
+
         // Inline LaTeX $...$
         case "$":
             return tryParseInlineLatex()
@@ -186,6 +190,25 @@ private struct InlineScanner {
                 }
             }
             if chars[searchPos] == "\n" { break }
+            searchPos += 1
+        }
+        position = start
+        return nil
+    }
+
+    // MARK: - Display LaTeX
+
+    private mutating func tryParseDisplayLatex() -> InlineNode? {
+        let start = position
+        position += 2  // skip $$
+
+        var searchPos = position
+        while searchPos + 1 < chars.count {
+            if chars[searchPos] == "$" && chars[searchPos + 1] == "$" {
+                let content = String(chars[position..<searchPos])
+                position = searchPos + 2
+                return .displayLatex(content)
+            }
             searchPos += 1
         }
         position = start
