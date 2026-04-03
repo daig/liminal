@@ -134,6 +134,7 @@ struct InlineRenderer {
         attr.font = style.font
         return attr
     }
+
 }
 
 // MARK: - Render Style

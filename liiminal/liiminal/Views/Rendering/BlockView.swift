@@ -1,3 +1,4 @@
+import LaTeXSwiftUI
 import SwiftUI
 
 /// Dispatches rendering for a single BlockNode to the appropriate view.
@@ -61,7 +62,6 @@ struct ParagraphBlockView: View {
     let paragraph: ParagraphBlock
 
     var body: some View {
-        // Check if the paragraph is a standalone embed (image/note embed on its own line)
         if let embed = singleEmbed {
             EmbedView(target: embed.target, params: embed.params)
         } else {
@@ -362,16 +362,14 @@ struct DisplayLatexBlockView: View {
     let latex: DisplayLatexBlock
 
     var body: some View {
-        // Show LaTeX source styled; actual math rendering is future work
-        Text(latex.latex)
-            .font(.system(size: 16, design: .monospaced))
-            .foregroundStyle(RenderStyle.latexColor)
+        let view = LaTeX("$$\(latex.latex)$$")
+            .font(NSFont.systemFont(ofSize: 32, weight: .regular))
+            .blockMode(.blockViews)
+            .errorMode(.original)
+        view
             .textSelection(.enabled)
             .frame(maxWidth: .infinity)
-            .padding(16)
-            .background(Color.orange.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
     }
 }
 

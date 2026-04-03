@@ -65,6 +65,7 @@
 			);
 			name = liiminal;
 			packageProductDependencies = (
+				CCC100000000000000000001 /* LaTeXSwiftUI */,
 			);
 			productName = liiminal;
 			productReference = 231255522F803DB6001A9B4C /* liiminal.app */;
@@ -98,6 +99,9 @@
 			productRefGroup = 231255532F803DB6001A9B4C /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				CCC000000000000000000001 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */,
+			);
 			targets = (
 				231255512F803DB6001A9B4C /* liiminal */,
 			);
@@ -331,6 +335,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		CCC000000000000000000001 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/colinc86/LaTeXSwiftUI";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CCC100000000000000000001 /* LaTeXSwiftUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CCC000000000000000000001 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */;
+			productName = LaTeXSwiftUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2312554A2F803DB6001A9B4C /* Project object */;
 }
