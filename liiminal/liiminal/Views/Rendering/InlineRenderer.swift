@@ -1,9 +1,22 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Environment Key
+
+private struct BaseFontSizeKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 16
+}
+
+extension EnvironmentValues {
+    var baseFontSize: CGFloat {
+        get { self[BaseFontSizeKey.self] }
+        set { self[BaseFontSizeKey.self] = newValue }
+    }
+}
+
 /// Converts an array of InlineNodes into an AttributedString for SwiftUI Text rendering.
 struct InlineRenderer {
-    static func render(_ nodes: [InlineNode], style: RenderStyle = .body) -> AttributedString {
+    static func render(_ nodes: [InlineNode], style: RenderStyle = .body()) -> AttributedString {
         var result = AttributedString()
         for node in nodes {
             result.append(renderNode(node, style: style))
@@ -163,12 +176,20 @@ struct RenderStyle {
     func monospaced() -> RenderStyle { var c = self; c.isMonospace = true; return c }
     func sized(_ s: CGFloat) -> RenderStyle { var c = self; c.size = s; return c }
 
-    static let body = RenderStyle(size: 16)
+    static func body(size: CGFloat = 16) -> RenderStyle {
+        RenderStyle(size: size)
+    }
 
-    static func heading(level: Int) -> RenderStyle {
-        let sizes: [CGFloat] = [32, 26, 22, 18, 16, 15]
-        let size = (level >= 1 && level <= 6) ? sizes[level - 1] : 16
-        return RenderStyle(isBold: true, size: size)
+    static func heading(level: Int, baseSize: CGFloat = 16) -> RenderStyle {
+        let scales: [CGFloat] = [2.0, 1.625, 1.375, 1.125, 1.0, 0.9375]
+        let scale = (level >= 1 && level <= 6) ? scales[level - 1] : 1.0
+        return RenderStyle(isBold: true, size: baseSize * scale)
+    }
+
+    /// The NSFont size for LaTeX rendering that matches this style's body size.
+    /// The 2x factor compensates for MathJax's internal scaling.
+    static func latexFontSize(for baseSize: CGFloat) -> CGFloat {
+        baseSize * 2.0
     }
 
     // Semantic colors

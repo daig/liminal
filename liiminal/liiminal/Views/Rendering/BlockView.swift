@@ -37,13 +37,18 @@ struct BlockView: View {
 
 struct HeadingBlockView: View {
     let heading: HeadingBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
-        Text(InlineRenderer.render(heading.content, style: .heading(level: heading.level)))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, topPadding)
-            .padding(.bottom, 4)
+        Text(
+            InlineRenderer.render(
+                heading.content,
+                style: .heading(level: heading.level, baseSize: baseFontSize))
+        )
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, topPadding)
+        .padding(.bottom, 4)
     }
 
     private var topPadding: CGFloat {
@@ -60,12 +65,13 @@ struct HeadingBlockView: View {
 
 struct ParagraphBlockView: View {
     let paragraph: ParagraphBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         if let embed = singleEmbed {
             EmbedView(target: embed.target, params: embed.params)
         } else {
-            Text(InlineRenderer.render(paragraph.content))
+            Text(InlineRenderer.render(paragraph.content, style: .body(size: baseFontSize)))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
@@ -92,7 +98,6 @@ struct EmbedView: View {
             || target.hasSuffix(".svg") || target.hasSuffix(".webp")
 
         if isImage {
-            // Image embed placeholder — actual loading requires vault path context
             VStack(spacing: 8) {
                 Image(systemName: "photo")
                     .font(.system(size: 32))
@@ -107,7 +112,6 @@ struct EmbedView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .padding(.vertical, 4)
         } else {
-            // Note embed reference
             HStack(spacing: 8) {
                 Image(systemName: "doc.text")
                     .foregroundStyle(.secondary)
@@ -127,6 +131,7 @@ struct EmbedView: View {
 
 struct CodeBlockView: View {
     let codeBlock: FencedCodeBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -140,7 +145,7 @@ struct CodeBlockView: View {
             }
 
             Text(codeBlock.code)
-                .font(.system(size: 14, design: .monospaced))
+                .font(.system(size: baseFontSize - 2, design: .monospaced))
                 .foregroundStyle(RenderStyle.codeColor)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,6 +172,7 @@ struct ThematicBreakView: View {
 
 struct FrontmatterBlockView: View {
     let frontmatter: FrontmatterBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -178,7 +184,7 @@ struct FrontmatterBlockView: View {
                 .padding(.bottom, 4)
 
             Text(frontmatter.yaml)
-                .font(.system(size: 13, design: .monospaced))
+                .font(.system(size: baseFontSize - 3, design: .monospaced))
                 .foregroundStyle(.purple.opacity(0.8))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -215,8 +221,6 @@ struct BlockquoteBlockView: View {
     }
 }
 
-// MARK: - HTML Block
-
 // MARK: - List
 
 struct ListBlockView: View {
@@ -225,7 +229,6 @@ struct ListBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(list.items.enumerated()), id: \.offset) { idx, item in
-                // Gap indicator for ordered lists: skipped numbers or start > 1
                 if list.ordered {
                     let prevNumber = idx > 0 ? list.items[idx - 1].number : 0
                     if idx == 0 && item.number > 1 {
@@ -246,7 +249,7 @@ struct GapIndicator: View {
     let indent: Int
 
     var body: some View {
-        Text("⋯")
+        Text("\u{22EF}")
             .font(.system(size: 11))
             .foregroundStyle(.tertiary)
             .padding(.leading, CGFloat(indent) * 20 + 6)
@@ -257,31 +260,29 @@ struct GapIndicator: View {
 struct ListItemView: View {
     let item: ListItem
     let ordered: Bool
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            // Number (for ordered lists — always shown, even with checkbox)
             if ordered {
                 Text("\(item.number).")
                     .foregroundStyle(.secondary)
-                    .font(.system(size: 16, design: .monospaced))
+                    .font(.system(size: baseFontSize, design: .monospaced))
                     .frame(minWidth: 20, alignment: .trailing)
             } else if item.checked == nil {
-                // Unordered bullet (only when no checkbox)
-                Text("•")
+                Text("\u{2022}")
                     .foregroundStyle(.secondary)
-                    .font(.system(size: 16))
+                    .font(.system(size: baseFontSize))
                     .frame(minWidth: 12)
             }
 
-            // Checkbox (alongside number for ordered, replaces bullet for unordered)
             if let checked = item.checked {
                 Image(systemName: checked ? "checkmark.square.fill" : "square")
                     .foregroundStyle(checked ? .blue : .secondary)
-                    .font(.system(size: 14))
+                    .font(.system(size: baseFontSize - 2))
             }
 
-            Text(InlineRenderer.render(item.content))
+            Text(InlineRenderer.render(item.content, style: .body(size: baseFontSize)))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -293,6 +294,7 @@ struct ListItemView: View {
 
 struct TableBlockView: View {
     let table: TableBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         let columnCount = max(
@@ -303,36 +305,40 @@ struct TableBlockView: View {
 
         return AnyView(
             VStack(alignment: .leading, spacing: 0) {
-                // Header row
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { col in
                         let content = col < table.headerCells.count
                             ? table.headerCells[col].content : []
                         let alignment = col < table.alignments.count
                             ? table.alignments[col] : nil
-                        Text(InlineRenderer.render(content, style: .body.bolded()))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: textAlignment(alignment))
-                            .padding(8)
+                        Text(
+                            InlineRenderer.render(
+                                content, style: .body(size: baseFontSize).bolded())
+                        )
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: textAlignment(alignment))
+                        .padding(8)
                     }
                 }
                 .background(Color(nsColor: .controlBackgroundColor))
 
                 Divider()
 
-                // Body rows
                 ForEach(Array(table.bodyRows.enumerated()), id: \.offset) { _, row in
                     HStack(spacing: 0) {
                         ForEach(0..<columnCount, id: \.self) { col in
                             let content = col < row.count ? row[col].content : []
                             let alignment = col < table.alignments.count
                                 ? table.alignments[col] : nil
-                            Text(InlineRenderer.render(content))
-                                .textSelection(.enabled)
-                                .frame(
-                                    maxWidth: .infinity,
-                                    alignment: textAlignment(alignment))
-                                .padding(8)
+                            Text(
+                                InlineRenderer.render(
+                                    content, style: .body(size: baseFontSize))
+                            )
+                            .textSelection(.enabled)
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: textAlignment(alignment))
+                            .padding(8)
                         }
                     }
                 }
@@ -360,13 +366,15 @@ struct TableBlockView: View {
 
 struct DisplayLatexBlockView: View {
     let latex: DisplayLatexBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         let view = LaTeX("$$\(latex.latex)$$")
-            .font(NSFont.systemFont(ofSize: 32, weight: .regular))
+            .font(NSFont.systemFont(ofSize: RenderStyle.latexFontSize(for: baseFontSize), weight: .regular))
             .blockMode(.blockViews)
             .errorMode(.original)
         view
+            .id("\(latex.latex.hashValue)_\(baseFontSize)")  // bust library cache on size change
             .textSelection(.enabled)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -377,10 +385,11 @@ struct DisplayLatexBlockView: View {
 
 struct HTMLBlockView: View {
     let block: HTMLBlock
+    @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         Text(block.rawHTML)
-            .font(.system(size: 14, design: .monospaced))
+            .font(.system(size: baseFontSize - 2, design: .monospaced))
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)

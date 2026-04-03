@@ -4,6 +4,7 @@ struct ContentView: View {
     @State private var vaultViewModel = VaultViewModel()
     @State private var editorViewModel: EditorViewModel?
     @State private var showPreview = false
+    @State private var previewFontSize: CGFloat = 16
 
     var body: some View {
         Group {
@@ -14,7 +15,7 @@ struct ContentView: View {
                     if let editorVM = editorViewModel, editorVM.currentNote != nil {
                         Group {
                             if showPreview {
-                                RenderedDocumentView(document: editorVM.document)
+                                RenderedDocumentView(document: editorVM.document, baseFontSize: $previewFontSize)
                             } else {
                                 EditorView(editorViewModel: editorVM)
                             }
