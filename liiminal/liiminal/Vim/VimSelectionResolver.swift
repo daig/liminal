@@ -42,37 +42,6 @@ enum VimSelectionResolver {
         }
     }
 
-    static func visualSelectionResult(
-        kind: VimVisualKind,
-        in text: NSString,
-        anchor: Int,
-        head: Int
-    ) -> VimSelectionResult? {
-        guard text.length > 0 else { return nil }
-
-        let clampedAnchor = clamp(anchor, in: text)
-        let clampedHead = clamp(head, in: text)
-
-        switch kind {
-        case .characterwise:
-            let lowerBound = min(clampedAnchor, clampedHead)
-            let upperBound = max(clampedAnchor, clampedHead) + 1
-            let range = NSRange(location: lowerBound, length: upperBound - lowerBound)
-            return range.length > 0
-                ? VimSelectionResult(range: range, cursorAnchor: range.location, linewise: false)
-                : nil
-        case .linewise:
-            let anchorLine = text.lineRange(for: NSRange(location: clampedAnchor, length: 0))
-            let headLine = text.lineRange(for: NSRange(location: clampedHead, length: 0))
-            let startLocation = min(anchorLine.location, headLine.location)
-            let endLocation = max(NSMaxRange(anchorLine), NSMaxRange(headLine))
-            let range = NSRange(location: startLocation, length: endLocation - startLocation)
-            return range.length > 0
-                ? VimSelectionResult(range: range, cursorAnchor: startLocation, linewise: true)
-                : nil
-        }
-    }
-
     private static func selectCurrentLines(
         count: Int,
         in text: NSString,

@@ -17,7 +17,13 @@ final class VimTextView: NSTextView {
     private var activeUndoHistory: VimUndoHistory?
     private var suppressUndoCapture = false
     private var isShowingRootHintCatalog = false
-    private var visualAnchorPosition: Int?
+    private var visualState: VimVisualState? {
+        didSet {
+            if let visualState {
+                normalCursorPosition = visualState.cursorPosition
+            }
+        }
+    }
 
     /// Cursor position tracked independently in normal mode.
     private var normalCursorPosition: Int = 0
@@ -30,7 +36,7 @@ final class VimTextView: NSTextView {
         didSet {
             if mode != oldValue {
                 if oldValue.isVisual && !mode.isVisual {
-                    visualAnchorPosition = nil
+                    visualState = nil
                 }
                 if mode != .normal {
                     isShowingRootHintCatalog = false
@@ -113,9 +119,7 @@ final class VimTextView: NSTextView {
 
     private func moveVisualCursorTo(_ pos: Int) {
         let text = string as NSString
-        normalCursorPosition = text.length > 0
-            ? max(0, min(pos, text.length - 1))
-            : 0
+        visualState = visualState?.movingHead(to: pos, in: text)
 
         let selectionRange = visualSelectionDisplayRange()
         setSelectedRange(selectionRange)
@@ -127,39 +131,21 @@ final class VimTextView: NSTextView {
         return max(0, min(normalCursorPosition, length))
     }
 
-    private var currentVisualKind: VimVisualKind? {
-        switch mode {
-        case .visual:
-            .characterwise
-        case .visualLine:
-            .linewise
-        case .normal, .insert:
-            nil
-        }
-    }
-
     private func visualSelectionDisplayRange() -> NSRange {
-        currentVisualSelection()?.range ?? NSRange(location: 0, length: 0)
+        visualState?.displayRange(in: string as NSString) ?? NSRange(location: 0, length: 0)
     }
 
     private func currentVisualSelection() -> VimSelectionResult? {
         let text = string as NSString
         guard text.length > 0 else { return nil }
-        guard let visualAnchorPosition, let currentVisualKind else { return nil }
-
-        return VimSelectionResolver.visualSelectionResult(
-            kind: currentVisualKind,
-            in: text,
-            anchor: visualAnchorPosition,
-            head: normalCursorPosition
-        )
+        return visualState?.selection(in: text)
     }
 
     func loadDocumentText(_ text: String, undoHistory: VimUndoHistory) {
         finalizeActiveInsertSessionIfNeeded()
         activeUndoHistory = undoHistory
         isShowingRootHintCatalog = false
-        visualAnchorPosition = nil
+        visualState = nil
         string = text
         normalCursorPosition = 0
         setSelectedRange(NSRange(location: 0, length: 0))
@@ -310,7 +296,7 @@ final class VimTextView: NSTextView {
     // MARK: - Mode Transitions
 
     private func enterInsertMode(at insertionPosition: Int? = nil) {
-        visualAnchorPosition = nil
+        visualState = nil
         if let insertionPosition {
             let length = (string as NSString).length
             normalCursorPosition = max(0, min(insertionPosition, length))
@@ -332,19 +318,19 @@ final class VimTextView: NSTextView {
 
     private func enterVisualMode(_ kind: VimVisualKind) {
         let text = string as NSString
-        let anchor: Int
-
-        if mode.isVisual, let visualAnchorPosition {
-            anchor = visualAnchorPosition
+        if mode.isVisual, let visualState {
+            self.visualState = visualState.changingKind(to: kind, in: text)
         } else {
-            anchor = text.length > 0
-                ? max(0, min(normalCursorPosition, text.length - 1))
-                : 0
+            visualState = VimVisualState.begin(
+                kind: kind,
+                at: normalCursorPosition,
+                in: text
+            )
         }
 
-        visualAnchorPosition = anchor
-        vimEngine.setMode(kind.mode)
-        mode = kind.mode
+        let visualMode = visualState?.mode ?? kind.mode
+        vimEngine.setMode(visualMode)
+        mode = visualMode
     }
 
     private func enterNormalModeFromVisual(at cursorPosition: Int) {
@@ -353,7 +339,7 @@ final class VimTextView: NSTextView {
             ? max(0, min(cursorPosition, text.length - 1))
             : 0
 
-        visualAnchorPosition = nil
+        visualState = nil
         setSelectedRange(NSRange(location: min(clampedCursor, text.length), length: 0))
         normalCursorPosition = clampedCursor
         vimEngine.clearPendingInput()
@@ -566,7 +552,7 @@ final class VimTextView: NSTextView {
         }
 
         let beforeCursor = normalCursorPosition
-        visualAnchorPosition = nil
+        visualState = nil
         applyChange(selection, beforeCursorPosition: beforeCursor)
     }
 
@@ -776,7 +762,7 @@ final class VimTextView: NSTextView {
         replaceEntireTextWithUndoCaptureSuppressed(navigationResult.text)
         vimEngine.clearPendingInput()
         vimEngine.setPreferredColumn(nil)
-        visualAnchorPosition = nil
+        visualState = nil
         vimEngine.setMode(.normal)
 
         if mode != .normal {
