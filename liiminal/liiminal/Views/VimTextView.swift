@@ -16,6 +16,7 @@ final class VimTextView: NSTextView {
     private let vimEngine = VimEngine()
     private var activeUndoHistory: VimUndoHistory?
     private var suppressUndoCapture = false
+    private var isSynchronizingDocumentHeight = false
     private var isShowingRootHintCatalog = false
     private var visualState: VimVisualState? {
         didSet {
@@ -62,7 +63,7 @@ final class VimTextView: NSTextView {
             clearNormalCursor()
             let selectionRange = visualSelectionDisplayRange()
             setSelectedRange(selectionRange)
-            scrollRangeToVisible(selectionRange)
+            ensureActiveCursorVisible()
         case .insert:
             clearNormalCursor()
             // Place the real insertion point at the tracked position
@@ -97,8 +98,7 @@ final class VimTextView: NSTextView {
             forCharacterRange: highlightRange
         )
 
-        // Ensure it's visible
-        scrollRangeToVisible(highlightRange)
+        ensureActiveCursorVisible()
     }
 
     private func clearNormalCursor() {
@@ -123,7 +123,7 @@ final class VimTextView: NSTextView {
 
         let selectionRange = visualSelectionDisplayRange()
         setSelectedRange(selectionRange)
-        scrollRangeToVisible(selectionRange)
+        ensureActiveCursorVisible()
     }
 
     private func insertionPointPosition() -> Int {
@@ -157,6 +157,7 @@ final class VimTextView: NSTextView {
             updateModeAppearance()
         }
 
+        synchronizeDocumentHeightToContent()
         publishVimState()
     }
 
@@ -198,6 +199,20 @@ final class VimTextView: NSTextView {
             replacementString: replacementString ?? ""
         )
         return true
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        synchronizeDocumentHeightToContent()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = abs(frame.size.width - newSize.width) > 0.5
+        super.setFrameSize(newSize)
+
+        if widthChanged {
+            synchronizeDocumentHeightToContent()
+        }
     }
 
     // MARK: - Insert Mode
@@ -356,6 +371,12 @@ final class VimTextView: NSTextView {
             enterVisualMode(kind)
         case .exitVisual:
             enterNormalModeFromVisual(at: normalCursorPosition)
+        case .scrollCursorLine(let placement):
+            VimViewportController.alignCursorLine(
+                at: currentViewportCursorPosition(),
+                to: placement,
+                in: self
+            )
         case .enterInsert(let transition):
             applyInsertTransition(transition)
         case .moveText(let motion, let count):
@@ -777,6 +798,37 @@ final class VimTextView: NSTextView {
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
         drawNormalCursor()
+    }
+
+    private func currentViewportCursorPosition() -> Int {
+        if let visualState {
+            return visualState.cursorPosition
+        }
+        return normalCursorPosition
+    }
+
+    private func ensureActiveCursorVisible() {
+        VimViewportController.ensurePositionVisible(currentViewportCursorPosition(), in: self)
+    }
+
+    private func synchronizeDocumentHeightToContent() {
+        guard !isSynchronizingDocumentHeight else { return }
+        guard let layoutManager, let textContainer else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let minimumHeight = enclosingScrollView?.contentView.bounds.height ?? bounds.height
+        let targetHeight = max(
+            ceil(usedRect.height + (textContainerOrigin.y * 2)),
+            minimumHeight
+        )
+
+        guard abs(frame.size.height - targetHeight) > 0.5 else { return }
+
+        isSynchronizingDocumentHeight = true
+        defer { isSynchronizingDocumentHeight = false }
+        super.setFrameSize(NSSize(width: frame.size.width, height: targetHeight))
     }
 
     private func writeSelectionToPasteboard(text: String, linewise: Bool) {

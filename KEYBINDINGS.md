@@ -133,6 +133,7 @@ Examples:
 ### View-Relative Movement
 
 These motions are based on the current viewport rather than only on document lines.
+As you move the cursor in Normal mode or extend a selection in Visual mode, the editor also auto-scrolls just enough to keep the active cursor position visible.
 
 | Key | Behavior |
 | --- | --- |
@@ -143,6 +144,9 @@ These motions are based on the current viewport rather than only on document lin
 | `Ctrl-D` | Move down by half a page. With a count, move down by that many screen lines. |
 | `Ctrl-B` | Move up by one full page. With a count, move up by that many full pages. |
 | `Ctrl-F` | Move down by one full page. With a count, move down by that many full pages. |
+| `zt` | Scroll so the current cursor line is at the top of the viewport. |
+| `zz` | Scroll so the current cursor line is centered in the viewport. |
+| `zb` | Scroll so the current cursor line is at the bottom of the viewport. |
 
 `H` and `L` accept counts. For example, `3H` moves to the third visible line from the top, and `2L` moves to the second visible line from the bottom.
 

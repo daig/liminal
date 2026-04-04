@@ -270,7 +270,7 @@ final class VimEngine {
         case .enterVisual(let kind):
             setMode(kind.mode)
             return .handled(command)
-        case .exitVisual, .deleteSelection, .changeSelection, .yankSelection,
+        case .exitVisual, .scrollCursorLine, .deleteSelection, .changeSelection, .yankSelection,
             .replaceSelectionWithPaste:
             return .handled(command)
         case .enterInsert:

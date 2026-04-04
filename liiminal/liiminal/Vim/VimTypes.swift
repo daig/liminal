@@ -158,6 +158,7 @@ enum VimCommand {
     case enterInsert(VimInsertTransition)
     case enterVisual(VimVisualKind)
     case exitVisual
+    case scrollCursorLine(VimViewportLinePosition)
     case moveText(VimTextMotion, count: Int?)
     case moveLayout(VimLayoutMotion, count: Int?)
     case delete(VimOperatorTarget)
@@ -928,6 +929,17 @@ private enum VimBindingRegistration {
         }
         builder.bind([.character("g"), .character("$")], description: "Screen line end") {
             .moveLayout(.screenLineEnd, count: $0)
+        }
+
+        builder.describeGroup([.character("z")], label: "Scroll")
+        builder.bind([.character("z"), .character("t")], description: "Cursor line to top") {
+            _ in .scrollCursorLine(.top)
+        }
+        builder.bind([.character("z"), .character("z")], description: "Cursor line to center") {
+            _ in .scrollCursorLine(.middle)
+        }
+        builder.bind([.character("z"), .character("b")], description: "Cursor line to bottom") {
+            _ in .scrollCursorLine(.bottom)
         }
 
         bindTextMotion(

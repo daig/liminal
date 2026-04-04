@@ -231,15 +231,7 @@ enum VimLayoutNavigator {
     }
 
     private static func scrollViewport(by deltaY: CGFloat, in textView: NSTextView) {
-        guard let scrollView = textView.enclosingScrollView else { return }
-
-        let visibleRect = textView.visibleRect
-        let maxOriginY = max(documentRect(in: textView).maxY - visibleRect.height, 0)
-        let newOriginY = max(0, min(visibleRect.origin.y + deltaY, maxOriginY))
-        let clipView = scrollView.contentView
-
-        clipView.scroll(to: NSPoint(x: visibleRect.origin.x, y: newOriginY))
-        scrollView.reflectScrolledClipView(clipView)
+        VimViewportController.scroll(by: deltaY, in: textView)
     }
 
     private static func screenLineContext(
@@ -291,24 +283,11 @@ enum VimLayoutNavigator {
     }
 
     private static func documentRect(in textView: NSTextView) -> NSRect {
-        guard let layoutManager = textView.layoutManager,
-            let textContainer = textView.textContainer
-        else {
-            return textView.bounds
-        }
-
-        let usedRect = layoutManager.usedRect(for: textContainer)
-        return usedRect.offsetBy(
-            dx: textView.textContainerOrigin.x,
-            dy: textView.textContainerOrigin.y
-        )
+        VimViewportController.state(in: textView)?.documentRect ?? textView.bounds
     }
 
     private static func clampPointY(_ y: CGFloat, in textView: NSTextView) -> CGFloat {
-        let documentRect = documentRect(in: textView)
-        let minimum = documentRect.minY + 1
-        let maximum = max(documentRect.maxY - 1, minimum)
-        return max(minimum, min(y, maximum))
+        VimViewportController.state(in: textView)?.clampedPointY(y) ?? y
     }
 
     private static func lineContentUpperBound(of range: NSRange, in text: NSString) -> Int {

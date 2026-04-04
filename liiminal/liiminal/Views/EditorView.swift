@@ -10,7 +10,12 @@ struct EditorView: NSViewRepresentable {
         textContentStorage.addTextLayoutManager(textLayoutManager)
 
         let textContainer = NSTextContainer()
+        textContainer.containerSize = NSSize(
+            width: 0,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textContainer.widthTracksTextView = true
+        textContainer.heightTracksTextView = false
         textLayoutManager.textContainer = textContainer
 
         let textView = VimTextView(frame: .zero, textContainer: textContainer)
@@ -27,6 +32,11 @@ struct EditorView: NSViewRepresentable {
         textView.textColor = .textColor
         textView.insertionPointColor = .textColor
         textView.backgroundColor = .textBackgroundColor
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
