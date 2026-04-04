@@ -13,8 +13,8 @@ struct EditorView: NSViewRepresentable {
         textContainer.widthTracksTextView = true
         textLayoutManager.textContainer = textContainer
 
-        let textView = NSTextView(frame: .zero, textContainer: textContainer)
-        textView.isEditable = true
+        let textView = VimTextView(frame: .zero, textContainer: textContainer)
+        textView.isEditable = false  // starts in normal mode
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.isRichText = false
@@ -40,10 +40,11 @@ struct EditorView: NSViewRepresentable {
         scrollView.drawsBackground = true
 
         textView.delegate = context.coordinator
+        textView.vimDelegate = context.coordinator
         context.coordinator.textView = textView
 
         if let note = editorViewModel.currentNote {
-            textView.string = note.content
+            textView.loadDocumentText(note.content)
             context.coordinator.currentNoteID = note.id
             context.coordinator.applyHighlighting()
         }
@@ -57,7 +58,7 @@ struct EditorView: NSViewRepresentable {
         let newNoteID = editorViewModel.currentNote?.id
         if context.coordinator.currentNoteID != newNoteID {
             context.coordinator.currentNoteID = newNoteID
-            textView.string = editorViewModel.currentNote?.content ?? ""
+            textView.loadDocumentText(editorViewModel.currentNote?.content ?? "")
             textView.scrollToBeginningOfDocument(nil)
             context.coordinator.applyHighlighting()
         }
@@ -69,8 +70,8 @@ struct EditorView: NSViewRepresentable {
 
     // MARK: - Coordinator
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var textView: NSTextView?
+    final class Coordinator: NSObject, NSTextViewDelegate, VimTextViewDelegate {
+        var textView: VimTextView?
         var currentNoteID: URL?
         let editorViewModel: EditorViewModel
         private var isHighlighting = false
@@ -84,6 +85,12 @@ struct EditorView: NSViewRepresentable {
 
         init(editorViewModel: EditorViewModel) {
             self.editorViewModel = editorViewModel
+        }
+
+        // MARK: - Vim Delegate
+
+        func vimTextView(_ textView: VimTextView, didChangeMode mode: VimMode) {
+            editorViewModel.vimMode = mode
         }
 
         // MARK: - Table Position Queries

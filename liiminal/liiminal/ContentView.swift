@@ -21,6 +21,21 @@ struct ContentView: View {
                             }
                         }
                         .toolbar {
+                            if !showPreview {
+                                ToolbarItem(placement: .automatic) {
+                                    Text(editorVM.vimMode.rawValue.uppercased())
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .foregroundStyle(editorVM.vimMode == .normal ? .orange : .secondary)
+                                        .background(
+                                            editorVM.vimMode == .normal
+                                                ? Color.orange.opacity(0.15)
+                                                : Color.secondary.opacity(0.1)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                }
+                            }
                             ToolbarItem(placement: .automatic) {
                                 Button {
                                     showPreview.toggle()

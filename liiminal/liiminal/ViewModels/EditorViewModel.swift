@@ -1,10 +1,16 @@
 import Foundation
 
+enum VimMode: String {
+    case normal
+    case insert
+}
+
 @Observable
 final class EditorViewModel {
     var currentNote: Note?
     var isDirty: Bool = false
     var document: Document = Document(blocks: [])
+    var vimMode: VimMode = .normal
 
     let fileService: FileSystemService
     private var saveTask: Task<Void, Never>?

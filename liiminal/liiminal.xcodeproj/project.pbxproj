@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		231255EE2F807DF1001A9B4C /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = CCC100000000000000000001 /* LaTeXSwiftUI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		231255522F803DB6001A9B4C /* liiminal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = liiminal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				231255EE2F807DF1001A9B4C /* LaTeXSwiftUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -95,13 +100,13 @@
 			);
 			mainGroup = 231255492F803DB6001A9B4C;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CCC000000000000000000001 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 231255532F803DB6001A9B4C /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			packageReferences = (
-				CCC000000000000000000001 /* XCRemoteSwiftPackageReference "LaTeXSwiftUI" */,
-			);
 			targets = (
 				231255512F803DB6001A9B4C /* liiminal */,
 			);

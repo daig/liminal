@@ -9,31 +9,38 @@ Liminal is a modern "personal knowledge base" / note taking system based on obsi
 
 ### Core
 
-- basic text editor interface in the main window
-    - full syntax highlighting for "obsidian flavored" markdown ie:
-        - commonmark
-        - GFM features (tables, strikethrough, task lists, autolinks etc.)
-        - latex / mathjax support for math equations (both inline $...$ and display $$...$$)
-        - Wikilinks: [[Note title]] and [[Note title|Alias]]
-        - Embeds: ![[Note title]] or ![[image.png]]
-        - Block references/embeds: [[Note#^block-id]] and ^block-id to define blocks
-        - Highlights: ==text==
-        - Comments (invisible in preview): %%hidden text%%
-        - Block IDs (^block-id)
-        - Image resizing and alignment: ![[image.png|300]] (width in pixels), ![[image.png|300x200]], or ![[image.png|300x]] (auto height).
-        - You can also combine with headings/blocks: [[Note#Heading|Display text]] or ![[Note#^block-id|Alias]].
-        - mermaid diagrams
-        - yaml frontmatter
-        - inline footnotes: This is a sentence with an inline footnote^[This appears at the bottom of the note].
+- [x] vault / file management (sidebar, open/save/create, directory watching, bookmark persistence)
+- [x] adjustable font size (Cmd+/-, 10-40pt range)
+- [x] basic text editor interface in the main window
+    - [x] full syntax highlighting for "obsidian flavored" markdown ie:
+        - [x] commonmark (headings, paragraphs, code blocks, blockquotes, lists, thematic breaks)
+        - [x] GFM features (tables, strikethrough, task lists, autolinks)
+        - [x] latex / mathjax support for math equations (both inline $...$ and display $$...$$)
+        - [x] Wikilinks: [[Note title]] and [[Note title|Alias]]
+        - [x] Embeds: ![[Note title]] or ![[image.png]]
+        - [x] Block references/embeds: [[Note#^block-id]] and ^block-id to define blocks
+        - [x] Highlights: ==text==
+        - [x] Comments (invisible in preview): %%hidden text%%
+        - [x] Block IDs (^block-id)
+        - [ ] Image resizing and alignment: ![[image.png|300]] (width in pixels), ![[image.png|300x200]], or ![[image.png|300x]] (auto height).
+        - [ ] You can also combine with headings/blocks: [[Note#Heading|Display text]] or ![[Note#^block-id|Alias]].
+        - [ ] mermaid diagrams
+        - [x] yaml frontmatter
+        - [x] inline footnotes: This is a sentence with an inline footnote^[This appears at the bottom of the note].
+        - [x] block-level HTML (CommonMark types 1-7, rendered via NSAttributedString/NSTextView with CSS)
+        - inline HTML: out of scope (block-level HTML is sufficient)
+        - [x] special whitespace detection (tooltips for non-standard whitespace chars)
 
-    - full rendering capability for the above "obsidian flavored" markdown
-        - standalone rendering
-        - live rendering preview
-- wikilink navigation (with backlinks)
-    - for rendered markdown
-    - also from the editing text view (eg holding cmd + click link)
+    - [x] rendering capability for the above "obsidian flavored" markdown
+        - [x] standalone rendering
+        - [x] live rendering preview
+        - note: embeds and images render as placeholders only (no actual image/file loading yet)
+- [ ] wikilink navigation (with backlinks)
+    - wikilinks are styled and have URLs attached, but no navigation handler yet
+    - [ ] for rendered markdown
+    - [ ] also from the editing text view (eg holding cmd + click link)
 
-- basic pdf viewing (not inline, no markup support needed, just basic off-the-shelf pdf viewing)
+- [ ] basic pdf viewing (not inline, no markup support needed, just basic off-the-shelf pdf viewing)
 
 ### Explicitly out of scope
 
@@ -41,12 +48,14 @@ Liminal is a modern "personal knowledge base" / note taking system based on obsi
 
 - Canvas
 
+- inline HTML (block-level HTML is sufficient)
+
 - no need for app store compliance. v1 will be built for source code distribution to developers (since i will use it personally mostly)
 
 
 ### Future work
 
-- obsidian flavored markdown is a good foundation, but we will want to enhance this with stronger navigation metadata and custom semantic rendering types. need to think about what this will be as it affects all future work, but the core is fully satisfied by well-tread OFM behavior. structured data should subsume admonition blocks, yaml frontmatter, mermaid diagrams, inline images, links, etc. basically anything that isn't normal text should have a "first class" structured data descripiton.
+- obsidian flavored markdown is a good foundation, but we will want to enhance this with stronger navigation metadata and custom semantic rendering types. need to think about what this will be as it affects all future work, but the core is fully satisfied by well-tread OFM behavior. structured data should subsume admonition blocks, yaml frontmatter, mermaid diagrams, inline images, links, etc. basically anything that isn't normal text should have a "first class" structured data description.
 
 - html scraper plugin for quickly extracting structured data (or just links) from eg chrome, safari, firefox (this is a standalone plugin for each browser, but we should think about the html -> structured data conversion semantics in a unified way first)
 
