@@ -42,6 +42,42 @@ enum VimSelectionResolver {
         }
     }
 
+    static func wordSelectionResult(
+        in text: NSString,
+        at position: Int
+    ) -> VimSelectionResult? {
+        guard text.length > 0 else { return nil }
+
+        let currentPosition = clamp(position, in: text)
+        let currentCharacter = text.character(at: currentPosition)
+        if currentCharacter == 0x0A {
+            return nil
+        }
+
+        let selectingBoundaryRun = isWordBoundary(currentCharacter)
+        var lowerBound = currentPosition
+        var upperBound = currentPosition + 1
+
+        while lowerBound > 0 {
+            let previousCharacter = text.character(at: lowerBound - 1)
+            if previousCharacter == 0x0A || isWordBoundary(previousCharacter) != selectingBoundaryRun {
+                break
+            }
+            lowerBound -= 1
+        }
+
+        while upperBound < text.length {
+            let nextCharacter = text.character(at: upperBound)
+            if nextCharacter == 0x0A || isWordBoundary(nextCharacter) != selectingBoundaryRun {
+                break
+            }
+            upperBound += 1
+        }
+
+        guard let range = nsRange(from: lowerBound, toExclusive: upperBound) else { return nil }
+        return VimSelectionResult(range: range, cursorAnchor: range.location, linewise: false)
+    }
+
     private static func selectCurrentLines(
         count: Int,
         in text: NSString,

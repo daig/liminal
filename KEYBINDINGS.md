@@ -45,7 +45,12 @@ Examples:
 ## Mouse
 
 - In Normal mode, clicking a character moves the cursor to that position.
-- In Visual mode, clicking a character extends or shrinks the current selection to that position. In linewise Visual mode, the selection still expands and contracts in whole-line units.
+- In Normal mode, double clicking enters characterwise Visual mode and selects the word-like run under the pointer.
+- In Normal mode, triple clicking enters linewise Visual mode and selects the clicked line.
+- In Normal mode, dragging after a left click enters characterwise Visual mode from the clicked character and updates the selection live as you drag.
+- Double-click-plus-drag keeps updating the characterwise Visual selection, and triple-click-plus-drag keeps updating a linewise Visual selection.
+- In Visual mode, a single click cancels Visual mode and moves the cursor to the clicked position.
+- After that click-to-cancel behavior, continuing to drag starts a fresh characterwise Visual selection from the new clicked position.
 - If an operator is pending, such as after `d`, `c`, or `y`, clicking a character uses that clicked position as the motion target for the operator.
 - Operator-pending mouse motions are characterwise and span from the starting cursor position through the clicked position.
 

@@ -11,6 +11,11 @@ final class VimTextView: NSTextView {
         case below
     }
 
+    private enum MouseDragState {
+        case normalAnchor(position: Int, visualKind: VimVisualKind)
+        case visualAdjusting
+    }
+
     weak var vimDelegate: VimTextViewDelegate?
 
     private let vimEngine = VimEngine()
@@ -18,6 +23,7 @@ final class VimTextView: NSTextView {
     private var suppressUndoCapture = false
     private var isSynchronizingDocumentHeight = false
     private var isShowingRootHintCatalog = false
+    private var mouseDragState: MouseDragState?
     private var visualState: VimVisualState? {
         didSet {
             if let visualState {
@@ -145,6 +151,7 @@ final class VimTextView: NSTextView {
         finalizeActiveInsertSessionIfNeeded()
         activeUndoHistory = undoHistory
         isShowingRootHintCatalog = false
+        mouseDragState = nil
         visualState = nil
         string = text
         normalCursorPosition = 0
@@ -182,6 +189,28 @@ final class VimTextView: NSTextView {
             handleVisualModeMouseDown(event)
         case .insert:
             super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        switch mode {
+        case .normal:
+            handleNormalModeMouseDragged(event)
+        case .visual, .visualLine:
+            handleVisualModeMouseDragged(event)
+        case .insert:
+            super.mouseDragged(with: event)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        mouseDragState = nil
+
+        switch mode {
+        case .insert:
+            super.mouseUp(with: event)
+        case .normal, .visual, .visualLine:
+            break
         }
     }
 
@@ -260,8 +289,22 @@ final class VimTextView: NSTextView {
     private func handleNormalModeMouseDown(_ event: NSEvent) {
         window?.makeFirstResponder(self)
         isShowingRootHintCatalog = false
+        let hadPendingInput = vimEngine.sessionState.hasPendingInput
 
         guard let targetPosition = mouseTargetPosition(for: event) else {
+            mouseDragState = nil
+            publishVimState()
+            return
+        }
+
+        if event.clickCount >= 3 && hadPendingInput == false {
+            applyNormalModeTripleClick(at: targetPosition)
+            publishVimState()
+            return
+        }
+
+        if event.clickCount >= 2 && hadPendingInput == false {
+            applyNormalModeDoubleClick(at: targetPosition)
             publishVimState()
             return
         }
@@ -273,6 +316,66 @@ final class VimTextView: NSTextView {
             break
         }
 
+        mouseDragState = hadPendingInput ? nil : .normalAnchor(
+            position: normalCursorPosition,
+            visualKind: .characterwise
+        )
+        publishVimState()
+    }
+
+    private func applyNormalModeDoubleClick(at position: Int) {
+        let text = string as NSString
+
+        guard let selection = VimSelectionResolver.wordSelectionResult(in: text, at: position) else {
+            moveCursorTo(position)
+            mouseDragState = .normalAnchor(
+                position: normalCursorPosition,
+                visualKind: .characterwise
+            )
+            return
+        }
+
+        visualState = VimVisualState(
+            kind: .characterwise,
+            anchorPosition: selection.range.location,
+            headPosition: NSMaxRange(selection.range) - 1
+        )
+        mouseDragState = .visualAdjusting
+        vimEngine.clearPendingInput()
+        vimEngine.setPreferredColumn(nil)
+        vimEngine.setMode(.visual)
+        mode = .visual
+    }
+
+    private func applyNormalModeTripleClick(at position: Int) {
+        let text = string as NSString
+        let clampedPosition: Int
+        if text.length > 0 {
+            clampedPosition = max(0, min(position, text.length - 1))
+        } else {
+            clampedPosition = 0
+        }
+
+        visualState = VimVisualState(
+            kind: .linewise,
+            anchorPosition: clampedPosition,
+            headPosition: clampedPosition
+        )
+        mouseDragState = .visualAdjusting
+        vimEngine.clearPendingInput()
+        vimEngine.setPreferredColumn(nil)
+        vimEngine.setMode(.visualLine)
+        mode = .visualLine
+    }
+
+    private func handleNormalModeMouseDragged(_ event: NSEvent) {
+        guard case .normalAnchor(let anchorPosition, let visualKind) = mouseDragState else { return }
+        guard let targetPosition = mouseTargetPosition(for: event) else { return }
+        guard targetPosition != anchorPosition else { return }
+
+        enterVisualMode(visualKind)
+        moveVisualCursorTo(targetPosition)
+        mouseDragState = .visualAdjusting
         publishVimState()
     }
 
@@ -294,23 +397,45 @@ final class VimTextView: NSTextView {
         isShowingRootHintCatalog = false
 
         guard let targetPosition = mouseTargetPosition(for: event) else {
+            mouseDragState = nil
             publishVimState()
             return
         }
 
-        switch vimEngine.handleTargetPosition(targetPosition) {
-        case .handled(let command):
-            apply(command)
-        case .pending, .ignored:
-            break
+        if event.clickCount >= 3 {
+            enterNormalModeFromVisual(at: targetPosition)
+            applyNormalModeTripleClick(at: targetPosition)
+            publishVimState()
+            return
         }
 
+        if event.clickCount >= 2 {
+            enterNormalModeFromVisual(at: targetPosition)
+            applyNormalModeDoubleClick(at: targetPosition)
+            publishVimState()
+            return
+        }
+
+        enterNormalModeFromVisual(at: targetPosition)
+        mouseDragState = .normalAnchor(
+            position: normalCursorPosition,
+            visualKind: .characterwise
+        )
+        publishVimState()
+    }
+
+    private func handleVisualModeMouseDragged(_ event: NSEvent) {
+        guard case .visualAdjusting = mouseDragState else { return }
+        guard let targetPosition = mouseTargetPosition(for: event) else { return }
+
+        moveVisualCursorTo(targetPosition)
         publishVimState()
     }
 
     // MARK: - Mode Transitions
 
     private func enterInsertMode(at insertionPosition: Int? = nil) {
+        mouseDragState = nil
         visualState = nil
         if let insertionPosition {
             let length = (string as NSString).length
@@ -324,6 +449,7 @@ final class VimTextView: NSTextView {
     }
 
     private func enterNormalModeFromInsert() {
+        mouseDragState = nil
         vimEngine.setMode(.normal)
         mode = .normal
         normalCursorPosition = committedNormalCursorPosition()
@@ -354,6 +480,7 @@ final class VimTextView: NSTextView {
             ? max(0, min(cursorPosition, text.length - 1))
             : 0
 
+        mouseDragState = nil
         visualState = nil
         setSelectedRange(NSRange(location: min(clampedCursor, text.length), length: 0))
         normalCursorPosition = clampedCursor
@@ -781,6 +908,7 @@ final class VimTextView: NSTextView {
         guard let navigationResult else { return }
 
         replaceEntireTextWithUndoCaptureSuppressed(navigationResult.text)
+        mouseDragState = nil
         vimEngine.clearPendingInput()
         vimEngine.setPreferredColumn(nil)
         visualState = nil
