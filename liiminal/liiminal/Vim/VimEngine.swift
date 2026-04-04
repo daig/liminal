@@ -48,6 +48,25 @@ final class VimEngine {
         sessionState.clearPendingInput()
     }
 
+    func handleTargetPosition(_ position: Int) -> VimHandleResult {
+        guard sessionState.mode == .normal else { return .ignored }
+
+        let motion = VimTextMotion.targetPosition(position)
+
+        if let pendingOperator = sessionState.pendingOperator {
+            sessionState.clearPendingInput()
+            return resolvePendingOperator(
+                pendingOperator,
+                motion: .characterwise(motion),
+                operatorCount: nil,
+                motionCount: nil
+            )
+        }
+
+        sessionState.clearPendingInput()
+        return resolve(.moveText(motion, count: nil))
+    }
+
     func setPreferredColumn(_ preferredColumn: Int?) {
         sessionState.preferredColumn = preferredColumn
     }

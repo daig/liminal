@@ -84,6 +84,13 @@ enum VimSelectionResolver {
         case .right:
             let end = min(lineUpperBound, position + count)
             range = nsRange(from: position, toExclusive: end)
+        case .targetPosition(let targetPosition):
+            let destination = VimNavigator.normalizedPosition(targetPosition, in: text)
+            guard destination != position else { return nil }
+
+            let lowerBound = min(position, destination)
+            let upperBound = min(max(position, destination) + 1, text.length)
+            range = nsRange(from: lowerBound, toExclusive: upperBound)
         case .lineStart:
             range = nsRange(from: lineLowerBound, toExclusive: position)
         case .lineFirstNonBlank:

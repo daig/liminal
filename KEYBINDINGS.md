@@ -40,6 +40,12 @@ Examples:
 - `Space` in idle Normal mode opens the top-level command catalog immediately.
 - `Esc` closes the hint panel when it is open and there is no active pending command.
 
+## Mouse
+
+- In Normal mode, clicking a character moves the cursor to that position.
+- If an operator is pending, such as after `d`, `c`, or `y`, clicking a character uses that clicked position as the motion target for the operator.
+- Operator-pending mouse motions are characterwise and span from the starting cursor position through the clicked position.
+
 ## Normal Mode Navigation
 
 ### Basic Cursor Movement

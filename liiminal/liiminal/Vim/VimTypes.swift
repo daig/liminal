@@ -58,6 +58,7 @@ enum VimTextMotion {
     case right
     case up
     case down
+    case targetPosition(Int)
     case lineStart
     case lineFirstNonBlank
     case lineEnd

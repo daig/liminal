@@ -50,6 +50,11 @@ enum VimNavigator {
                 preferredColumn: preferredColumn,
                 direction: 1
             )
+        case .targetPosition(let targetPosition):
+            return VimNavigationResult(
+                position: normalizedCursorPosition(targetPosition, in: text),
+                preferredColumn: nil
+            )
         case .lineStart:
             return VimNavigationResult(
                 position: text.lineRange(for: NSRange(location: currentPosition, length: 0))
@@ -523,6 +528,10 @@ enum VimNavigator {
         }
 
         return normalized
+    }
+
+    static func normalizedPosition(_ position: Int, in text: NSString) -> Int {
+        normalizedCursorPosition(position, in: text)
     }
 
     private static func clamp(_ position: Int, in text: NSString) -> Int {

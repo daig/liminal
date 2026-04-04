@@ -135,6 +135,15 @@ final class VimTextView: NSTextView {
         }
     }
 
+    override func mouseDown(with event: NSEvent) {
+        switch mode {
+        case .normal:
+            handleNormalModeMouseDown(event)
+        case .insert:
+            super.mouseDown(with: event)
+        }
+    }
+
     override func shouldChangeText(
         in affectedCharRange: NSRange,
         replacementString: String?
@@ -184,6 +193,25 @@ final class VimTextView: NSTextView {
         }
 
         switch vimEngine.handle(keyPress) {
+        case .handled(let command):
+            apply(command)
+        case .pending, .ignored:
+            break
+        }
+
+        publishVimState()
+    }
+
+    private func handleNormalModeMouseDown(_ event: NSEvent) {
+        window?.makeFirstResponder(self)
+        isShowingRootHintCatalog = false
+
+        guard let targetPosition = mouseTargetPosition(for: event) else {
+            publishVimState()
+            return
+        }
+
+        switch vimEngine.handleTargetPosition(targetPosition) {
         case .handled(let command):
             apply(command)
         case .pending, .ignored:
@@ -683,6 +711,21 @@ final class VimTextView: NSTextView {
         }
 
         return vimEngine.hintCandidate
+    }
+
+    private func mouseTargetPosition(for event: NSEvent) -> Int? {
+        let text = string as NSString
+        guard text.length > 0 else { return 0 }
+        guard let layoutManager, let textContainer else { return nil }
+
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        let containerPoint = NSPoint(
+            x: viewPoint.x - textContainerOrigin.x,
+            y: viewPoint.y - textContainerOrigin.y
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        return min(characterIndex, text.length - 1)
     }
 
     private func keyPress(for event: NSEvent) -> VimKeyPress? {
