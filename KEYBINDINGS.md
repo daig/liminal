@@ -33,6 +33,13 @@ Examples:
 - `2w`: move forward 2 words.
 - `10G`: go to line 10.
 
+## Command Hints
+
+- After a short delay, Normal mode shows a bottom-of-editor hint panel for pending prefixes such as `d`, `c`, `y`, `g`, `f`, and `t`.
+- The hint panel is generated directly from the currently registered command bindings, so it always matches the actual supported commands.
+- `Space` in idle Normal mode opens the top-level command catalog immediately.
+- `Esc` closes the hint panel when it is open and there is no active pending command.
+
 ## Normal Mode Navigation
 
 ### Basic Cursor Movement

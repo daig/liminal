@@ -176,6 +176,15 @@ struct VimSessionState {
         pendingCharacterOperatorMotionFactory = nil
     }
 
+    var hasPendingInput: Bool {
+        pendingCount != nil
+            || pendingOperatorCount != nil
+            || !pendingKeys.isEmpty
+            || pendingCharacterCommandFactory != nil
+            || pendingOperator != nil
+            || pendingCharacterOperatorMotionFactory != nil
+    }
+
     var statusPresentation: VimStatusPresentation {
         VimStatusPresentation(
             mode: mode,
@@ -223,7 +232,7 @@ struct VimSessionState {
             sequence += String(pendingCount)
         }
 
-        sequence += pendingKeys.map(\.statusNotation).joined()
+        sequence += pendingKeys.map(\.displayNotation).joined()
 
         return sequence + "…"
     }
@@ -242,13 +251,13 @@ struct VimSessionState {
             sequence += String(pendingCount)
         }
 
-        sequence += pendingKeys.map(\.statusNotation).joined()
+        sequence += pendingKeys.map(\.displayNotation).joined()
 
         return sequence + "…"
     }
 }
 
-private extension VimOperator {
+extension VimOperator {
     var statusLabel: String {
         switch self {
         case .delete:
@@ -257,6 +266,17 @@ private extension VimOperator {
             "CHANGE"
         case .yank:
             "YANK"
+        }
+    }
+
+    var displayLabel: String {
+        switch self {
+        case .delete:
+            "Delete"
+        case .change:
+            "Change"
+        case .yank:
+            "Yank"
         }
     }
 
@@ -272,11 +292,11 @@ private extension VimOperator {
     }
 }
 
-private extension VimKeyPress {
-    var statusNotation: String {
+extension VimKeyPress {
+    var displayNotation: String {
         switch self {
         case .character(let character):
-            String(character)
+            character == " " ? "Space" : String(character)
         case .special(.escape):
             "Esc"
         case .special(.leftArrow):
@@ -307,7 +327,12 @@ struct VimBindingTree {
     struct Node {
         var commandFactory: VimCommandFactory?
         var characterCommandFactory: VimCharacterCommandFactory?
+        var hintLabel: String?
+        var hintItemKind: VimHintItemKind?
+        var argumentPlaceholder: String?
+        var argumentDescription: String?
         var children: [VimKeyPress: Node] = [:]
+        var childOrder: [VimKeyPress] = []
     }
 
     enum Match {
@@ -321,51 +346,150 @@ struct VimBindingTree {
         private var root = Node()
 
         mutating func bind(
-            _ sequence: [VimKeyPress], command: @escaping VimCommandFactory
+            _ sequence: [VimKeyPress],
+            description: String,
+            kind: VimHintItemKind = .action,
+            command: @escaping VimCommandFactory
         ) {
             guard !sequence.isEmpty else { return }
-            insert(sequence, command: command, at: &root)
+            insert(
+                sequence,
+                metadata: NodeMetadata(label: description, itemKind: kind),
+                command: command,
+                at: &root
+            )
         }
 
         mutating func bindCharacterArgument(
-            _ sequence: [VimKeyPress], command: @escaping VimCharacterCommandFactory
+            _ sequence: [VimKeyPress],
+            description: String,
+            argumentPlaceholder: String,
+            argumentDescription: String,
+            command: @escaping VimCharacterCommandFactory
         ) {
             guard !sequence.isEmpty else { return }
-            insertCharacterArgument(sequence, command: command, at: &root)
+            insertCharacterArgument(
+                sequence,
+                metadata: NodeMetadata(
+                    label: description,
+                    itemKind: .action,
+                    argumentPlaceholder: argumentPlaceholder,
+                    argumentDescription: argumentDescription
+                ),
+                command: command,
+                at: &root
+            )
+        }
+
+        mutating func describeGroup(_ sequence: [VimKeyPress], label: String) {
+            guard !sequence.isEmpty else { return }
+            insertGroup(
+                sequence,
+                metadata: NodeMetadata(label: label, itemKind: .group),
+                at: &root
+            )
+        }
+
+        private struct NodeMetadata {
+            let label: String?
+            let itemKind: VimHintItemKind?
+            let argumentPlaceholder: String?
+            let argumentDescription: String?
+
+            init(
+                label: String? = nil,
+                itemKind: VimHintItemKind? = nil,
+                argumentPlaceholder: String? = nil,
+                argumentDescription: String? = nil
+            ) {
+                self.label = label
+                self.itemKind = itemKind
+                self.argumentPlaceholder = argumentPlaceholder
+                self.argumentDescription = argumentDescription
+            }
         }
 
         private func insert(
             _ sequence: [VimKeyPress],
+            metadata: NodeMetadata,
             command: @escaping VimCommandFactory,
             at node: inout Node
         ) {
             guard let head = sequence.first else {
                 node.commandFactory = command
+                apply(metadata, to: &node)
                 return
             }
 
             var child = node.children[head] ?? Node()
-            insert(Array(sequence.dropFirst()), command: command, at: &child)
+            insert(
+                Array(sequence.dropFirst()),
+                metadata: metadata,
+                command: command,
+                at: &child
+            )
             node.children[head] = child
+            if !node.childOrder.contains(head) {
+                node.childOrder.append(head)
+            }
         }
 
         private func insertCharacterArgument(
             _ sequence: [VimKeyPress],
+            metadata: NodeMetadata,
             command: @escaping VimCharacterCommandFactory,
             at node: inout Node
         ) {
             guard let head = sequence.first else {
                 node.characterCommandFactory = command
+                apply(metadata, to: &node)
                 return
             }
 
             var child = node.children[head] ?? Node()
             insertCharacterArgument(
                 Array(sequence.dropFirst()),
+                metadata: metadata,
                 command: command,
                 at: &child
             )
             node.children[head] = child
+            if !node.childOrder.contains(head) {
+                node.childOrder.append(head)
+            }
+        }
+
+        private func insertGroup(
+            _ sequence: [VimKeyPress],
+            metadata: NodeMetadata,
+            at node: inout Node
+        ) {
+            guard let head = sequence.first else {
+                apply(metadata, to: &node)
+                return
+            }
+
+            var child = node.children[head] ?? Node()
+            insertGroup(Array(sequence.dropFirst()), metadata: metadata, at: &child)
+            node.children[head] = child
+            if !node.childOrder.contains(head) {
+                node.childOrder.append(head)
+            }
+        }
+
+        private func apply(_ metadata: NodeMetadata, to node: inout Node) {
+            if let label = metadata.label {
+                node.hintLabel = label
+            }
+            if let itemKind = metadata.itemKind {
+                node.hintItemKind = itemKind
+            }
+            if let argumentPlaceholder = metadata.argumentPlaceholder {
+                node.argumentPlaceholder = argumentPlaceholder
+            }
+            if let argumentDescription = metadata.argumentDescription {
+                node.argumentDescription = argumentDescription
+            }
         }
 
         func build() -> VimBindingTree {
@@ -374,6 +498,17 @@ struct VimBindingTree {
     }
 
     let root: Node
+
+    func node(at keys: [VimKeyPress]) -> Node? {
+        var node = root
+
+        for key in keys {
+            guard let child = node.children[key] else { return nil }
+            node = child
+        }
+
+        return node
+    }
 
     func match(_ keys: [VimKeyPress]) -> Match {
         guard !keys.isEmpty else { return .partial }
@@ -400,7 +535,12 @@ struct VimOperatorMotionBindingTree {
     struct Node {
         var motionFactory: VimOperatorMotionFactory?
         var characterMotionFactory: VimCharacterOperatorMotionFactory?
+        var hintLabel: String?
+        var hintItemKind: VimHintItemKind?
+        var argumentPlaceholder: String?
+        var argumentDescription: String?
         var children: [VimKeyPress: Node] = [:]
+        var childOrder: [VimKeyPress] = []
     }
 
     enum Match {
@@ -414,51 +554,150 @@ struct VimOperatorMotionBindingTree {
         private var root = Node()
 
         mutating func bind(
-            _ sequence: [VimKeyPress], motion: @escaping VimOperatorMotionFactory
+            _ sequence: [VimKeyPress],
+            description: String,
+            kind: VimHintItemKind = .action,
+            motion: @escaping VimOperatorMotionFactory
         ) {
             guard !sequence.isEmpty else { return }
-            insert(sequence, motion: motion, at: &root)
+            insert(
+                sequence,
+                metadata: NodeMetadata(label: description, itemKind: kind),
+                motion: motion,
+                at: &root
+            )
         }
 
         mutating func bindCharacterArgument(
-            _ sequence: [VimKeyPress], motion: @escaping VimCharacterOperatorMotionFactory
+            _ sequence: [VimKeyPress],
+            description: String,
+            argumentPlaceholder: String,
+            argumentDescription: String,
+            motion: @escaping VimCharacterOperatorMotionFactory
         ) {
             guard !sequence.isEmpty else { return }
-            insertCharacterArgument(sequence, motion: motion, at: &root)
+            insertCharacterArgument(
+                sequence,
+                metadata: NodeMetadata(
+                    label: description,
+                    itemKind: .action,
+                    argumentPlaceholder: argumentPlaceholder,
+                    argumentDescription: argumentDescription
+                ),
+                motion: motion,
+                at: &root
+            )
+        }
+
+        mutating func describeGroup(_ sequence: [VimKeyPress], label: String) {
+            guard !sequence.isEmpty else { return }
+            insertGroup(
+                sequence,
+                metadata: NodeMetadata(label: label, itemKind: .group),
+                at: &root
+            )
+        }
+
+        private struct NodeMetadata {
+            let label: String?
+            let itemKind: VimHintItemKind?
+            let argumentPlaceholder: String?
+            let argumentDescription: String?
+
+            init(
+                label: String? = nil,
+                itemKind: VimHintItemKind? = nil,
+                argumentPlaceholder: String? = nil,
+                argumentDescription: String? = nil
+            ) {
+                self.label = label
+                self.itemKind = itemKind
+                self.argumentPlaceholder = argumentPlaceholder
+                self.argumentDescription = argumentDescription
+            }
         }
 
         private func insert(
             _ sequence: [VimKeyPress],
+            metadata: NodeMetadata,
             motion: @escaping VimOperatorMotionFactory,
             at node: inout Node
         ) {
             guard let head = sequence.first else {
                 node.motionFactory = motion
+                apply(metadata, to: &node)
                 return
             }
 
             var child = node.children[head] ?? Node()
-            insert(Array(sequence.dropFirst()), motion: motion, at: &child)
+            insert(
+                Array(sequence.dropFirst()),
+                metadata: metadata,
+                motion: motion,
+                at: &child
+            )
             node.children[head] = child
+            if !node.childOrder.contains(head) {
+                node.childOrder.append(head)
+            }
         }
 
         private func insertCharacterArgument(
             _ sequence: [VimKeyPress],
+            metadata: NodeMetadata,
             motion: @escaping VimCharacterOperatorMotionFactory,
             at node: inout Node
         ) {
             guard let head = sequence.first else {
                 node.characterMotionFactory = motion
+                apply(metadata, to: &node)
                 return
             }
 
             var child = node.children[head] ?? Node()
             insertCharacterArgument(
                 Array(sequence.dropFirst()),
+                metadata: metadata,
                 motion: motion,
                 at: &child
             )
             node.children[head] = child
+            if !node.childOrder.contains(head) {
+                node.childOrder.append(head)
+            }
+        }
+
+        private func insertGroup(
+            _ sequence: [VimKeyPress],
+            metadata: NodeMetadata,
+            at node: inout Node
+        ) {
+            guard let head = sequence.first else {
+                apply(metadata, to: &node)
+                return
+            }
+
+            var child = node.children[head] ?? Node()
+            insertGroup(Array(sequence.dropFirst()), metadata: metadata, at: &child)
+            node.children[head] = child
+            if !node.childOrder.contains(head) {
+                node.childOrder.append(head)
+            }
+        }
+
+        private func apply(_ metadata: NodeMetadata, to node: inout Node) {
+            if let label = metadata.label {
+                node.hintLabel = label
+            }
+            if let itemKind = metadata.itemKind {
+                node.hintItemKind = itemKind
+            }
+            if let argumentPlaceholder = metadata.argumentPlaceholder {
+                node.argumentPlaceholder = argumentPlaceholder
+            }
+            if let argumentDescription = metadata.argumentDescription {
+                node.argumentDescription = argumentDescription
+            }
         }
 
         func build() -> VimOperatorMotionBindingTree {
@@ -467,6 +706,17 @@ struct VimOperatorMotionBindingTree {
     }
 
     let root: Node
+
+    func node(at keys: [VimKeyPress]) -> Node? {
+        var node = root
+
+        for key in keys {
+            guard let child = node.children[key] else { return nil }
+            node = child
+        }
+
+        return node
+    }
 
     func match(_ keys: [VimKeyPress]) -> Match {
         guard !keys.isEmpty else { return .partial }
@@ -493,63 +743,146 @@ extension VimBindingTree {
     static let normalMode: VimBindingTree = {
         var builder = Builder()
 
-        func bindTextMotion(_ sequence: [VimKeyPress], motion: VimTextMotion) {
-            builder.bind(sequence) { .moveText(motion, count: $0) }
+        func bindTextMotion(
+            _ sequence: [VimKeyPress],
+            motion: VimTextMotion,
+            description: String
+        ) {
+            builder.bind(sequence, description: description) {
+                .moveText(motion, count: $0)
+            }
         }
 
         func bindCharacterArgumentMotion(
             _ sequence: [VimKeyPress],
+            description: String,
             motion: @escaping (Character) -> VimTextMotion
         ) {
-            builder.bindCharacterArgument(sequence) { character, count in
+            builder.bindCharacterArgument(
+                sequence,
+                description: description,
+                argumentPlaceholder: "<char>",
+                argumentDescription: "Target character"
+            ) { character, count in
                 .moveText(motion(character), count: count)
             }
         }
 
-        builder.bind([.special(.leftArrow)]) { .moveText(.left, count: $0) }
-        builder.bind([.special(.rightArrow)]) { .moveText(.right, count: $0) }
-        builder.bind([.special(.downArrow)]) { .moveText(.down, count: $0) }
-        builder.bind([.special(.upArrow)]) { .moveText(.up, count: $0) }
+        builder.bind(
+            [.special(.leftArrow)],
+            description: "Move left"
+        ) { .moveText(.left, count: $0) }
+        builder.bind(
+            [.special(.rightArrow)],
+            description: "Move right"
+        ) { .moveText(.right, count: $0) }
+        builder.bind(
+            [.special(.downArrow)],
+            description: "Move down"
+        ) { .moveText(.down, count: $0) }
+        builder.bind(
+            [.special(.upArrow)],
+            description: "Move up"
+        ) { .moveText(.up, count: $0) }
 
-        bindTextMotion([.character("h")], motion: .left)
-        bindTextMotion([.character("j")], motion: .down)
-        bindTextMotion([.character("k")], motion: .up)
-        bindTextMotion([.character("l")], motion: .right)
+        bindTextMotion([.character("h")], motion: .left, description: "Move left")
+        bindTextMotion([.character("j")], motion: .down, description: "Move down")
+        bindTextMotion([.character("k")], motion: .up, description: "Move up")
+        bindTextMotion([.character("l")], motion: .right, description: "Move right")
 
-        bindTextMotion([.character("0")], motion: .lineStart)
-        bindTextMotion([.character("^")], motion: .lineFirstNonBlank)
-        bindTextMotion([.character("$")], motion: .lineEnd)
+        bindTextMotion([.character("0")], motion: .lineStart, description: "Line start")
+        bindTextMotion(
+            [.character("^")],
+            motion: .lineFirstNonBlank,
+            description: "First non-blank"
+        )
+        bindTextMotion([.character("$")], motion: .lineEnd, description: "Line end")
 
-        builder.bind([.character("d")]) { .beginOperator(.delete, count: $0) }
-        builder.bind([.character("D")]) { .delete(.characterwise(.lineEnd, count: $0)) }
-        builder.bind([.character("c")]) { .beginOperator(.change, count: $0) }
-        builder.bind([.character("C")]) { .change(.characterwise(.lineEnd, count: $0)) }
-        builder.bind([.character("y")]) { .beginOperator(.yank, count: $0) }
-        builder.bind([.character("Y")]) { .yank(.currentLines(count: $0)) }
-        builder.bind([.character("s")]) { .change(.characterwise(.right, count: $0)) }
-        builder.bind([.character("S")]) { .change(.currentLines(count: $0)) }
-        builder.bind([.character("x")]) { .delete(.characterwise(.right, count: $0)) }
-        builder.bind([.character("X")]) { .delete(.characterwise(.left, count: $0)) }
-        builder.bind([.special(.forwardDelete)]) { .delete(.characterwise(.right, count: $0)) }
-        builder.bind([.character("u")]) { .undo(count: $0) }
-        builder.bind([.special(.ctrlR)]) { .redo(count: $0) }
-        builder.bind([.character("i")]) { _ in .enterInsert(.atCursor) }
-        builder.bind([.character("a")]) { _ in .enterInsert(.afterCursor) }
-        builder.bind([.character("I")]) { _ in .enterInsert(.lineFirstNonBlank) }
-        builder.bind([.character("A")]) { _ in .enterInsert(.lineEnd) }
-        builder.bind([.character("o")]) { _ in .enterInsert(.openLineBelow) }
-        builder.bind([.character("O")]) { _ in .enterInsert(.openLineAbove) }
-        builder.bind([.character("p")]) { .paste(.afterCursor, count: $0) }
-        builder.bind([.character("P")]) { .paste(.beforeCursor, count: $0) }
+        builder.bind(
+            [.character("d")],
+            description: "Delete",
+            kind: .group
+        ) { .beginOperator(.delete, count: $0) }
+        builder.bind(
+            [.character("D")],
+            description: "Delete to line end"
+        ) { .delete(.characterwise(.lineEnd, count: $0)) }
+        builder.bind(
+            [.character("c")],
+            description: "Change",
+            kind: .group
+        ) { .beginOperator(.change, count: $0) }
+        builder.bind(
+            [.character("C")],
+            description: "Change to line end"
+        ) { .change(.characterwise(.lineEnd, count: $0)) }
+        builder.bind(
+            [.character("y")],
+            description: "Yank",
+            kind: .group
+        ) { .beginOperator(.yank, count: $0) }
+        builder.bind([.character("Y")], description: "Yank line") {
+            .yank(.currentLines(count: $0))
+        }
+        builder.bind([.character("s")], description: "Change character") {
+            .change(.characterwise(.right, count: $0))
+        }
+        builder.bind([.character("S")], description: "Change line") {
+            .change(.currentLines(count: $0))
+        }
+        builder.bind([.character("x")], description: "Delete character") {
+            .delete(.characterwise(.right, count: $0))
+        }
+        builder.bind([.character("X")], description: "Delete left character") {
+            .delete(.characterwise(.left, count: $0))
+        }
+        builder.bind([.special(.forwardDelete)], description: "Delete character") {
+            .delete(.characterwise(.right, count: $0))
+        }
+        builder.bind([.character("u")], description: "Undo") { .undo(count: $0) }
+        builder.bind([.special(.ctrlR)], description: "Redo") { .redo(count: $0) }
+        builder.bind([.character("i")], description: "Insert") { _ in .enterInsert(.atCursor) }
+        builder.bind([.character("a")], description: "Append") { _ in .enterInsert(.afterCursor) }
+        builder.bind(
+            [.character("I")],
+            description: "Insert at first non-blank"
+        ) { _ in .enterInsert(.lineFirstNonBlank) }
+        builder.bind([.character("A")], description: "Append at line end") {
+            _ in .enterInsert(.lineEnd)
+        }
+        builder.bind([.character("o")], description: "Open line below") {
+            _ in .enterInsert(.openLineBelow)
+        }
+        builder.bind([.character("O")], description: "Open line above") {
+            _ in .enterInsert(.openLineAbove)
+        }
+        builder.bind([.character("p")], description: "Paste after cursor") {
+            .paste(.afterCursor, count: $0)
+        }
+        builder.bind([.character("P")], description: "Paste before cursor") {
+            .paste(.beforeCursor, count: $0)
+        }
 
-        bindTextMotion([.character("w")], motion: .wordForward)
-        bindTextMotion([.character("b")], motion: .wordBackward)
-        bindTextMotion([.character("e")], motion: .wordEndForward)
+        bindTextMotion([.character("w")], motion: .wordForward, description: "Next word")
+        bindTextMotion([.character("b")], motion: .wordBackward, description: "Previous word")
+        bindTextMotion([.character("e")], motion: .wordEndForward, description: "Word end")
 
-        bindTextMotion([.character("g"), .character("g")], motion: .goToLine(defaultDestination: .first))
-        bindTextMotion([.character("G")], motion: .goToLine(defaultDestination: .last))
+        builder.describeGroup([.character("g")], label: "Go")
+        bindTextMotion(
+            [.character("g"), .character("g")],
+            motion: .goToLine(defaultDestination: .first),
+            description: "First line"
+        )
+        bindTextMotion(
+            [.character("G")],
+            motion: .goToLine(defaultDestination: .last),
+            description: "Last line"
+        )
 
-        bindCharacterArgumentMotion([.character("f")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("f")],
+            description: "Find to character"
+        ) { character in
             .characterSearch(
                 VimCharacterSearch(
                     character: character,
@@ -558,7 +891,10 @@ extension VimBindingTree {
                 )
             )
         }
-        bindCharacterArgumentMotion([.character("F")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("F")],
+            description: "Find backward to character"
+        ) { character in
             .characterSearch(
                 VimCharacterSearch(
                     character: character,
@@ -567,7 +903,10 @@ extension VimBindingTree {
                 )
             )
         }
-        bindCharacterArgumentMotion([.character("t")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("t")],
+            description: "Find until character"
+        ) { character in
             .characterSearch(
                 VimCharacterSearch(
                     character: character,
@@ -576,7 +915,10 @@ extension VimBindingTree {
                 )
             )
         }
-        bindCharacterArgumentMotion([.character("T")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("T")],
+            description: "Find backward until character"
+        ) { character in
             .characterSearch(
                 VimCharacterSearch(
                     character: character,
@@ -585,87 +927,156 @@ extension VimBindingTree {
                 )
             )
         }
-        builder.bind([.character(";")]) {
+        builder.bind([.character(";")], description: "Repeat character search") {
             .moveText(.repeatCharacterSearch(oppositeDirection: false), count: $0)
         }
-        builder.bind([.character(",")]) {
+        builder.bind([.character(",")], description: "Repeat character search backward") {
             .moveText(.repeatCharacterSearch(oppositeDirection: true), count: $0)
         }
 
-        builder.bind([.character("H")]) { .moveLayout(.windowLine(.top), count: $0) }
-        builder.bind([.character("M")]) { .moveLayout(.windowLine(.middle), count: $0) }
-        builder.bind([.character("L")]) { .moveLayout(.windowLine(.bottom), count: $0) }
+        builder.bind([.character("H")], description: "Top screen line") {
+            .moveLayout(.windowLine(.top), count: $0)
+        }
+        builder.bind([.character("M")], description: "Middle screen line") {
+            .moveLayout(.windowLine(.middle), count: $0)
+        }
+        builder.bind([.character("L")], description: "Bottom screen line") {
+            .moveLayout(.windowLine(.bottom), count: $0)
+        }
 
-        builder.bind([.special(.ctrlU)]) { .moveLayout(.halfPageUp, count: $0) }
-        builder.bind([.special(.ctrlD)]) { .moveLayout(.halfPageDown, count: $0) }
-        builder.bind([.special(.ctrlB)]) { .moveLayout(.fullPageUp, count: $0) }
-        builder.bind([.special(.ctrlF)]) { .moveLayout(.fullPageDown, count: $0) }
+        builder.bind([.special(.ctrlU)], description: "Half page up") {
+            .moveLayout(.halfPageUp, count: $0)
+        }
+        builder.bind([.special(.ctrlD)], description: "Half page down") {
+            .moveLayout(.halfPageDown, count: $0)
+        }
+        builder.bind([.special(.ctrlB)], description: "Full page up") {
+            .moveLayout(.fullPageUp, count: $0)
+        }
+        builder.bind([.special(.ctrlF)], description: "Full page down") {
+            .moveLayout(.fullPageDown, count: $0)
+        }
 
-        builder.bind([.character("g"), .character("j")]) {
+        builder.bind([.character("g"), .character("j")], description: "Down screen line") {
             .moveLayout(.screenLineDown, count: $0)
         }
-        builder.bind([.character("g"), .character("k")]) {
+        builder.bind([.character("g"), .character("k")], description: "Up screen line") {
             .moveLayout(.screenLineUp, count: $0)
         }
-        builder.bind([.character("g"), .character("0")]) {
+        builder.bind([.character("g"), .character("0")], description: "Screen line start") {
             .moveLayout(.screenLineStart, count: $0)
         }
-        builder.bind([.character("g"), .character("^")]) {
+        builder.bind(
+            [.character("g"), .character("^")],
+            description: "Screen first non-blank"
+        ) {
             .moveLayout(.screenLineFirstNonBlank, count: $0)
         }
-        builder.bind([.character("g"), .character("$")]) {
+        builder.bind([.character("g"), .character("$")], description: "Screen line end") {
             .moveLayout(.screenLineEnd, count: $0)
         }
 
-        bindTextMotion([.character("}")], motion: .paragraphForward)
-        bindTextMotion([.character("{")], motion: .paragraphBackward)
+        bindTextMotion(
+            [.character("}")],
+            motion: .paragraphForward,
+            description: "Next paragraph"
+        )
+        bindTextMotion(
+            [.character("{")],
+            motion: .paragraphBackward,
+            description: "Previous paragraph"
+        )
 
         return builder.build()
     }()
 }
 
 extension VimOperatorMotionBindingTree {
-    private static func normalMode(for repeatedKey: Character) -> VimOperatorMotionBindingTree {
+    private static func normalMode(for vimOperator: VimOperator, repeatedKey: Character) -> VimOperatorMotionBindingTree {
         var builder = Builder()
+        let operatorLabel = vimOperator.displayLabel
 
-        func bindTextMotion(_ sequence: [VimKeyPress], kind: VimOperatorMotion) {
-            builder.bind(sequence) { _ in kind }
+        func bindTextMotion(
+            _ sequence: [VimKeyPress],
+            kind: VimOperatorMotion,
+            description: String
+        ) {
+            builder.bind(sequence, description: description) { _ in kind }
         }
 
         func bindCharacterArgumentMotion(
             _ sequence: [VimKeyPress],
+            description: String,
             motion: @escaping (Character) -> VimOperatorMotion
         ) {
-            builder.bindCharacterArgument(sequence) { character, _ in
+            builder.bindCharacterArgument(
+                sequence,
+                description: description,
+                argumentPlaceholder: "<char>",
+                argumentDescription: "Target character"
+            ) { character, _ in
                 motion(character)
             }
         }
 
-        builder.bind([.character(repeatedKey)]) { _ in .currentLines }
+        builder.bind(
+            [.character(repeatedKey)],
+            description: "\(operatorLabel) current line"
+        ) { _ in .currentLines }
 
-        bindTextMotion([.character("h")], kind: .characterwise(.left))
-        bindTextMotion([.character("j")], kind: .linewise(.down))
-        bindTextMotion([.character("k")], kind: .linewise(.up))
-        bindTextMotion([.character("l")], kind: .characterwise(.right))
-
-        bindTextMotion([.character("0")], kind: .characterwise(.lineStart))
-        bindTextMotion([.character("^")], kind: .characterwise(.lineFirstNonBlank))
-        bindTextMotion([.character("$")], kind: .characterwise(.lineEnd))
-
-        bindTextMotion([.character("w")], kind: .characterwise(.wordForward))
-        bindTextMotion([.character("b")], kind: .characterwise(.wordBackward))
-        bindTextMotion([.character("e")], kind: .characterwise(.wordEndForward))
+        bindTextMotion([.character("h")], kind: .characterwise(.left), description: "\(operatorLabel) left")
+        bindTextMotion([.character("j")], kind: .linewise(.down), description: "\(operatorLabel) line below")
+        bindTextMotion([.character("k")], kind: .linewise(.up), description: "\(operatorLabel) line above")
+        bindTextMotion([.character("l")], kind: .characterwise(.right), description: "\(operatorLabel) character")
 
         bindTextMotion(
+            [.character("0")],
+            kind: .characterwise(.lineStart),
+            description: "\(operatorLabel) to line start"
+        )
+        bindTextMotion(
+            [.character("^")],
+            kind: .characterwise(.lineFirstNonBlank),
+            description: "\(operatorLabel) to first non-blank"
+        )
+        bindTextMotion(
+            [.character("$")],
+            kind: .characterwise(.lineEnd),
+            description: "\(operatorLabel) to line end"
+        )
+
+        bindTextMotion(
+            [.character("w")],
+            kind: .characterwise(.wordForward),
+            description: "\(operatorLabel) word"
+        )
+        bindTextMotion(
+            [.character("b")],
+            kind: .characterwise(.wordBackward),
+            description: "\(operatorLabel) previous word"
+        )
+        bindTextMotion(
+            [.character("e")],
+            kind: .characterwise(.wordEndForward),
+            description: "\(operatorLabel) to word end"
+        )
+
+        builder.describeGroup([.character("g")], label: "Go")
+        bindTextMotion(
             [.character("g"), .character("g")],
-            kind: .linewise(.goToLine(defaultDestination: .first))
+            kind: .linewise(.goToLine(defaultDestination: .first)),
+            description: "\(operatorLabel) to first line"
         )
         bindTextMotion(
             [.character("G")],
-            kind: .linewise(.goToLine(defaultDestination: .last))
+            kind: .linewise(.goToLine(defaultDestination: .last)),
+            description: "\(operatorLabel) to last line"
         )
 
-        bindCharacterArgumentMotion([.character("f")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("f")],
+            description: "\(operatorLabel) through character"
+        ) { character in
             .characterwise(
                 .characterSearch(
                     VimCharacterSearch(
@@ -676,7 +1087,10 @@ extension VimOperatorMotionBindingTree {
                 )
             )
         }
-        bindCharacterArgumentMotion([.character("F")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("F")],
+            description: "\(operatorLabel) backward through character"
+        ) { character in
             .characterwise(
                 .characterSearch(
                     VimCharacterSearch(
@@ -687,7 +1101,10 @@ extension VimOperatorMotionBindingTree {
                 )
             )
         }
-        bindCharacterArgumentMotion([.character("t")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("t")],
+            description: "\(operatorLabel) until character"
+        ) { character in
             .characterwise(
                 .characterSearch(
                     VimCharacterSearch(
@@ -698,7 +1115,10 @@ extension VimOperatorMotionBindingTree {
                 )
             )
         }
-        bindCharacterArgumentMotion([.character("T")]) { character in
+        bindCharacterArgumentMotion(
+            [.character("T")],
+            description: "\(operatorLabel) backward until character"
+        ) { character in
             .characterwise(
                 .characterSearch(
                     VimCharacterSearch(
@@ -709,20 +1129,28 @@ extension VimOperatorMotionBindingTree {
                 )
             )
         }
-        builder.bind([.character(";")]) { _ in
+        builder.bind([.character(";")], description: "\(operatorLabel) by repeated character search") { _ in
             .characterwise(.repeatCharacterSearch(oppositeDirection: false))
         }
-        builder.bind([.character(",")]) { _ in
+        builder.bind([.character(",")], description: "\(operatorLabel) by repeated backward character search") { _ in
             .characterwise(.repeatCharacterSearch(oppositeDirection: true))
         }
 
-        bindTextMotion([.character("}")], kind: .linewise(.paragraphForward))
-        bindTextMotion([.character("{")], kind: .linewise(.paragraphBackward))
+        bindTextMotion(
+            [.character("}")],
+            kind: .linewise(.paragraphForward),
+            description: "\(operatorLabel) next paragraph"
+        )
+        bindTextMotion(
+            [.character("{")],
+            kind: .linewise(.paragraphBackward),
+            description: "\(operatorLabel) previous paragraph"
+        )
 
         return builder.build()
     }
 
-    static let normalModeDeleteOperator = normalMode(for: "d")
-    static let normalModeChangeOperator = normalMode(for: "c")
-    static let normalModeYankOperator = normalMode(for: "y")
+    static let normalModeDeleteOperator = normalMode(for: .delete, repeatedKey: "d")
+    static let normalModeChangeOperator = normalMode(for: .change, repeatedKey: "c")
+    static let normalModeYankOperator = normalMode(for: .yank, repeatedKey: "y")
 }

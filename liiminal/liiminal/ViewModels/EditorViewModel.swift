@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 enum VimMode: String {
     case normal
@@ -12,8 +13,11 @@ final class EditorViewModel {
     var document: Document = Document(blocks: [])
     var vimMode: VimMode = .normal
     var vimStatus = VimStatusPresentation(mode: .normal, detailText: nil)
+    var vimHintSnapshot: VimHintSnapshot?
 
     let fileService: FileSystemService
+    @ObservationIgnored private var pendingVimHintCandidate: VimHintCandidate?
+    @ObservationIgnored private var vimHintTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
     private var undoHistories: [URL: VimUndoHistory] = [:]
     private var scratchUndoHistory = VimUndoHistory(rootText: "")
@@ -32,6 +36,47 @@ final class EditorViewModel {
         currentNote = loaded
         isDirty = false
         document = Document(blocks: BlockParser.parse(loaded.content))
+        clearVimHints()
+    }
+
+    func updateVimHintCandidate(_ candidate: VimHintCandidate?) {
+        pendingVimHintCandidate = candidate
+
+        switch candidate?.source {
+        case .none:
+            clearVimHints()
+        case .some(.rootHelp):
+            vimHintTask?.cancel()
+            vimHintTask = nil
+            vimHintSnapshot = candidate?.snapshot
+        case .some(.pendingPrefix):
+            if vimHintSnapshot != nil {
+                vimHintTask?.cancel()
+                vimHintTask = nil
+                vimHintSnapshot = candidate?.snapshot
+                return
+            }
+
+            vimHintTask?.cancel()
+            vimHintSnapshot = nil
+            vimHintTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    guard self.pendingVimHintCandidate == candidate else { return }
+                    self.vimHintSnapshot = candidate?.snapshot
+                    self.vimHintTask = nil
+                }
+            }
+        }
+    }
+
+    func clearVimHints() {
+        pendingVimHintCandidate = nil
+        vimHintTask?.cancel()
+        vimHintTask = nil
+        vimHintSnapshot = nil
     }
 
     func textDidChange(_ newText: String) {

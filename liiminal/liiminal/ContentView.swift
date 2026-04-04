@@ -17,7 +17,15 @@ struct ContentView: View {
                             if showPreview {
                                 RenderedDocumentView(document: editorVM.document, baseFontSize: $previewFontSize)
                             } else {
-                                EditorView(editorViewModel: editorVM)
+                                ZStack(alignment: .bottom) {
+                                    EditorView(editorViewModel: editorVM)
+
+                                    if let hintSnapshot = editorVM.vimHintSnapshot {
+                                        VimHintOverlayView(snapshot: hintSnapshot)
+                                            .transition(.opacity)
+                                            .zIndex(1)
+                                    }
+                                }
                             }
                         }
                         .toolbar {
@@ -87,6 +95,9 @@ struct ContentView: View {
             if let note = vaultViewModel.selectedNote {
                 editorViewModel?.openNote(note)
             }
+        }
+        .onChange(of: showPreview) { _, _ in
+            editorViewModel?.clearVimHints()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openVault)) { _ in
             vaultViewModel.openVault()

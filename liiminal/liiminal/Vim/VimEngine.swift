@@ -7,23 +7,28 @@ enum VimHandleResult {
 }
 
 final class VimEngine {
+    private let keymapCatalog: VimKeymapCatalog
     private let commandBindings: VimBindingTree
     private let operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree]
 
     private(set) var sessionState: VimSessionState
 
     init(
-        commandBindings: VimBindingTree = .normalMode,
-        operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree] = [
-            .delete: .normalModeDeleteOperator,
-            .change: .normalModeChangeOperator,
-            .yank: .normalModeYankOperator,
-        ],
+        keymapCatalog: VimKeymapCatalog = .normalMode,
         initialState: VimSessionState = VimSessionState()
     ) {
-        self.commandBindings = commandBindings
-        self.operatorMotionBindings = operatorMotionBindings
+        self.keymapCatalog = keymapCatalog
+        self.commandBindings = keymapCatalog.commandBindings
+        self.operatorMotionBindings = keymapCatalog.operatorMotionBindings
         self.sessionState = initialState
+    }
+
+    var hintCandidate: VimHintCandidate? {
+        keymapCatalog.hintCandidate(for: sessionState)
+    }
+
+    func rootHintCandidate() -> VimHintCandidate {
+        keymapCatalog.rootHintCandidate()
     }
 
     func setMode(_ mode: VimMode) {

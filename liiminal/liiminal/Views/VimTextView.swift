@@ -16,6 +16,7 @@ final class VimTextView: NSTextView {
     private let vimEngine = VimEngine()
     private var activeUndoHistory: VimUndoHistory?
     private var suppressUndoCapture = false
+    private var isShowingRootHintCatalog = false
 
     /// Cursor position tracked independently in normal mode.
     private var normalCursorPosition: Int = 0
@@ -27,9 +28,12 @@ final class VimTextView: NSTextView {
     private(set) var mode: VimMode = .normal {
         didSet {
             if mode != oldValue {
+                if mode != .normal {
+                    isShowingRootHintCatalog = false
+                }
                 updateModeAppearance()
                 vimDelegate?.vimTextView(self, didChangeMode: mode)
-                publishVimStatus()
+                publishVimState()
             }
         }
     }
@@ -105,6 +109,7 @@ final class VimTextView: NSTextView {
     func loadDocumentText(_ text: String, undoHistory: VimUndoHistory) {
         finalizeActiveInsertSessionIfNeeded()
         activeUndoHistory = undoHistory
+        isShowingRootHintCatalog = false
         string = text
         normalCursorPosition = 0
         setSelectedRange(NSRange(location: 0, length: 0))
@@ -116,7 +121,7 @@ final class VimTextView: NSTextView {
             updateModeAppearance()
         }
 
-        publishVimStatus()
+        publishVimState()
     }
 
     // MARK: - Key Handling
@@ -162,6 +167,22 @@ final class VimTextView: NSTextView {
     private func handleNormalMode(_ event: NSEvent) {
         guard let keyPress = keyPress(for: event) else { return }
 
+        if isShowingRootHintCatalog && vimEngine.sessionState.hasPendingInput == false {
+            if keyPress == .character(" ") || keyPress == .special(.escape) {
+                isShowingRootHintCatalog = false
+                publishVimState()
+                return
+            }
+
+            isShowingRootHintCatalog = false
+        }
+
+        if keyPress == .character(" ") && vimEngine.sessionState.hasPendingInput == false {
+            isShowingRootHintCatalog.toggle()
+            publishVimState()
+            return
+        }
+
         switch vimEngine.handle(keyPress) {
         case .handled(let command):
             apply(command)
@@ -169,7 +190,7 @@ final class VimTextView: NSTextView {
             break
         }
 
-        publishVimStatus()
+        publishVimState()
     }
 
     // MARK: - Mode Transitions
@@ -643,11 +664,25 @@ final class VimTextView: NSTextView {
         return finalCursor
     }
 
-    private func publishVimStatus() {
+    private func publishVimState() {
         vimDelegate?.vimTextView(
             self,
             didChangeStatus: vimEngine.sessionState.statusPresentation
         )
+        vimDelegate?.vimTextView(
+            self,
+            didChangeHintCandidate: currentHintCandidate()
+        )
+    }
+
+    private func currentHintCandidate() -> VimHintCandidate? {
+        guard mode == .normal else { return nil }
+
+        if isShowingRootHintCatalog {
+            return vimEngine.rootHintCandidate()
+        }
+
+        return vimEngine.hintCandidate
     }
 
     private func keyPress(for event: NSEvent) -> VimKeyPress? {
@@ -696,4 +731,5 @@ final class VimTextView: NSTextView {
 protocol VimTextViewDelegate: AnyObject {
     func vimTextView(_ textView: VimTextView, didChangeMode mode: VimMode)
     func vimTextView(_ textView: VimTextView, didChangeStatus status: VimStatusPresentation)
+    func vimTextView(_ textView: VimTextView, didChangeHintCandidate candidate: VimHintCandidate?)
 }
