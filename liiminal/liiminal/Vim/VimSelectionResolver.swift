@@ -1,38 +1,38 @@
 import Foundation
 
-struct VimDeletionResult {
+struct VimSelectionResult {
     let range: NSRange
     let cursorAnchor: Int
     let linewise: Bool
 }
 
-enum VimDeleteResolver {
-    static func deletionResult(
-        for target: VimDeleteTarget,
+enum VimSelectionResolver {
+    static func selectionResult(
+        for target: VimOperatorTarget,
         in text: NSString,
         from position: Int,
         preferredColumn: Int?
-    ) -> VimDeletionResult? {
+    ) -> VimSelectionResult? {
         guard text.length > 0 else { return nil }
 
         let currentPosition = clamp(position, in: text)
 
         switch target {
         case .currentLines(let count):
-            return deleteCurrentLines(
+            return selectCurrentLines(
                 count: max(count ?? 1, 1),
                 in: text,
                 from: currentPosition
             )
         case .characterwise(let motion, let count):
-            return deleteCharacterwise(
+            return selectCharacterwise(
                 motion: motion,
                 count: max(count ?? 1, 1),
                 in: text,
                 from: currentPosition
             )
         case .linewise(let motion, let count):
-            return deleteLinewise(
+            return selectLinewise(
                 motion: motion,
                 count: count,
                 in: text,
@@ -42,11 +42,11 @@ enum VimDeleteResolver {
         }
     }
 
-    private static func deleteCurrentLines(
+    private static func selectCurrentLines(
         count: Int,
         in text: NSString,
         from position: Int
-    ) -> VimDeletionResult? {
+    ) -> VimSelectionResult? {
         let startLine = text.lineRange(for: NSRange(location: position, length: 0))
         var endLine = startLine
 
@@ -61,16 +61,16 @@ enum VimDeleteResolver {
             length: NSMaxRange(endLine) - startLine.location
         )
         return range.length > 0
-            ? VimDeletionResult(range: range, cursorAnchor: startLine.location, linewise: true)
+            ? VimSelectionResult(range: range, cursorAnchor: startLine.location, linewise: true)
             : nil
     }
 
-    private static func deleteCharacterwise(
+    private static func selectCharacterwise(
         motion: VimTextMotion,
         count: Int,
         in text: NSString,
         from position: Int
-    ) -> VimDeletionResult? {
+    ) -> VimSelectionResult? {
         let lineRange = text.lineRange(for: NSRange(location: position, length: 0))
         let lineLowerBound = lineRange.location
         let lineUpperBound = lineContentUpperBound(of: lineRange, in: text)
@@ -106,7 +106,7 @@ enum VimDeleteResolver {
         case .wordForward:
             range = nsRange(
                 from: position,
-                toExclusive: wordForwardDeleteEndpoint(
+                toExclusive: wordForwardSelectionEndpoint(
                     from: position,
                     count: count,
                     in: text,
@@ -115,7 +115,7 @@ enum VimDeleteResolver {
             )
         case .wordBackward:
             range = nsRange(
-                from: wordBackwardDeleteStart(
+                from: wordBackwardSelectionStart(
                     from: position,
                     count: count,
                     in: text,
@@ -124,7 +124,7 @@ enum VimDeleteResolver {
                 toExclusive: position
             )
         case .wordEndForward:
-            let inclusiveEnd = wordEndDeleteInclusiveEnd(
+            let inclusiveEnd = wordEndSelectionInclusiveEnd(
                 from: position,
                 count: count,
                 in: text,
@@ -132,7 +132,7 @@ enum VimDeleteResolver {
             )
             range = nsRange(from: position, toExclusive: inclusiveEnd + 1)
         case .characterSearch(let search):
-            range = characterSearchDeleteRange(
+            range = characterSearchSelectionRange(
                 for: search,
                 count: count,
                 in: text,
@@ -147,16 +147,16 @@ enum VimDeleteResolver {
         }
 
         guard let range, range.length > 0 else { return nil }
-        return VimDeletionResult(range: range, cursorAnchor: range.location, linewise: false)
+        return VimSelectionResult(range: range, cursorAnchor: range.location, linewise: false)
     }
 
-    private static func deleteLinewise(
+    private static func selectLinewise(
         motion: VimTextMotion,
         count: Int?,
         in text: NSString,
         from position: Int,
         preferredColumn: Int?
-    ) -> VimDeletionResult? {
+    ) -> VimSelectionResult? {
         let targetPosition: Int
 
         switch motion {
@@ -179,10 +179,10 @@ enum VimDeleteResolver {
         let range = NSRange(location: startLocation, length: endLocation - startLocation)
 
         guard range.length > 0 else { return nil }
-        return VimDeletionResult(range: range, cursorAnchor: startLocation, linewise: true)
+        return VimSelectionResult(range: range, cursorAnchor: startLocation, linewise: true)
     }
 
-    private static func wordForwardDeleteEndpoint(
+    private static func wordForwardSelectionEndpoint(
         from position: Int,
         count: Int,
         in text: NSString,
@@ -204,7 +204,7 @@ enum VimDeleteResolver {
         return currentPosition
     }
 
-    private static func wordBackwardDeleteStart(
+    private static func wordBackwardSelectionStart(
         from position: Int,
         count: Int,
         in text: NSString,
@@ -223,7 +223,7 @@ enum VimDeleteResolver {
         return currentPosition
     }
 
-    private static func wordEndDeleteInclusiveEnd(
+    private static func wordEndSelectionInclusiveEnd(
         from position: Int,
         count: Int,
         in text: NSString,
@@ -243,7 +243,7 @@ enum VimDeleteResolver {
         return currentPosition
     }
 
-    private static func characterSearchDeleteRange(
+    private static func characterSearchSelectionRange(
         for search: VimCharacterSearch,
         count: Int,
         in text: NSString,
@@ -251,7 +251,7 @@ enum VimDeleteResolver {
         lineLowerBound: Int,
         lineUpperBound: Int
     ) -> NSRange? {
-        let destination = characterSearchDestination(
+        let destination = characterSearchSelectionDestination(
             for: search,
             count: count,
             in: text,
@@ -270,7 +270,7 @@ enum VimDeleteResolver {
         }
     }
 
-    private static func characterSearchDestination(
+    private static func characterSearchSelectionDestination(
         for search: VimCharacterSearch,
         count: Int,
         in text: NSString,

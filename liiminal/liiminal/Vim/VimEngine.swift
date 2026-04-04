@@ -8,13 +8,17 @@ enum VimHandleResult {
 
 final class VimEngine {
     private let commandBindings: VimBindingTree
-    private let operatorMotionBindings: VimOperatorMotionBindingTree
+    private let operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree]
 
     private(set) var sessionState: VimSessionState
 
     init(
         commandBindings: VimBindingTree = .normalMode,
-        operatorMotionBindings: VimOperatorMotionBindingTree = .normalModeDeleteOperator,
+        operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree] = [
+            .delete: .normalModeDeleteOperator,
+            .change: .normalModeChangeOperator,
+            .yank: .normalModeYankOperator,
+        ],
         initialState: VimSessionState = VimSessionState()
     ) {
         self.commandBindings = commandBindings
@@ -122,9 +126,14 @@ final class VimEngine {
             return .pending
         }
 
+        guard let operatorBindings = operatorMotionBindings[pendingOperator] else {
+            sessionState.clearPendingInput()
+            return .ignored
+        }
+
         let candidateKeys = sessionState.pendingKeys + [keyPress]
 
-        switch operatorMotionBindings.match(candidateKeys) {
+        switch operatorBindings.match(candidateKeys) {
         case .exact(let motionFactory):
             let operatorCount = sessionState.pendingOperatorCount
             let motionCount = sessionState.pendingCount
@@ -170,10 +179,35 @@ final class VimEngine {
                 : lastCharacterSearch
 
             return .handled(.moveText(.characterSearch(search), count: count))
-        case .delete(.characterwise(.characterSearch(let search), let count)):
+        case .delete(let target):
+            return resolveOperatorCharacterSearch(
+                target,
+                commandBuilder: VimCommand.delete
+            )
+        case .change(let target):
+            return resolveOperatorCharacterSearch(
+                target,
+                commandBuilder: VimCommand.change
+            )
+        case .yank(let target):
+            return resolveOperatorCharacterSearch(
+                target,
+                commandBuilder: VimCommand.yank
+            )
+        case .moveText, .moveLayout, .paste:
+            return .handled(command)
+        }
+    }
+
+    private func resolveOperatorCharacterSearch(
+        _ target: VimOperatorTarget,
+        commandBuilder: (VimOperatorTarget) -> VimCommand
+    ) -> VimHandleResult {
+        switch target {
+        case .characterwise(.characterSearch(let search), let count):
             sessionState.lastCharacterSearch = search
-            return .handled(.delete(.characterwise(.characterSearch(search), count: count)))
-        case .delete(.characterwise(.repeatCharacterSearch(let oppositeDirection), let count)):
+            return .handled(commandBuilder(.characterwise(.characterSearch(search), count: count)))
+        case .characterwise(.repeatCharacterSearch(let oppositeDirection), let count):
             guard let lastCharacterSearch = sessionState.lastCharacterSearch else {
                 return .ignored
             }
@@ -182,11 +216,9 @@ final class VimEngine {
                 ? lastCharacterSearch.reversed()
                 : lastCharacterSearch
 
-            return .handled(.delete(.characterwise(.characterSearch(search), count: count)))
-        case .moveText, .moveLayout, .paste:
-            return .handled(command)
-        case .delete:
-            return .handled(command)
+            return .handled(commandBuilder(.characterwise(.characterSearch(search), count: count)))
+        default:
+            return .handled(commandBuilder(target))
         }
     }
 
@@ -211,6 +243,24 @@ final class VimEngine {
                 return resolve(.delete(.characterwise(textMotion, count: effectiveCount)))
             case .linewise(let textMotion):
                 return resolve(.delete(.linewise(textMotion, count: effectiveCount)))
+            }
+        case .change:
+            switch motion {
+            case .currentLines:
+                return resolve(.change(.currentLines(count: effectiveCount)))
+            case .characterwise(let textMotion):
+                return resolve(.change(.characterwise(textMotion, count: effectiveCount)))
+            case .linewise(let textMotion):
+                return resolve(.change(.linewise(textMotion, count: effectiveCount)))
+            }
+        case .yank:
+            switch motion {
+            case .currentLines:
+                return resolve(.yank(.currentLines(count: effectiveCount)))
+            case .characterwise(let textMotion):
+                return resolve(.yank(.characterwise(textMotion, count: effectiveCount)))
+            case .linewise(let textMotion):
+                return resolve(.yank(.linewise(textMotion, count: effectiveCount)))
             }
         }
     }

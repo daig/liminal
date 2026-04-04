@@ -177,10 +177,95 @@ Paste uses the current system clipboard contents.
 
 | Key | Behavior |
 | --- | --- |
-| `p` | Paste after the cursor. If the clipboard content came from a linewise delete in this editor, paste it below the current line. |
-| `P` | Paste before the cursor. If the clipboard content came from a linewise delete in this editor, paste it above the current line. |
+| `p` | Paste after the cursor. If the clipboard content came from a linewise delete, yank, or change in this editor, paste it below the current line. |
+| `P` | Paste before the cursor. If the clipboard content came from a linewise delete, yank, or change in this editor, paste it above the current line. |
 
 Counts repeat the paste. For example, `3p` pastes the current clipboard contents three times.
+
+## Normal Mode Yank
+
+Yank uses Vim's `y` operator model over the same currently supported motion subset as delete. Successful yanks write the selected text to the system clipboard but do not modify the document or move the cursor.
+
+Standalone yank aliases:
+
+| Key | Behavior |
+| --- | --- |
+| `Y` | Yank the current line. Equivalent to `yy`. With a count, yank that many lines starting at the current line. |
+
+### Linewise Yank
+
+| Key | Behavior |
+| --- | --- |
+| `yy` | Yank the current line. |
+| `y` + `j` | Yank the current line and the line below it. |
+| `y` + `k` | Yank the current line and the line above it. |
+| `y` + `gg` | Yank from the current line to the start of the document. |
+| `y` + `G` | Yank from the current line to the end of the document. |
+| `y` + `{` | Yank backward by paragraph. |
+| `y` + `}` | Yank forward by paragraph. |
+
+### Characterwise Yank
+
+| Key | Behavior |
+| --- | --- |
+| `y` + `h` | Yank characters to the left. |
+| `y` + `l` | Yank characters at and to the right of the cursor. |
+| `y` + `0` | Yank back to the start of the line. |
+| `y` + `^` | Yank back to the first non-blank character of the line. |
+| `y` + `$` | Yank to the end of the line. |
+| `y` + `w` | Yank forward by word. |
+| `y` + `b` | Yank backward by word. |
+| `y` + `e` | Yank to the end of the current or next word. |
+| `y` + `f<char>` | Yank forward through the next occurrence of `<char>` on the current line. |
+| `y` + `F<char>` | Yank backward through the previous occurrence of `<char>` on the current line. |
+| `y` + `t<char>` | Yank forward until just before the next occurrence of `<char>` on the current line. |
+| `y` + `T<char>` | Yank backward until just after the previous occurrence of `<char>` on the current line. |
+| `y` + `;` | Repeat the last `yf`, `yF`, `yt`, or `yT` search in the same direction. |
+| `y` + `,` | Repeat the last `yf`, `yF`, `yt`, or `yT` search in the opposite direction. |
+
+## Normal Mode Change
+
+Change uses Vim's `c` operator model over the same currently supported motion subset as delete. Successful changes write the removed text to the system clipboard, replace the selected text, and enter Insert mode at the start of the changed range.
+Unlike stock Vim, this editor handles `c` with the same literal motion semantics as `d` and `y`, so `cw` follows the actual `w` motion instead of using Vim's historical `cw` special case.
+
+Standalone change aliases:
+
+| Key | Behavior |
+| --- | --- |
+| `C` | Change to the end of the line. Equivalent to `c$`. |
+| `s` | Change the character under the cursor. With a count, change that many characters to the right. Equivalent to `cl`. |
+| `S` | Change the current line. With a count, change that many lines starting at the current line. Equivalent to `cc`. |
+
+### Linewise Change
+
+| Key | Behavior |
+| --- | --- |
+| `cc` | Change the current line and enter Insert mode. |
+| `c` + `j` | Change the current line and the line below it, then enter Insert mode. |
+| `c` + `k` | Change the current line and the line above it, then enter Insert mode. |
+| `c` + `gg` | Change from the current line to the start of the document, then enter Insert mode. |
+| `c` + `G` | Change from the current line to the end of the document, then enter Insert mode. |
+| `c` + `{` | Change backward by paragraph, then enter Insert mode. |
+| `c` + `}` | Change forward by paragraph, then enter Insert mode. |
+
+### Characterwise Change
+
+| Key | Behavior |
+| --- | --- |
+| `c` + `h` | Change characters to the left. |
+| `c` + `l` | Change characters at and to the right of the cursor. |
+| `c` + `0` | Change back to the start of the line. |
+| `c` + `^` | Change back to the first non-blank character of the line. |
+| `c` + `$` | Change to the end of the line. |
+| `c` + `w` | Change forward by word. This follows the same `w` motion semantics used by `d` and `y`. |
+| `c` + `b` | Change backward by word. |
+| `c` + `e` | Change to the end of the current or next word. |
+| `c` + `f<char>` | Change forward through the next occurrence of `<char>` on the current line. |
+| `c` + `F<char>` | Change backward through the previous occurrence of `<char>` on the current line. |
+| `c` + `t<char>` | Change forward until just before the next occurrence of `<char>` on the current line. |
+| `c` + `T<char>` | Change backward until just after the previous occurrence of `<char>` on the current line. |
+| `c` + `;` | Repeat the last `cf`, `cF`, `ct`, or `cT` search in the same direction. |
+| `c` + `,` | Repeat the last `cf`, `cF`, `ct`, or `cT` search in the opposite direction. |
 
 ## Not Yet Supported
 
@@ -188,7 +273,6 @@ This is not full Vim yet. Some important Vim features are intentionally still ou
 
 - `/`, `?`, `n`, `N`, `*`, `#`
 - marks and register-based jumps
-- change and yank operators
 - named registers and advanced put variants like `gp`, `gP`, `[p`, and `]p`
 - Visual mode
 - command-line mode and Ex commands

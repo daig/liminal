@@ -204,6 +204,10 @@ final class VimTextView: NSTextView {
             moveCursorTo(destination)
         case .delete(let target):
             applyDelete(target)
+        case .change(let target):
+            applyChange(target)
+        case .yank(let target):
+            applyYank(target)
         case .paste(let placement, let count):
             applyPaste(placement, count: count)
         }
@@ -310,10 +314,10 @@ final class VimTextView: NSTextView {
         return range.location
     }
 
-    private func applyDelete(_ target: VimDeleteTarget) {
+    private func applyDelete(_ target: VimOperatorTarget) {
         let text = string as NSString
 
-        guard let deletion = VimDeleteResolver.deletionResult(
+        guard let selection = VimSelectionResolver.selectionResult(
             for: target,
             in: text,
             from: normalCursorPosition,
@@ -322,25 +326,64 @@ final class VimTextView: NSTextView {
             return
         }
 
-        let deletedText = text.substring(with: deletion.range)
-        guard performTextChange(in: deletion.range, replacementString: "") else { return }
+        let deletedText = text.substring(with: selection.range)
+        guard performTextChange(in: selection.range, replacementString: "") else { return }
 
-        VimPasteboard.write(
-            VimPastePayload(
-                text: deletedText,
-                style: deletion.linewise ? .linewise : .characterwise
-            )
-        )
+        writeSelectionToPasteboard(text: deletedText, linewise: selection.linewise)
         vimEngine.setPreferredColumn(nil)
 
         let updatedText = string as NSString
-        let finalCursor = deletion.linewise
-            ? linewiseCursorPosition(afterDeletingAt: deletion.cursorAnchor, in: updatedText)
-            : characterwiseCursorPosition(afterDeletingAt: deletion.cursorAnchor, in: updatedText)
+        let finalCursor = selection.linewise
+            ? linewiseCursorPosition(afterDeletingAt: selection.cursorAnchor, in: updatedText)
+            : characterwiseCursorPosition(afterDeletingAt: selection.cursorAnchor, in: updatedText)
 
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
         drawNormalCursor()
+    }
+
+    private func applyChange(_ target: VimOperatorTarget) {
+        let text = string as NSString
+        let change = VimChangeResolver.changeResult(
+            for: target,
+            in: text,
+            from: normalCursorPosition,
+            preferredColumn: vimEngine.sessionState.preferredColumn
+        )
+
+        if let range = change.range {
+            guard performTextChange(in: range, replacementString: change.replacementString) else {
+                return
+            }
+        }
+
+        if let clipboardPayload = change.clipboardPayload {
+            writeSelectionToPasteboard(payload: clipboardPayload)
+        }
+
+        vimEngine.setPreferredColumn(nil)
+        enterInsertMode(at: change.insertionLocation)
+    }
+
+    private func applyYank(_ target: VimOperatorTarget) {
+        let text = string as NSString
+
+        guard let selection = VimSelectionResolver.selectionResult(
+            for: target,
+            in: text,
+            from: normalCursorPosition,
+            preferredColumn: vimEngine.sessionState.preferredColumn
+        ) else {
+            return
+        }
+
+        let selectedText = text.substring(with: selection.range)
+        writeSelectionToPasteboard(
+            payload: VimPastePayload(
+                text: selectedText,
+                style: selection.linewise ? .linewise : .characterwise
+            )
+        )
     }
 
     private func applyPaste(_ placement: VimPastePlacement, count: Int?) {
@@ -371,6 +414,19 @@ final class VimTextView: NSTextView {
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
         drawNormalCursor()
+    }
+
+    private func writeSelectionToPasteboard(text: String, linewise: Bool) {
+        writeSelectionToPasteboard(
+            payload: VimPastePayload(
+                text: text,
+                style: linewise ? .linewise : .characterwise
+            )
+        )
+    }
+
+    private func writeSelectionToPasteboard(payload: VimPastePayload) {
+        VimPasteboard.write(payload)
     }
 
     private func characterwiseCursorPosition(afterDeletingAt anchor: Int, in text: NSString) -> Int {

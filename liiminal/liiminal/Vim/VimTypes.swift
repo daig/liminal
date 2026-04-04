@@ -113,8 +113,10 @@ struct VimPastePayload {
     let style: VimPasteStyle
 }
 
-enum VimOperator {
+enum VimOperator: Hashable {
     case delete
+    case change
+    case yank
 }
 
 enum VimOperatorMotion {
@@ -123,7 +125,7 @@ enum VimOperatorMotion {
     case linewise(VimTextMotion)
 }
 
-enum VimDeleteTarget {
+enum VimOperatorTarget {
     case currentLines(count: Int?)
     case characterwise(VimTextMotion, count: Int?)
     case linewise(VimTextMotion, count: Int?)
@@ -134,7 +136,9 @@ enum VimCommand {
     case enterInsert(VimInsertTransition)
     case moveText(VimTextMotion, count: Int?)
     case moveLayout(VimLayoutMotion, count: Int?)
-    case delete(VimDeleteTarget)
+    case delete(VimOperatorTarget)
+    case change(VimOperatorTarget)
+    case yank(VimOperatorTarget)
     case paste(VimPastePlacement, count: Int?)
 }
 
@@ -378,6 +382,12 @@ extension VimBindingTree {
 
         builder.bind([.character("d")]) { .beginOperator(.delete, count: $0) }
         builder.bind([.character("D")]) { .delete(.characterwise(.lineEnd, count: $0)) }
+        builder.bind([.character("c")]) { .beginOperator(.change, count: $0) }
+        builder.bind([.character("C")]) { .change(.characterwise(.lineEnd, count: $0)) }
+        builder.bind([.character("y")]) { .beginOperator(.yank, count: $0) }
+        builder.bind([.character("Y")]) { .yank(.currentLines(count: $0)) }
+        builder.bind([.character("s")]) { .change(.characterwise(.right, count: $0)) }
+        builder.bind([.character("S")]) { .change(.currentLines(count: $0)) }
         builder.bind([.character("x")]) { .delete(.characterwise(.right, count: $0)) }
         builder.bind([.character("X")]) { .delete(.characterwise(.left, count: $0)) }
         builder.bind([.special(.forwardDelete)]) { .delete(.characterwise(.right, count: $0)) }
@@ -473,7 +483,7 @@ extension VimBindingTree {
 }
 
 extension VimOperatorMotionBindingTree {
-    static let normalModeDeleteOperator: VimOperatorMotionBindingTree = {
+    private static func normalMode(for repeatedKey: Character) -> VimOperatorMotionBindingTree {
         var builder = Builder()
 
         func bindTextMotion(_ sequence: [VimKeyPress], kind: VimOperatorMotion) {
@@ -489,7 +499,7 @@ extension VimOperatorMotionBindingTree {
             }
         }
 
-        builder.bind([.character("d")]) { _ in .currentLines }
+        builder.bind([.character(repeatedKey)]) { _ in .currentLines }
 
         bindTextMotion([.character("h")], kind: .characterwise(.left))
         bindTextMotion([.character("j")], kind: .linewise(.down))
@@ -568,5 +578,9 @@ extension VimOperatorMotionBindingTree {
         bindTextMotion([.character("{")], kind: .linewise(.paragraphBackward))
 
         return builder.build()
-    }()
+    }
+
+    static let normalModeDeleteOperator = normalMode(for: "d")
+    static let normalModeChangeOperator = normalMode(for: "c")
+    static let normalModeYankOperator = normalMode(for: "y")
 }
