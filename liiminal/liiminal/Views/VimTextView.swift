@@ -29,7 +29,7 @@ final class VimTextView: NSTextView {
     private(set) var mode: VimMode = .normal {
         didSet {
             if mode != oldValue {
-                if oldValue == .visual && mode != .visual {
+                if oldValue.isVisual && !mode.isVisual {
                     visualAnchorPosition = nil
                 }
                 if mode != .normal {
@@ -51,7 +51,7 @@ final class VimTextView: NSTextView {
             // Capture cursor position from the real selection
             normalCursorPosition = selectedRange().location
             drawNormalCursor()
-        case .visual:
+        case .visual, .visualLine:
             isEditable = false
             clearNormalCursor()
             let selectionRange = visualSelectionDisplayRange()
@@ -127,30 +127,31 @@ final class VimTextView: NSTextView {
         return max(0, min(normalCursorPosition, length))
     }
 
-    private func visualSelectionDisplayRange() -> NSRange {
-        let text = string as NSString
-        guard text.length > 0, let visualAnchorPosition else {
-            return NSRange(location: 0, length: 0)
+    private var currentVisualKind: VimVisualKind? {
+        switch mode {
+        case .visual:
+            .characterwise
+        case .visualLine:
+            .linewise
+        case .normal, .insert:
+            nil
         }
+    }
 
-        let anchor = max(0, min(visualAnchorPosition, text.length - 1))
-        let head = max(0, min(normalCursorPosition, text.length - 1))
-        let lowerBound = min(anchor, head)
-        let upperBound = max(anchor, head) + 1
-        return NSRange(location: lowerBound, length: upperBound - lowerBound)
+    private func visualSelectionDisplayRange() -> NSRange {
+        currentVisualSelection()?.range ?? NSRange(location: 0, length: 0)
     }
 
     private func currentVisualSelection() -> VimSelectionResult? {
         let text = string as NSString
-        guard text.length > 0, visualAnchorPosition != nil else { return nil }
+        guard text.length > 0 else { return nil }
+        guard let visualAnchorPosition, let currentVisualKind else { return nil }
 
-        let range = visualSelectionDisplayRange()
-        guard range.length > 0 else { return nil }
-
-        return VimSelectionResult(
-            range: range,
-            cursorAnchor: range.location,
-            linewise: false
+        return VimSelectionResolver.visualSelectionResult(
+            kind: currentVisualKind,
+            in: text,
+            anchor: visualAnchorPosition,
+            head: normalCursorPosition
         )
     }
 
@@ -179,7 +180,7 @@ final class VimTextView: NSTextView {
         switch mode {
         case .normal:
             handleNormalMode(event)
-        case .visual:
+        case .visual, .visualLine:
             handleVisualMode(event)
         case .insert:
             handleInsertMode(event)
@@ -190,7 +191,7 @@ final class VimTextView: NSTextView {
         switch mode {
         case .normal:
             handleNormalModeMouseDown(event)
-        case .visual:
+        case .visual, .visualLine:
             handleVisualModeMouseDown(event)
         case .insert:
             super.mouseDown(with: event)
@@ -329,15 +330,21 @@ final class VimTextView: NSTextView {
         activeUndoHistory?.commitInsertSession(finalCursorPosition: normalCursorPosition)
     }
 
-    private func enterVisualMode() {
+    private func enterVisualMode(_ kind: VimVisualKind) {
         let text = string as NSString
-        let anchor = text.length > 0
-            ? max(0, min(normalCursorPosition, text.length - 1))
-            : 0
+        let anchor: Int
+
+        if mode.isVisual, let visualAnchorPosition {
+            anchor = visualAnchorPosition
+        } else {
+            anchor = text.length > 0
+                ? max(0, min(normalCursorPosition, text.length - 1))
+                : 0
+        }
 
         visualAnchorPosition = anchor
-        vimEngine.setMode(.visual)
-        mode = .visual
+        vimEngine.setMode(kind.mode)
+        mode = kind.mode
     }
 
     private func enterNormalModeFromVisual(at cursorPosition: Int) {
@@ -359,8 +366,8 @@ final class VimTextView: NSTextView {
         switch command {
         case .beginOperator:
             return
-        case .enterVisual:
-            enterVisualMode()
+        case .enterVisual(let kind):
+            enterVisualMode(kind)
         case .exitVisual:
             enterNormalModeFromVisual(at: normalCursorPosition)
         case .enterInsert(let transition):
@@ -375,7 +382,7 @@ final class VimTextView: NSTextView {
             )
 
             vimEngine.setPreferredColumn(navigationResult.preferredColumn)
-            if mode == .visual {
+            if mode.isVisual {
                 moveVisualCursorTo(navigationResult.position)
             } else {
                 moveCursorTo(navigationResult.position)
@@ -388,7 +395,7 @@ final class VimTextView: NSTextView {
                 from: normalCursorPosition
             )
             vimEngine.setPreferredColumn(nil)
-            if mode == .visual {
+            if mode.isVisual {
                 moveVisualCursorTo(destination)
             } else {
                 moveCursorTo(destination)
@@ -642,7 +649,9 @@ final class VimTextView: NSTextView {
 
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
-        drawNormalCursor()
+        if mode == .normal {
+            drawNormalCursor()
+        }
         activeUndoHistory?.commitImmediateEdits(
             [deleteEdit],
             beforeCursorPosition: beforeCursorPosition,

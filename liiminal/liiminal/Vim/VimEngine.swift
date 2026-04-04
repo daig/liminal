@@ -68,7 +68,7 @@ final class VimEngine {
 
             sessionState.clearPendingInput()
             return resolve(.moveText(motion, count: nil))
-        case .visual:
+        case .visual, .visualLine:
             sessionState.clearPendingInput()
             return resolve(.moveText(motion, count: nil))
         case .insert:
@@ -86,7 +86,7 @@ final class VimEngine {
             handleNormalMode(keyPress)
         case .insert:
             .ignored
-        case .visual:
+        case .visual, .visualLine:
             handleVisualMode(keyPress)
         }
     }
@@ -201,7 +201,14 @@ final class VimEngine {
         switch keyPress {
         case .character("v"):
             clearPendingInput()
-            return .handled(.exitVisual)
+            return sessionState.mode == .visualLine
+                ? .handled(.enterVisual(.characterwise))
+                : .handled(.exitVisual)
+        case .character("V"):
+            clearPendingInput()
+            return sessionState.mode == .visual
+                ? .handled(.enterVisual(.linewise))
+                : .handled(.exitVisual)
         case .character("d"), .character("x"):
             clearPendingInput()
             return .handled(.deleteSelection)
@@ -260,7 +267,10 @@ final class VimEngine {
             sessionState.pendingOperator = op
             sessionState.pendingOperatorCount = count
             return .pending
-        case .enterVisual, .exitVisual, .deleteSelection, .changeSelection, .yankSelection,
+        case .enterVisual(let kind):
+            setMode(kind.mode)
+            return .handled(command)
+        case .exitVisual, .deleteSelection, .changeSelection, .yankSelection,
             .replaceSelectionWithPaste:
             return .handled(command)
         case .enterInsert:

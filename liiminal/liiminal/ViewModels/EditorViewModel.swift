@@ -5,6 +5,18 @@ enum VimMode: String {
     case normal
     case insert
     case visual
+    case visualLine = "visual line"
+}
+
+extension VimMode {
+    var isVisual: Bool {
+        switch self {
+        case .visual, .visualLine:
+            true
+        case .normal, .insert:
+            false
+        }
+    }
 }
 
 @Observable

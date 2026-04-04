@@ -107,7 +107,7 @@ struct ContentView: View {
         switch mode {
         case .normal:
             .orange
-        case .visual:
+        case .visual, .visualLine:
             .blue
         case .insert:
             .secondary
@@ -118,7 +118,7 @@ struct ContentView: View {
         switch mode {
         case .normal:
             Color.orange.opacity(0.15)
-        case .visual:
+        case .visual, .visualLine:
             Color.blue.opacity(0.14)
         case .insert:
             Color.secondary.opacity(0.1)

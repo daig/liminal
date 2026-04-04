@@ -14,6 +14,7 @@ The list below describes the behaviors that are available today.
 | --- | --- |
 | `i` | Enter Insert mode at the current cursor position. |
 | `v` | Enter characterwise Visual mode starting at the current cursor position. |
+| `V` | Enter linewise Visual mode starting at the current line. |
 | `a` | Enter Insert mode after the current character. On an empty or blank line, this behaves like inserting at the current line position. |
 | `I` | Enter Insert mode at the first non-blank character of the current line. |
 | `A` | Enter Insert mode at the end of the current line. |
@@ -44,24 +45,26 @@ Examples:
 ## Mouse
 
 - In Normal mode, clicking a character moves the cursor to that position.
-- In Visual mode, clicking a character extends or shrinks the current characterwise selection to that position.
+- In Visual mode, clicking a character extends or shrinks the current selection to that position. In linewise Visual mode, the selection still expands and contracts in whole-line units.
 - If an operator is pending, such as after `d`, `c`, or `y`, clicking a character uses that clicked position as the motion target for the operator.
 - Operator-pending mouse motions are characterwise and span from the starting cursor position through the clicked position.
 
 ## Visual Mode
 
-This editor currently supports characterwise Visual mode only. Linewise Visual mode, blockwise Visual mode, text objects, and most of Vim's visual-only command variants are not implemented yet.
+This editor currently supports characterwise Visual mode and linewise Visual mode. Blockwise Visual mode, text objects, and most of Vim's visual-only command variants are not implemented yet.
 
 ### Selection Movement
 
 - In Visual mode, the supported motion keys reuse the same movement subset as Normal mode and extend or shrink the active selection.
 - This includes basic movement, line anchors, word motions, `gg` / `G`, in-line character search, view-relative movement, wrapped-line movement, paragraph movement, and character clicks with the mouse.
+- In linewise Visual mode, the selected range always expands or contracts by whole lines, regardless of the motion used to move the cursor within the selection.
 
 ### Visual Actions
 
 | Key | Behavior |
 | --- | --- |
-| `v` | Leave Visual mode and return to Normal mode. |
+| `v` | Leave characterwise Visual mode and return to Normal mode. In linewise Visual mode, switch to characterwise Visual mode. |
+| `V` | Leave linewise Visual mode and return to Normal mode. In characterwise Visual mode, switch to linewise Visual mode. |
 | `Esc` | Leave Visual mode and return to Normal mode. |
 | `d` | Delete the current selection, copy it to the system clipboard, and return to Normal mode. |
 | `x` | Delete the current selection and return to Normal mode. |

@@ -100,6 +100,20 @@ enum VimInsertTransition {
     case openLineAbove
 }
 
+enum VimVisualKind: Equatable {
+    case characterwise
+    case linewise
+
+    var mode: VimMode {
+        switch self {
+        case .characterwise:
+            .visual
+        case .linewise:
+            .visualLine
+        }
+    }
+}
+
 enum VimPastePlacement {
     case afterCursor
     case beforeCursor
@@ -142,7 +156,7 @@ enum VimOperatorTarget {
 enum VimCommand {
     case beginOperator(VimOperator, count: Int?)
     case enterInsert(VimInsertTransition)
-    case enterVisual
+    case enterVisual(VimVisualKind)
     case exitVisual
     case moveText(VimTextMotion, count: Int?)
     case moveLayout(VimLayoutMotion, count: Int?)
@@ -978,7 +992,12 @@ extension VimBindingTree {
         builder.bind([.character("u")], description: "Undo") { .undo(count: $0) }
         builder.bind([.special(.ctrlR)], description: "Redo") { .redo(count: $0) }
         builder.bind([.character("i")], description: "Insert") { _ in .enterInsert(.atCursor) }
-        builder.bind([.character("v")], description: "Visual mode") { _ in .enterVisual }
+        builder.bind([.character("v")], description: "Visual mode") {
+            _ in .enterVisual(.characterwise)
+        }
+        builder.bind([.character("V")], description: "Visual line mode") {
+            _ in .enterVisual(.linewise)
+        }
         builder.bind([.character("a")], description: "Append") { _ in .enterInsert(.afterCursor) }
         builder.bind(
             [.character("I")],
