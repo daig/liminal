@@ -11,6 +11,7 @@ final class EditorViewModel {
     var isDirty: Bool = false
     var document: Document = Document(blocks: [])
     var vimMode: VimMode = .normal
+    var vimStatus = VimStatusPresentation(mode: .normal, detailText: nil)
 
     let fileService: FileSystemService
     private var saveTask: Task<Void, Never>?

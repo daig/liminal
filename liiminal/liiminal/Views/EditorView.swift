@@ -104,6 +104,11 @@ struct EditorView: NSViewRepresentable {
             editorViewModel.vimMode = mode
         }
 
+        func vimTextView(_ textView: VimTextView, didChangeStatus status: VimStatusPresentation) {
+            editorViewModel.vimStatus = status
+            editorViewModel.vimMode = status.mode
+        }
+
         // MARK: - Table Position Queries
 
         /// Is this cursor position inside a table?

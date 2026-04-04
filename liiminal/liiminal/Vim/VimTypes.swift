@@ -151,6 +151,11 @@ enum VimCommand {
     case redo(count: Int?)
 }
 
+struct VimStatusPresentation: Equatable {
+    let mode: VimMode
+    let detailText: String?
+}
+
 struct VimSessionState {
     var mode: VimMode = .normal
     var pendingCount: Int?
@@ -169,6 +174,132 @@ struct VimSessionState {
         pendingCharacterCommandFactory = nil
         pendingOperator = nil
         pendingCharacterOperatorMotionFactory = nil
+    }
+
+    var statusPresentation: VimStatusPresentation {
+        VimStatusPresentation(
+            mode: mode,
+            detailText: mode == .normal ? pendingDetailText : nil
+        )
+    }
+
+    private var pendingDetailText: String? {
+        if let pendingOperator {
+            return pendingOperatorDetailText(for: pendingOperator)
+        }
+
+        let sequence = nonOperatorPendingSequenceDisplay()
+        return sequence?.isEmpty == false ? sequence : nil
+    }
+
+    private func pendingOperatorDetailText(for pendingOperator: VimOperator) -> String {
+        let operatorLabel = pendingOperator.statusLabel
+        let sequence = operatorPendingSequenceDisplay(for: pendingOperator)
+        let isBareOperator =
+            pendingKeys.isEmpty
+            && pendingCount == nil
+            && pendingCharacterOperatorMotionFactory == nil
+
+        if isBareOperator {
+            if let pendingOperatorCount {
+                return "\(operatorLabel) ×\(pendingOperatorCount)"
+            }
+            return operatorLabel
+        }
+
+        return "\(operatorLabel) · \(sequence)"
+    }
+
+    private func operatorPendingSequenceDisplay(for pendingOperator: VimOperator) -> String {
+        var sequence = ""
+
+        if let pendingOperatorCount {
+            sequence += String(pendingOperatorCount)
+        }
+
+        sequence += pendingOperator.keyNotation
+
+        if let pendingCount {
+            sequence += String(pendingCount)
+        }
+
+        sequence += pendingKeys.map(\.statusNotation).joined()
+
+        return sequence + "…"
+    }
+
+    private func nonOperatorPendingSequenceDisplay() -> String? {
+        let hasPendingInput =
+            pendingCount != nil
+            || !pendingKeys.isEmpty
+            || pendingCharacterCommandFactory != nil
+
+        guard hasPendingInput else { return nil }
+
+        var sequence = ""
+
+        if let pendingCount {
+            sequence += String(pendingCount)
+        }
+
+        sequence += pendingKeys.map(\.statusNotation).joined()
+
+        return sequence + "…"
+    }
+}
+
+private extension VimOperator {
+    var statusLabel: String {
+        switch self {
+        case .delete:
+            "DELETE"
+        case .change:
+            "CHANGE"
+        case .yank:
+            "YANK"
+        }
+    }
+
+    var keyNotation: String {
+        switch self {
+        case .delete:
+            "d"
+        case .change:
+            "c"
+        case .yank:
+            "y"
+        }
+    }
+}
+
+private extension VimKeyPress {
+    var statusNotation: String {
+        switch self {
+        case .character(let character):
+            String(character)
+        case .special(.escape):
+            "Esc"
+        case .special(.leftArrow):
+            "Left"
+        case .special(.rightArrow):
+            "Right"
+        case .special(.downArrow):
+            "Down"
+        case .special(.upArrow):
+            "Up"
+        case .special(.forwardDelete):
+            "Del"
+        case .special(.ctrlR):
+            "^R"
+        case .special(.ctrlU):
+            "^U"
+        case .special(.ctrlD):
+            "^D"
+        case .special(.ctrlB):
+            "^B"
+        case .special(.ctrlF):
+            "^F"
+        }
     }
 }
 

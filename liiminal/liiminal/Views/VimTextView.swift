@@ -29,6 +29,7 @@ final class VimTextView: NSTextView {
             if mode != oldValue {
                 updateModeAppearance()
                 vimDelegate?.vimTextView(self, didChangeMode: mode)
+                publishVimStatus()
             }
         }
     }
@@ -114,6 +115,8 @@ final class VimTextView: NSTextView {
         } else {
             updateModeAppearance()
         }
+
+        publishVimStatus()
     }
 
     // MARK: - Key Handling
@@ -165,6 +168,8 @@ final class VimTextView: NSTextView {
         case .pending, .ignored:
             break
         }
+
+        publishVimStatus()
     }
 
     // MARK: - Mode Transitions
@@ -638,6 +643,13 @@ final class VimTextView: NSTextView {
         return finalCursor
     }
 
+    private func publishVimStatus() {
+        vimDelegate?.vimTextView(
+            self,
+            didChangeStatus: vimEngine.sessionState.statusPresentation
+        )
+    }
+
     private func keyPress(for event: NSEvent) -> VimKeyPress? {
         switch event.keyCode {
         case 53:
@@ -683,4 +695,5 @@ final class VimTextView: NSTextView {
 
 protocol VimTextViewDelegate: AnyObject {
     func vimTextView(_ textView: VimTextView, didChangeMode mode: VimMode)
+    func vimTextView(_ textView: VimTextView, didChangeStatus status: VimStatusPresentation)
 }
