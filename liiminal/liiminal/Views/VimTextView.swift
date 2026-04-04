@@ -6,6 +6,10 @@ import AppKit
 /// keyboard layout (Colemak, Dvorak, etc.) — the character that *would* be
 /// typed in insert mode is the one matched in normal mode.
 final class VimTextView: NSTextView {
+    private enum OpenLineDirection {
+        case above
+        case below
+    }
 
     weak var vimDelegate: VimTextViewDelegate?
 
@@ -145,7 +149,11 @@ final class VimTextView: NSTextView {
 
     // MARK: - Mode Transitions
 
-    private func enterInsertMode() {
+    private func enterInsertMode(at insertionPosition: Int? = nil) {
+        if let insertionPosition {
+            let length = (string as NSString).length
+            normalCursorPosition = max(0, min(insertionPosition, length))
+        }
         vimEngine.setMode(.insert)
         mode = .insert
     }
@@ -170,9 +178,11 @@ final class VimTextView: NSTextView {
 
     private func apply(_ command: VimCommand) {
         switch command {
-        case .enterInsertMode:
-            enterInsertMode()
-        case .move(let motion, let count):
+        case .beginOperator:
+            return
+        case .enterInsert(let transition):
+            applyInsertTransition(transition)
+        case .moveText(let motion, let count):
             let navigationResult = VimNavigator.destination(
                 for: motion,
                 count: count,
@@ -183,7 +193,228 @@ final class VimTextView: NSTextView {
 
             vimEngine.setPreferredColumn(navigationResult.preferredColumn)
             moveCursorTo(navigationResult.position)
+        case .moveLayout(let motion, let count):
+            let destination = VimLayoutNavigator.destination(
+                for: motion,
+                count: count,
+                in: self,
+                from: normalCursorPosition
+            )
+            vimEngine.setPreferredColumn(nil)
+            moveCursorTo(destination)
+        case .delete(let target):
+            applyDelete(target)
+        case .paste(let placement, let count):
+            applyPaste(placement, count: count)
         }
+    }
+
+    private func applyInsertTransition(_ transition: VimInsertTransition) {
+        let text = string as NSString
+
+        switch transition {
+        case .atCursor:
+            enterInsertMode()
+        case .afterCursor:
+            enterInsertMode(at: appendInsertionPosition(in: text))
+        case .lineFirstNonBlank:
+            enterInsertMode(at: firstNonBlankInsertionPosition(in: text))
+        case .lineEnd:
+            enterInsertMode(at: lineEndInsertionPosition(in: text))
+        case .openLineBelow:
+            openLine(.below, in: text)
+        case .openLineAbove:
+            openLine(.above, in: text)
+        }
+    }
+
+    private func openLine(_ direction: OpenLineDirection, in text: NSString) {
+        let insertionLocation: Int
+        let finalSelectionLocation: Int
+
+        if text.length == 0 {
+            insertionLocation = 0
+            finalSelectionLocation = direction == .below ? 1 : 0
+        } else {
+            let lineRange = currentLineRange(in: text)
+
+            switch direction {
+            case .below:
+                insertionLocation = lineContentUpperBound(of: lineRange, in: text)
+                finalSelectionLocation = insertionLocation + 1
+            case .above:
+                insertionLocation = lineRange.location
+                finalSelectionLocation = insertionLocation
+            }
+        }
+
+        enterInsertMode(at: insertionLocation)
+        insertText("\n", replacementRange: selectedRange())
+
+        let length = (string as NSString).length
+        let clampedSelection = max(0, min(finalSelectionLocation, length))
+        setSelectedRange(NSRange(location: clampedSelection, length: 0))
+        normalCursorPosition = clampedSelection
+    }
+
+    private func appendInsertionPosition(in text: NSString) -> Int {
+        guard text.length > 0 else { return 0 }
+
+        let currentPosition = max(0, min(normalCursorPosition, text.length - 1))
+        if text.character(at: currentPosition) == 0x0A {
+            return currentPosition
+        }
+
+        let lineRange = currentLineRange(in: text)
+        return min(currentPosition + 1, lineContentUpperBound(of: lineRange, in: text))
+    }
+
+    private func firstNonBlankInsertionPosition(in text: NSString) -> Int {
+        guard text.length > 0 else { return 0 }
+        return firstNonBlank(in: currentLineRange(in: text), text: text)
+    }
+
+    private func lineEndInsertionPosition(in text: NSString) -> Int {
+        guard text.length > 0 else { return 0 }
+        return lineContentUpperBound(of: currentLineRange(in: text), in: text)
+    }
+
+    private func currentLineRange(in text: NSString) -> NSRange {
+        guard text.length > 0 else { return NSRange(location: 0, length: 0) }
+
+        let location = max(0, min(normalCursorPosition, text.length - 1))
+        return text.lineRange(for: NSRange(location: location, length: 0))
+    }
+
+    private func lineContentUpperBound(of lineRange: NSRange, in text: NSString) -> Int {
+        guard lineRange.length > 0 else { return lineRange.location }
+
+        let lastIndex = NSMaxRange(lineRange) - 1
+        let endsWithNewline = text.character(at: lastIndex) == 0x0A
+        return endsWithNewline ? lastIndex : NSMaxRange(lineRange)
+    }
+
+    private func firstNonBlank(in range: NSRange, text: NSString) -> Int {
+        let upperBound = lineContentUpperBound(of: range, in: text)
+        var currentIndex = range.location
+
+        while currentIndex < upperBound {
+            let character = text.character(at: currentIndex)
+            guard let scalar = Unicode.Scalar(character) else { break }
+            if !CharacterSet.whitespaces.contains(scalar) {
+                return currentIndex
+            }
+            currentIndex += 1
+        }
+
+        return range.location
+    }
+
+    private func applyDelete(_ target: VimDeleteTarget) {
+        let text = string as NSString
+
+        guard let deletion = VimDeleteResolver.deletionResult(
+            for: target,
+            in: text,
+            from: normalCursorPosition,
+            preferredColumn: vimEngine.sessionState.preferredColumn
+        ) else {
+            return
+        }
+
+        let deletedText = text.substring(with: deletion.range)
+        guard performTextChange(in: deletion.range, replacementString: "") else { return }
+
+        VimPasteboard.write(
+            VimPastePayload(
+                text: deletedText,
+                style: deletion.linewise ? .linewise : .characterwise
+            )
+        )
+        vimEngine.setPreferredColumn(nil)
+
+        let updatedText = string as NSString
+        let finalCursor = deletion.linewise
+            ? linewiseCursorPosition(afterDeletingAt: deletion.cursorAnchor, in: updatedText)
+            : characterwiseCursorPosition(afterDeletingAt: deletion.cursorAnchor, in: updatedText)
+
+        normalCursorPosition = finalCursor
+        setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
+        drawNormalCursor()
+    }
+
+    private func applyPaste(_ placement: VimPastePlacement, count: Int?) {
+        guard let payload = VimPasteboard.read() else { return }
+
+        let text = string as NSString
+        guard let paste = VimPasteResolver.pasteResult(
+            for: payload,
+            placement: placement,
+            count: count,
+            in: text,
+            from: normalCursorPosition
+        ) else {
+            return
+        }
+
+        guard performTextChange(in: paste.range, replacementString: paste.replacementString) else {
+            return
+        }
+
+        vimEngine.setPreferredColumn(nil)
+
+        let updatedText = string as NSString
+        let finalCursor = paste.linewise
+            ? linewiseCursorPosition(afterDeletingAt: paste.cursorAnchor, in: updatedText)
+            : characterwiseCursorPosition(afterDeletingAt: paste.cursorAnchor, in: updatedText)
+
+        normalCursorPosition = finalCursor
+        setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
+        drawNormalCursor()
+    }
+
+    private func characterwiseCursorPosition(afterDeletingAt anchor: Int, in text: NSString) -> Int {
+        guard text.length > 0 else { return 0 }
+
+        let clamped = max(0, min(anchor, text.length - 1))
+        if text.character(at: clamped) == 0x0A && clamped > 0 {
+            let lineRange = text.lineRange(for: NSRange(location: clamped, length: 0))
+            if clamped > lineRange.location {
+                return clamped - 1
+            }
+        }
+
+        return clamped
+    }
+
+    private func linewiseCursorPosition(afterDeletingAt anchor: Int, in text: NSString) -> Int {
+        guard text.length > 0 else { return 0 }
+
+        let clamped = max(0, min(anchor, text.length - 1))
+        let lineRange = text.lineRange(for: NSRange(location: clamped, length: 0))
+        return firstNonBlank(in: lineRange, text: text)
+    }
+
+    private func performTextChange(in range: NSRange, replacementString: String) -> Bool {
+        guard let textStorage else { return false }
+
+        let wasEditable = isEditable
+        if !wasEditable {
+            isEditable = true
+        }
+        defer {
+            if !wasEditable {
+                isEditable = false
+            }
+        }
+
+        guard shouldChangeText(in: range, replacementString: replacementString) else {
+            return false
+        }
+
+        textStorage.replaceCharacters(in: range, with: replacementString)
+        didChangeText()
+        return true
     }
 
     private func keyPress(for event: NSEvent) -> VimKeyPress? {
@@ -203,6 +434,22 @@ final class VimTextView: NSTextView {
         }
 
         guard let chars = event.characters, let char = chars.first else { return nil }
+
+        if let scalar = chars.unicodeScalars.first {
+            switch scalar.value {
+            case 0x15:
+                return .special(.ctrlU)
+            case 0x04:
+                return .special(.ctrlD)
+            case 0x02:
+                return .special(.ctrlB)
+            case 0x06:
+                return .special(.ctrlF)
+            default:
+                break
+            }
+        }
+
         return .character(char)
     }
 }
