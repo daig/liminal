@@ -386,16 +386,109 @@ struct DisplayLatexBlockView: View {
 struct HTMLBlockView: View {
     let block: HTMLBlock
     @Environment(\.baseFontSize) private var baseFontSize
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var contentHeight: CGFloat = 20
 
     var body: some View {
-        Text(block.rawHTML)
-            .font(.system(size: baseFontSize - 2, design: .monospaced))
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(RenderStyle.codeBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.vertical, 4)
+        HTMLTextView(
+            html: block.rawHTML,
+            baseFontSize: baseFontSize,
+            isDarkMode: colorScheme == .dark,
+            contentHeight: $contentHeight
+        )
+        .frame(height: contentHeight)
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - HTML Text View (NSViewRepresentable)
+
+/// Renders HTML via NSTextView, which properly supports NSTextTable
+/// and other rich paragraph-level attributes that SwiftUI Text ignores.
+struct HTMLTextView: NSViewRepresentable {
+    let html: String
+    let baseFontSize: CGFloat
+    let isDarkMode: Bool
+    @Binding var contentHeight: CGFloat
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        applyHTML(to: textView)
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        applyHTML(to: textView)
+    }
+
+    private func applyHTML(to textView: NSTextView) {
+        guard let attributed = Self.renderHTML(
+            html, fontSize: baseFontSize, isDark: isDarkMode
+        ) else { return }
+
+        textView.textStorage?.setAttributedString(attributed)
+
+        // Measure content height after layout
+        DispatchQueue.main.async {
+            textView.layoutManager?.ensureLayout(
+                for: textView.textContainer!
+            )
+            let rect = textView.layoutManager!.usedRect(
+                for: textView.textContainer!
+            )
+            let newHeight = ceil(rect.height)
+            if abs(newHeight - self.contentHeight) > 1 {
+                self.contentHeight = max(newHeight, 1)
+            }
+        }
+    }
+
+    static func renderHTML(
+        _ html: String, fontSize: CGFloat, isDark: Bool
+    ) -> NSAttributedString? {
+        let textColor = isDark ? "#e0e0e0" : "#1d1d1f"
+        let linkColor = isDark ? "#6eb5ff" : "#0066cc"
+        let borderColor = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)"
+
+        let wrapped = """
+        <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: \(fontSize)px;
+            line-height: 1.6;
+            color: \(textColor);
+        }
+        a { color: \(linkColor); }
+        table { border-collapse: collapse; }
+        th, td {
+            border: 1px solid \(borderColor);
+            padding: 4px 8px;
+            text-align: left;
+        }
+        code, pre {
+            font-family: ui-monospace, Menlo, monospace;
+            font-size: 0.9em;
+        }
+        </style>
+        \(html)
+        """
+
+        guard let data = wrapped.data(using: .utf8) else { return nil }
+        return try? NSAttributedString(
+            data: data,
+            options: [
+                .documentType: NSAttributedString.DocumentType.html,
+                .characterEncoding: String.Encoding.utf8.rawValue,
+            ],
+            documentAttributes: nil
+        )
     }
 }

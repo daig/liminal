@@ -38,6 +38,16 @@ private struct ParserState {
         case fencedCode(fence: String, language: String?)
         case frontmatter
         case displayLatex
+        case htmlBlock(endCondition: HTMLBlockEndCondition)
+    }
+
+    enum HTMLBlockEndCondition {
+        case tag(String)       // types 1: ends at </tag>
+        case comment           // type 2: ends at -->
+        case processingInstr   // type 3: ends at ?>
+        case declaration       // type 4: ends at >
+        case cdata             // type 5: ends at ]]>
+        case blankLine         // types 6/7: ends at blank line
     }
 
     mutating func processLine(_ line: String) {
@@ -48,6 +58,8 @@ private struct ParserState {
             processFrontmatterLine(line)
         case .displayLatex:
             processDisplayLatexLine(line)
+        case .htmlBlock(let endCondition):
+            processHTMLBlockLine(line, endCondition: endCondition)
         case .toplevel:
             processToplevelLine(line)
         }
@@ -74,6 +86,14 @@ private struct ParserState {
             let sourceLength = accumulator.prefixLength + accumulator.sourceLength
             blocks.append(.displayLatex(DisplayLatexBlock(
                 latex: latex, sourceLength: sourceLength
+            )))
+            accumulator.reset()
+        case .htmlBlock:
+            // Unclosed HTML block — emit what we have
+            let raw = accumulator.prefixText + accumulator.joinedContent
+            let sourceLength = accumulator.prefixLength + accumulator.sourceLength
+            blocks.append(.htmlBlock(HTMLBlock(
+                rawHTML: raw, sourceLength: sourceLength
             )))
             accumulator.reset()
         case .toplevel:
@@ -165,6 +185,24 @@ private struct ParserState {
             return
         }
 
+        // HTML block
+        if let endCondition = Self.tryParseHTMLBlockOpening(trimmed) {
+            flushParagraph()
+            // Check if this single line also contains the end condition
+            if Self.htmlBlockLineContainsEnd(trimmed, endCondition: endCondition) {
+                blocks.append(.htmlBlock(HTMLBlock(
+                    rawHTML: line, sourceLength: line.count
+                )))
+                isFirstBlock = false
+            } else {
+                mode = .htmlBlock(endCondition: endCondition)
+                accumulator.reset()
+                accumulator.prefixText = line
+                accumulator.prefixLength = line.count
+            }
+            return
+        }
+
         // Default: paragraph continuation
         accumulator.addLine(line)
     }
@@ -226,6 +264,122 @@ private struct ParserState {
             mode = .toplevel
         } else {
             accumulator.addLine(line)
+        }
+    }
+
+    // MARK: - HTML Block
+
+    private mutating func processHTMLBlockLine(
+        _ line: String, endCondition: HTMLBlockEndCondition
+    ) {
+        accumulator.addLine(line)
+        let trimmed = line.trimmingTrailingNewline
+
+        let isEnd: Bool
+        switch endCondition {
+        case .blankLine:
+            isEnd = trimmed.allSatisfy(\.isWhitespace) || trimmed.isEmpty
+        default:
+            isEnd = Self.htmlBlockLineContainsEnd(trimmed, endCondition: endCondition)
+        }
+
+        if isEnd {
+            let raw: String
+            if case .blankLine = endCondition {
+                // Don't include the blank line in the HTML content
+                let htmlLines = accumulator.lines.dropLast()
+                raw = accumulator.prefixText + htmlLines.joined()
+            } else {
+                raw = accumulator.prefixText + accumulator.joinedContent
+            }
+            let sourceLength = accumulator.prefixLength + accumulator.sourceLength
+            blocks.append(.htmlBlock(HTMLBlock(
+                rawHTML: raw, sourceLength: sourceLength
+            )))
+            accumulator.reset()
+            mode = .toplevel
+            isFirstBlock = false
+        }
+    }
+
+    // MARK: - HTML Block Detection
+
+    /// CommonMark HTML block types 1-7.
+    private static let type1Tags: Set<String> = [
+        "script", "pre", "style", "textarea",
+    ]
+
+    /// Block-level HTML tags (type 6).
+    private static let type6Tags: Set<String> = [
+        "address", "article", "aside", "base", "basefont", "blockquote", "body",
+        "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+        "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr", "html",
+        "iframe", "legend", "li", "link", "main", "menu", "menuitem", "nav", "ol",
+        "optgroup", "option", "p", "param", "search", "section", "summary",
+        "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+    ]
+
+    static func tryParseHTMLBlockOpening(_ trimmed: String) -> HTMLBlockEndCondition? {
+        guard trimmed.hasPrefix("<") else { return nil }
+        let lower = trimmed.lowercased()
+
+        // Type 2: <!-- comment
+        if lower.hasPrefix("<!--") { return .comment }
+
+        // Type 3: <? processing instruction
+        if lower.hasPrefix("<?") { return .processingInstr }
+
+        // Type 5: <![CDATA[
+        if lower.hasPrefix("<![cdata[") { return .cdata }
+
+        // Type 4: <! declaration (must come after CDATA check)
+        if lower.hasPrefix("<!") && lower.count > 2 && lower[lower.index(lower.startIndex, offsetBy: 2)].isLetter {
+            return .declaration
+        }
+
+        // Extract tag name from opening or closing tag
+        let tagStart = lower.hasPrefix("</") ? 2 : 1
+        var i = tagStart
+        let chars = Array(lower)
+        while i < chars.count && (chars[i].isLetter || chars[i].isNumber || chars[i] == "-") {
+            i += 1
+        }
+        guard i > tagStart else { return nil }
+        let tagName = String(chars[tagStart..<i])
+
+        // After tag name must be whitespace, >, />, or end of line
+        if i < chars.count {
+            let next = chars[i]
+            guard next == " " || next == "\t" || next == ">" || next == "/" else { return nil }
+        }
+
+        // Type 1: script, pre, style, textarea
+        if type1Tags.contains(tagName) { return .tag(tagName) }
+
+        // Type 6: block-level tags
+        if type6Tags.contains(tagName) { return .blankLine }
+
+        // Type 7: any other complete tag on its own line (opening or self-closing)
+        // Must not be an inline-level element
+        if !lower.hasPrefix("</") {
+            return .blankLine
+        }
+
+        return nil
+    }
+
+    static func htmlBlockLineContainsEnd(
+        _ line: String, endCondition: HTMLBlockEndCondition
+    ) -> Bool {
+        let lower = line.lowercased()
+        switch endCondition {
+        case .tag(let tag): return lower.contains("</\(tag)>")
+        case .comment:      return lower.contains("-->")
+        case .processingInstr: return lower.contains("?>")
+        case .declaration:  return lower.contains(">")
+        case .cdata:        return lower.contains("]]>")
+        case .blankLine:    return false  // blank line checked separately
         }
     }
 

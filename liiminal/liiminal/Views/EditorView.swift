@@ -298,7 +298,10 @@ struct EditorView: NSViewRepresentable {
             case .displayLatex(let d):
                 let range = NSRange(location: offset, length: d.sourceLength)
                 storage.addAttributes(HighlightTheme.latexAttributes, range: range)
-            case .blankLine, .htmlBlock:
+            case .htmlBlock(let h):
+                let range = NSRange(location: offset, length: h.sourceLength)
+                storage.addAttributes(HighlightTheme.htmlBlockAttributes, range: range)
+            case .blankLine:
                 break
             }
         }
@@ -733,5 +736,13 @@ enum HighlightTheme {
 
     static let frontmatterAttributes: [NSAttributedString.Key: Any] = [
         .foregroundColor: frontmatterColor,
+    ]
+
+    static let htmlColor = NSColor.systemPink.withAlphaComponent(0.8)
+
+    static let htmlBlockAttributes: [NSAttributedString.Key: Any] = [
+        .font: defaultFont,
+        .foregroundColor: htmlColor,
+        .backgroundColor: NSColor.quaternaryLabelColor,
     ]
 }
