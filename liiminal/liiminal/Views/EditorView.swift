@@ -16,7 +16,7 @@ struct EditorView: NSViewRepresentable {
         let textView = VimTextView(frame: .zero, textContainer: textContainer)
         textView.isEditable = false  // starts in normal mode
         textView.isSelectable = true
-        textView.allowsUndo = true
+        textView.allowsUndo = false
         textView.isRichText = false
         textView.usesFindBar = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -44,9 +44,17 @@ struct EditorView: NSViewRepresentable {
         context.coordinator.textView = textView
 
         if let note = editorViewModel.currentNote {
-            textView.loadDocumentText(note.content)
+            textView.loadDocumentText(
+                note.content,
+                undoHistory: editorViewModel.undoHistory(for: note)
+            )
             context.coordinator.currentNoteID = note.id
             context.coordinator.applyHighlighting()
+        } else {
+            textView.loadDocumentText(
+                "",
+                undoHistory: editorViewModel.undoHistory(for: nil)
+            )
         }
 
         return scrollView
@@ -58,7 +66,10 @@ struct EditorView: NSViewRepresentable {
         let newNoteID = editorViewModel.currentNote?.id
         if context.coordinator.currentNoteID != newNoteID {
             context.coordinator.currentNoteID = newNoteID
-            textView.loadDocumentText(editorViewModel.currentNote?.content ?? "")
+            textView.loadDocumentText(
+                editorViewModel.currentNote?.content ?? "",
+                undoHistory: editorViewModel.undoHistory(for: editorViewModel.currentNote)
+            )
             textView.scrollToBeginningOfDocument(nil)
             context.coordinator.applyHighlighting()
         }

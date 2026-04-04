@@ -182,6 +182,15 @@ Paste uses the current system clipboard contents.
 
 Counts repeat the paste. For example, `3p` pastes the current clipboard contents three times.
 
+## Undo Tree
+
+Undo history is stored per note for the current app session. Normal-mode edit commands like delete, change, and paste each create one undo step. An uninterrupted Insert-mode session also undoes as one step.
+
+| Key | Behavior |
+| --- | --- |
+| `u` | Undo the most recent change. With a count, undo that many changes. |
+| `Ctrl-R` | Redo along the currently active undo branch. With a count, redo that many changes. |
+
 ## Normal Mode Yank
 
 Yank uses Vim's `y` operator model over the same currently supported motion subset as delete. Successful yanks write the selected text to the system clipboard but do not modify the document or move the cursor.
@@ -274,5 +283,6 @@ This is not full Vim yet. Some important Vim features are intentionally still ou
 - `/`, `?`, `n`, `N`, `*`, `#`
 - marks and register-based jumps
 - named registers and advanced put variants like `gp`, `gP`, `[p`, and `]p`
+- advanced undo-tree navigation like `g-` and `g+`
 - Visual mode
 - command-line mode and Ex commands

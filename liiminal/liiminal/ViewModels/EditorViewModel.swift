@@ -14,6 +14,8 @@ final class EditorViewModel {
 
     let fileService: FileSystemService
     private var saveTask: Task<Void, Never>?
+    private var undoHistories: [URL: VimUndoHistory] = [:]
+    private var scratchUndoHistory = VimUndoHistory(rootText: "")
 
     init(fileService: FileSystemService) {
         self.fileService = fileService
@@ -36,6 +38,25 @@ final class EditorViewModel {
         isDirty = true
         document = Document(blocks: BlockParser.parse(newText))
         scheduleSave()
+    }
+
+    func undoHistory(for note: Note?) -> VimUndoHistory {
+        let loadedText = note?.content ?? ""
+
+        guard let noteID = note?.id else {
+            if scratchUndoHistory.currentText != loadedText {
+                scratchUndoHistory = VimUndoHistory(rootText: loadedText)
+            }
+            return scratchUndoHistory
+        }
+
+        if let existingHistory = undoHistories[noteID], existingHistory.currentText == loadedText {
+            return existingHistory
+        }
+
+        let history = VimUndoHistory(rootText: loadedText)
+        undoHistories[noteID] = history
+        return history
     }
 
     func save() {

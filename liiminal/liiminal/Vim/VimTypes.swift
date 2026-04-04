@@ -12,6 +12,7 @@ enum VimSpecialKey: Hashable {
     case downArrow
     case upArrow
     case forwardDelete
+    case ctrlR
     case ctrlU
     case ctrlD
     case ctrlB
@@ -113,6 +114,12 @@ struct VimPastePayload {
     let style: VimPasteStyle
 }
 
+struct VimTextEdit: Equatable {
+    let location: Int
+    let removedText: String
+    let insertedText: String
+}
+
 enum VimOperator: Hashable {
     case delete
     case change
@@ -140,6 +147,8 @@ enum VimCommand {
     case change(VimOperatorTarget)
     case yank(VimOperatorTarget)
     case paste(VimPastePlacement, count: Int?)
+    case undo(count: Int?)
+    case redo(count: Int?)
 }
 
 struct VimSessionState {
@@ -391,6 +400,8 @@ extension VimBindingTree {
         builder.bind([.character("x")]) { .delete(.characterwise(.right, count: $0)) }
         builder.bind([.character("X")]) { .delete(.characterwise(.left, count: $0)) }
         builder.bind([.special(.forwardDelete)]) { .delete(.characterwise(.right, count: $0)) }
+        builder.bind([.character("u")]) { .undo(count: $0) }
+        builder.bind([.special(.ctrlR)]) { .redo(count: $0) }
         builder.bind([.character("i")]) { _ in .enterInsert(.atCursor) }
         builder.bind([.character("a")]) { _ in .enterInsert(.afterCursor) }
         builder.bind([.character("I")]) { _ in .enterInsert(.lineFirstNonBlank) }

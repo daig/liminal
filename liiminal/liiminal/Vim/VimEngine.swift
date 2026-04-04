@@ -194,7 +194,7 @@ final class VimEngine {
                 target,
                 commandBuilder: VimCommand.yank
             )
-        case .moveText, .moveLayout, .paste:
+        case .moveText, .moveLayout, .paste, .undo, .redo:
             return .handled(command)
         }
     }

@@ -14,6 +14,8 @@ final class VimTextView: NSTextView {
     weak var vimDelegate: VimTextViewDelegate?
 
     private let vimEngine = VimEngine()
+    private var activeUndoHistory: VimUndoHistory?
+    private var suppressUndoCapture = false
 
     /// Cursor position tracked independently in normal mode.
     private var normalCursorPosition: Int = 0
@@ -99,7 +101,9 @@ final class VimTextView: NSTextView {
         return max(0, min(normalCursorPosition, length))
     }
 
-    func loadDocumentText(_ text: String) {
+    func loadDocumentText(_ text: String, undoHistory: VimUndoHistory) {
+        finalizeActiveInsertSessionIfNeeded()
+        activeUndoHistory = undoHistory
         string = text
         normalCursorPosition = 0
         setSelectedRange(NSRange(location: 0, length: 0))
@@ -121,6 +125,22 @@ final class VimTextView: NSTextView {
         case .insert:
             handleInsertMode(event)
         }
+    }
+
+    override func shouldChangeText(
+        in affectedCharRange: NSRange,
+        replacementString: String?
+    ) -> Bool {
+        guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        else {
+            return false
+        }
+
+        captureInsertEditIfNeeded(
+            in: affectedCharRange,
+            replacementString: replacementString ?? ""
+        )
+        return true
     }
 
     // MARK: - Insert Mode
@@ -154,6 +174,9 @@ final class VimTextView: NSTextView {
             let length = (string as NSString).length
             normalCursorPosition = max(0, min(insertionPosition, length))
         }
+        activeUndoHistory?.beginInsertSession(
+            beforeCursorPosition: insertionPointPosition()
+        )
         vimEngine.setMode(.insert)
         mode = .insert
     }
@@ -161,19 +184,9 @@ final class VimTextView: NSTextView {
     private func enterNormalMode() {
         vimEngine.setMode(.normal)
         mode = .normal
-        // Nudge cursor back one if sitting on a newline (vim convention)
-        let text = string as NSString
-        let pos = normalCursorPosition
-        if pos > 0 && pos < text.length {
-            let lineRange = text.lineRange(for: NSRange(location: pos, length: 0))
-            if pos == NSMaxRange(lineRange) - 1
-                && text.character(at: pos) == 0x0A
-                && pos > lineRange.location
-            {
-                normalCursorPosition = pos - 1
-            }
-        }
+        normalCursorPosition = committedNormalCursorPosition()
         drawNormalCursor()
+        activeUndoHistory?.commitInsertSession(finalCursorPosition: normalCursorPosition)
     }
 
     private func apply(_ command: VimCommand) {
@@ -210,6 +223,10 @@ final class VimTextView: NSTextView {
             applyYank(target)
         case .paste(let placement, let count):
             applyPaste(placement, count: count)
+        case .undo(let count):
+            applyUndo(count: count)
+        case .redo(let count):
+            applyRedo(count: count)
         }
     }
 
@@ -316,6 +333,7 @@ final class VimTextView: NSTextView {
 
     private func applyDelete(_ target: VimOperatorTarget) {
         let text = string as NSString
+        let beforeCursor = normalCursorPosition
 
         guard let selection = VimSelectionResolver.selectionResult(
             for: target,
@@ -326,10 +344,17 @@ final class VimTextView: NSTextView {
             return
         }
 
-        let deletedText = text.substring(with: selection.range)
+        let deleteEdit = textEdit(
+            in: selection.range,
+            replacementString: "",
+            from: text
+        )
         guard performTextChange(in: selection.range, replacementString: "") else { return }
 
-        writeSelectionToPasteboard(text: deletedText, linewise: selection.linewise)
+        writeSelectionToPasteboard(
+            text: deleteEdit.removedText,
+            linewise: selection.linewise
+        )
         vimEngine.setPreferredColumn(nil)
 
         let updatedText = string as NSString
@@ -340,16 +365,31 @@ final class VimTextView: NSTextView {
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
         drawNormalCursor()
+        activeUndoHistory?.commitImmediateEdits(
+            [deleteEdit],
+            beforeCursorPosition: beforeCursor,
+            afterCursorPosition: finalCursor
+        )
     }
 
     private func applyChange(_ target: VimOperatorTarget) {
         let text = string as NSString
+        let beforeCursor = normalCursorPosition
         let change = VimChangeResolver.changeResult(
             for: target,
             in: text,
             from: normalCursorPosition,
             preferredColumn: vimEngine.sessionState.preferredColumn
         )
+
+        let changeEdit =
+            change.range.map {
+                textEdit(
+                    in: $0,
+                    replacementString: change.replacementString,
+                    from: text
+                )
+            }
 
         if let range = change.range {
             guard performTextChange(in: range, replacementString: change.replacementString) else {
@@ -359,6 +399,11 @@ final class VimTextView: NSTextView {
 
         if let clipboardPayload = change.clipboardPayload {
             writeSelectionToPasteboard(payload: clipboardPayload)
+        }
+
+        if let changeEdit {
+            activeUndoHistory?.beginInsertSession(beforeCursorPosition: beforeCursor)
+            activeUndoHistory?.appendEditToActiveInsertSession(changeEdit)
         }
 
         vimEngine.setPreferredColumn(nil)
@@ -390,6 +435,7 @@ final class VimTextView: NSTextView {
         guard let payload = VimPasteboard.read() else { return }
 
         let text = string as NSString
+        let beforeCursor = normalCursorPosition
         guard let paste = VimPasteResolver.pasteResult(
             for: payload,
             placement: placement,
@@ -400,6 +446,11 @@ final class VimTextView: NSTextView {
             return
         }
 
+        let pasteEdit = textEdit(
+            in: paste.range,
+            replacementString: paste.replacementString,
+            from: text
+        )
         guard performTextChange(in: paste.range, replacementString: paste.replacementString) else {
             return
         }
@@ -410,6 +461,45 @@ final class VimTextView: NSTextView {
         let finalCursor = paste.linewise
             ? linewiseCursorPosition(afterDeletingAt: paste.cursorAnchor, in: updatedText)
             : characterwiseCursorPosition(afterDeletingAt: paste.cursorAnchor, in: updatedText)
+
+        normalCursorPosition = finalCursor
+        setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
+        drawNormalCursor()
+        activeUndoHistory?.commitImmediateEdits(
+            [pasteEdit],
+            beforeCursorPosition: beforeCursor,
+            afterCursorPosition: finalCursor
+        )
+    }
+
+    private func applyUndo(count: Int?) {
+        applyUndoNavigation(
+            activeUndoHistory?.undo(count: max(count ?? 1, 1))
+        )
+    }
+
+    private func applyRedo(count: Int?) {
+        applyUndoNavigation(
+            activeUndoHistory?.redo(count: max(count ?? 1, 1))
+        )
+    }
+
+    private func applyUndoNavigation(_ navigationResult: VimUndoNavigationResult?) {
+        guard let navigationResult else { return }
+
+        replaceEntireTextWithUndoCaptureSuppressed(navigationResult.text)
+        vimEngine.clearPendingInput()
+        vimEngine.setPreferredColumn(nil)
+        vimEngine.setMode(.normal)
+
+        if mode != .normal {
+            mode = .normal
+        }
+
+        let updatedText = string as NSString
+        let finalCursor = updatedText.length > 0
+            ? max(0, min(navigationResult.cursorPosition, updatedText.length - 1))
+            : 0
 
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
@@ -451,6 +541,18 @@ final class VimTextView: NSTextView {
         return firstNonBlank(in: lineRange, text: text)
     }
 
+    private func textEdit(
+        in range: NSRange,
+        replacementString: String,
+        from text: NSString
+    ) -> VimTextEdit {
+        VimTextEdit(
+            location: range.location,
+            removedText: text.substring(with: range),
+            insertedText: replacementString
+        )
+    }
+
     private func performTextChange(in range: NSRange, replacementString: String) -> Bool {
         guard let textStorage else { return false }
 
@@ -471,6 +573,69 @@ final class VimTextView: NSTextView {
         textStorage.replaceCharacters(in: range, with: replacementString)
         didChangeText()
         return true
+    }
+
+    private func captureInsertEditIfNeeded(
+        in affectedCharRange: NSRange,
+        replacementString: String
+    ) {
+        guard !suppressUndoCapture else { return }
+        guard mode == .insert else { return }
+        guard let activeUndoHistory else { return }
+        guard affectedCharRange.location != NSNotFound else { return }
+
+        let text = string as NSString
+        guard NSMaxRange(affectedCharRange) <= text.length else { return }
+
+        activeUndoHistory.appendEditToActiveInsertSession(
+            textEdit(
+                in: affectedCharRange,
+                replacementString: replacementString,
+                from: text
+            )
+        )
+    }
+
+    private func replaceEntireTextWithUndoCaptureSuppressed(_ text: String) {
+        guard string != text else { return }
+
+        suppressUndoCapture = true
+        defer { suppressUndoCapture = false }
+
+        let existingText = string as NSString
+        _ = performTextChange(
+            in: NSRange(location: 0, length: existingText.length),
+            replacementString: text
+        )
+    }
+
+    private func finalizeActiveInsertSessionIfNeeded() {
+        guard activeUndoHistory?.hasActiveInsertSession == true else { return }
+        activeUndoHistory?.commitInsertSession(
+            finalCursorPosition: committedNormalCursorPosition()
+        )
+    }
+
+    private func committedNormalCursorPosition() -> Int {
+        let text = string as NSString
+        guard text.length > 0 else { return 0 }
+
+        let sourcePosition = mode == .insert
+            ? selectedRange().location
+            : normalCursorPosition
+        var finalCursor = max(0, min(sourcePosition, text.length - 1))
+
+        if sourcePosition > 0 && sourcePosition < text.length {
+            let lineRange = text.lineRange(for: NSRange(location: sourcePosition, length: 0))
+            if sourcePosition == NSMaxRange(lineRange) - 1
+                && text.character(at: sourcePosition) == 0x0A
+                && sourcePosition > lineRange.location
+            {
+                finalCursor = sourcePosition - 1
+            }
+        }
+
+        return finalCursor
     }
 
     private func keyPress(for event: NSEvent) -> VimKeyPress? {
@@ -495,6 +660,8 @@ final class VimTextView: NSTextView {
 
         if let scalar = chars.unicodeScalars.first {
             switch scalar.value {
+            case 0x12:
+                return .special(.ctrlR)
             case 0x15:
                 return .special(.ctrlU)
             case 0x04:
