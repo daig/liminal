@@ -136,6 +136,9 @@ Standalone delete aliases:
 | Key | Behavior |
 | --- | --- |
 | `D` | Delete to the end of the line. Equivalent to `d$`. |
+| `x` | Delete the character under the cursor. With a count, delete that many characters to the right. |
+| `X` | Delete the character before the cursor. With a count, delete that many characters to the left. |
+| `Forward Delete` | Equivalent to `x` when your keyboard provides it. |
 
 ### Linewise Delete
 

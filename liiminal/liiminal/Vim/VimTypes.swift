@@ -11,6 +11,7 @@ enum VimSpecialKey: Hashable {
     case rightArrow
     case downArrow
     case upArrow
+    case forwardDelete
     case ctrlU
     case ctrlD
     case ctrlB
@@ -377,6 +378,9 @@ extension VimBindingTree {
 
         builder.bind([.character("d")]) { .beginOperator(.delete, count: $0) }
         builder.bind([.character("D")]) { .delete(.characterwise(.lineEnd, count: $0)) }
+        builder.bind([.character("x")]) { .delete(.characterwise(.right, count: $0)) }
+        builder.bind([.character("X")]) { .delete(.characterwise(.left, count: $0)) }
+        builder.bind([.special(.forwardDelete)]) { .delete(.characterwise(.right, count: $0)) }
         builder.bind([.character("i")]) { _ in .enterInsert(.atCursor) }
         builder.bind([.character("a")]) { _ in .enterInsert(.afterCursor) }
         builder.bind([.character("I")]) { _ in .enterInsert(.lineFirstNonBlank) }

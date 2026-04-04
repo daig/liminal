@@ -421,6 +421,8 @@ final class VimTextView: NSTextView {
         switch event.keyCode {
         case 53:
             return .special(.escape)
+        case 117:
+            return .special(.forwardDelete)
         case 123:
             return .special(.leftArrow)
         case 124:
