@@ -74,20 +74,116 @@ struct EditorView: NSViewRepresentable {
         var currentNoteID: URL?
         let editorViewModel: EditorViewModel
         private var isHighlighting = false
+        private var isEditing = false
+
+        /// Cell content ranges within tables, sorted by location.
+        /// Cursor positions from range.location through NSMaxRange(range) are valid.
+        var tableCellRanges: [NSRange] = []
+        /// Full table block ranges, sorted by location.
+        var tableFramingRanges: [NSRange] = []
 
         init(editorViewModel: EditorViewModel) {
             self.editorViewModel = editorViewModel
         }
 
-        // Convert tab key presses to spaces
+        // MARK: - Table Position Queries
+
+        /// Is this cursor position inside a table?
+        private func isInTable(at pos: Int) -> Bool {
+            tableFramingRanges.contains { pos >= $0.location && pos < NSMaxRange($0) }
+        }
+
+        /// Is this cursor position inside cell content (or at its boundary)?
+        /// Uses inclusive end so cursor can rest at the end of cell content.
+        private func isInCellContent(at pos: Int) -> Bool {
+            tableCellRanges.contains { pos >= $0.location && pos <= NSMaxRange($0) }
+        }
+
+        /// Is this position in a table but NOT in cell content?
+        private func isInTableFraming(at pos: Int) -> Bool {
+            isInTable(at: pos) && !isInCellContent(at: pos)
+        }
+
+        /// Next cell start strictly after `pos`.
+        private func nextCellStart(after pos: Int) -> Int? {
+            for range in tableCellRanges where range.location > pos {
+                return range.location
+            }
+            // Past last cell — return end of table
+            for tr in tableFramingRanges where pos < NSMaxRange(tr) {
+                return NSMaxRange(tr)
+            }
+            return nil
+        }
+
+        /// Previous cell end strictly before `pos`.
+        private func prevCellEnd(before pos: Int) -> Int? {
+            for range in tableCellRanges.reversed() {
+                if NSMaxRange(range) < pos {
+                    return NSMaxRange(range)
+                }
+            }
+            // Before first cell — return start of table (which is before framing)
+            for tr in tableFramingRanges where pos > tr.location {
+                return max(tr.location - 1, 0)
+            }
+            return nil
+        }
+
+        // MARK: - Command Handling
+
         func textView(
             _ textView: NSTextView, doCommandBy commandSelector: Selector
         ) -> Bool {
             if commandSelector == #selector(NSResponder.insertTab(_:)) {
-                textView.insertText("    ", replacementRange: textView.selectedRange())
+                textView.insertText(
+                    "    ", replacementRange: textView.selectedRange())
                 return true
             }
+
+            let pos = textView.selectedRange().location
+
+            // Right arrow at end of cell → skip framing to next cell start
+            if commandSelector == #selector(NSResponder.moveRight(_:)) {
+                for range in tableCellRanges {
+                    if pos == NSMaxRange(range) {
+                        if let next = nextCellStart(after: pos) {
+                            setSelection(in: textView, to: next)
+                            return true
+                        }
+                    }
+                }
+            }
+
+            // Left arrow at start of cell → skip framing to prev cell end
+            if commandSelector == #selector(NSResponder.moveLeft(_:)) {
+                for range in tableCellRanges {
+                    if pos == range.location {
+                        if let prev = prevCellEnd(before: pos) {
+                            setSelection(in: textView, to: prev)
+                            return true
+                        }
+                    }
+                }
+            }
+
+            // Backspace at start of cell → jump to prev cell end, no deletion
+            if commandSelector == #selector(NSResponder.deleteBackward(_:)) {
+                for range in tableCellRanges {
+                    if pos == range.location {
+                        if let prev = prevCellEnd(before: pos) {
+                            setSelection(in: textView, to: prev)
+                        }
+                        return true  // always consume — never delete into framing
+                    }
+                }
+            }
+
             return false
+        }
+
+        private func setSelection(in textView: NSTextView, to pos: Int) {
+            textView.setSelectedRange(NSRange(location: pos, length: 0))
         }
 
         func textDidChange(_ notification: Notification) {
@@ -107,6 +203,18 @@ struct EditorView: NSViewRepresentable {
             guard length > 0 else { return }
 
             isHighlighting = true
+
+            // Rebuild table cell map from the document model
+            tableCellRanges.removeAll()
+            tableFramingRanges.removeAll()
+            var mapOffset = 0
+            for block in document.blocks {
+                if case .table(let t) = block {
+                    buildTableCellMap(t, at: mapOffset)
+                }
+                mapOffset += block.sourceLength
+            }
+
             textStorage.beginEditing()
 
             // Reset to defaults
@@ -262,6 +370,17 @@ struct EditorView: NSViewRepresentable {
             }
         }
 
+        private func buildTableCellMap(_ t: TableBlock, at offset: Int) {
+            tableFramingRanges.append(
+                NSRange(location: offset, length: t.sourceLength))
+            let allCells = t.headerCells + t.bodyRows.flatMap { $0 }
+            for cell in allCells {
+                let start = offset + cell.sourceOffset
+                let length = cell.content.totalSourceLength
+                tableCellRanges.append(NSRange(location: start, length: length))
+            }
+        }
+
         private func highlightTable(
             _ t: TableBlock, at offset: Int, in storage: NSTextStorage
         ) {
@@ -281,6 +400,77 @@ struct EditorView: NSViewRepresentable {
                 for cell in row {
                     highlightInlines(
                         cell.content, at: offset + cell.sourceOffset, in: storage)
+                }
+            }
+
+            // Align pipes across rows using kern spacing
+            alignTablePipes(at: offset, sourceLength: t.sourceLength, in: storage)
+        }
+
+        private func alignTablePipes(
+            at offset: Int, sourceLength: Int, in storage: NSTextStorage
+        ) {
+            let text = storage.string as NSString
+            let charWidth = HighlightTheme.defaultFont.maximumAdvancement.width
+
+            // Collect pipe positions per row (relative to row start)
+            var rowRanges: [(start: Int, length: Int)] = []
+            var rowPipes: [[Int]] = []
+            var pos = offset
+
+            while pos < offset + sourceLength {
+                let lineRange = text.lineRange(for: NSRange(location: pos, length: 0))
+                let lineStart = pos
+                let lineLength = NSMaxRange(lineRange) - pos
+
+                var pipes: [Int] = []
+                for i in 0..<lineLength {
+                    if text.character(at: lineStart + i)
+                        == UInt16(UnicodeScalar("|").value)
+                    {
+                        pipes.append(i)
+                    }
+                }
+
+                rowRanges.append((start: lineStart, length: lineLength))
+                rowPipes.append(pipes)
+                pos += lineLength
+            }
+
+            // Determine max column widths (chars between consecutive pipes)
+            let maxColumns = rowPipes.map { max($0.count - 1, 0) }.max() ?? 0
+            guard maxColumns > 0 else { return }
+            var maxColumnWidths = [Int](repeating: 0, count: maxColumns)
+
+            for pipes in rowPipes {
+                for col in 0..<min(pipes.count - 1, maxColumns) {
+                    let width = pipes[col + 1] - pipes[col] - 1
+                    maxColumnWidths[col] = max(maxColumnWidths[col], width)
+                }
+            }
+
+            // Apply kern to the character just before each closing pipe
+            for (rowIdx, pipes) in rowPipes.enumerated() {
+                let rowStart = rowRanges[rowIdx].start
+                for col in 0..<min(pipes.count - 1, maxColumns) {
+                    let currentWidth = pipes[col + 1] - pipes[col] - 1
+                    let deficit = maxColumnWidths[col] - currentWidth
+                    guard deficit > 0 else { continue }
+
+                    // Kern goes on the character just before the pipe
+                    let charBeforePipe = rowStart + pipes[col + 1] - 1
+                    guard charBeforePipe >= offset else { continue }
+                    let kernAmount = CGFloat(deficit) * charWidth
+
+                    storage.addAttribute(
+                        .kern, value: kernAmount,
+                        range: NSRange(location: charBeforePipe, length: 1))
+
+                    // Subtle indicator: faint background on the padded character
+                    storage.addAttribute(
+                        .backgroundColor,
+                        value: NSColor.secondaryLabelColor.withAlphaComponent(0.06),
+                        range: NSRange(location: charBeforePipe, length: 1))
                 }
             }
         }
