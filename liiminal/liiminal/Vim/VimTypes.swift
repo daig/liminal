@@ -992,26 +992,25 @@ extension VimBindingTree {
 }
 
 extension VimOperatorMotionBindingTree {
-    private static func normalMode(for vimOperator: VimOperator, repeatedKey: Character) -> VimOperatorMotionBindingTree {
+    private static func normalMode(repeatedKey: Character) -> VimOperatorMotionBindingTree {
         var builder = Builder()
-        let operatorLabel = vimOperator.displayLabel
 
         func bindTextMotion(
             _ sequence: [VimKeyPress],
             kind: VimOperatorMotion,
-            description: String
+            hintFragment: String
         ) {
-            builder.bind(sequence, description: description) { _ in kind }
+            builder.bind(sequence, description: hintFragment) { _ in kind }
         }
 
         func bindCharacterArgumentMotion(
             _ sequence: [VimKeyPress],
-            description: String,
+            hintFragment: String,
             motion: @escaping (Character) -> VimOperatorMotion
         ) {
             builder.bindCharacterArgument(
                 sequence,
-                description: description,
+                description: hintFragment,
                 argumentPlaceholder: "<char>",
                 argumentDescription: "Target character"
             ) { character, _ in
@@ -1021,61 +1020,61 @@ extension VimOperatorMotionBindingTree {
 
         builder.bind(
             [.character(repeatedKey)],
-            description: "\(operatorLabel) current line"
+            description: "current line"
         ) { _ in .currentLines }
 
-        bindTextMotion([.character("h")], kind: .characterwise(.left), description: "\(operatorLabel) left")
-        bindTextMotion([.character("j")], kind: .linewise(.down), description: "\(operatorLabel) line below")
-        bindTextMotion([.character("k")], kind: .linewise(.up), description: "\(operatorLabel) line above")
-        bindTextMotion([.character("l")], kind: .characterwise(.right), description: "\(operatorLabel) character")
+        bindTextMotion([.character("h")], kind: .characterwise(.left), hintFragment: "left")
+        bindTextMotion([.character("j")], kind: .linewise(.down), hintFragment: "line below")
+        bindTextMotion([.character("k")], kind: .linewise(.up), hintFragment: "line above")
+        bindTextMotion([.character("l")], kind: .characterwise(.right), hintFragment: "character")
 
         bindTextMotion(
             [.character("0")],
             kind: .characterwise(.lineStart),
-            description: "\(operatorLabel) to line start"
+            hintFragment: "to line start"
         )
         bindTextMotion(
             [.character("^")],
             kind: .characterwise(.lineFirstNonBlank),
-            description: "\(operatorLabel) to first non-blank"
+            hintFragment: "to first non-blank"
         )
         bindTextMotion(
             [.character("$")],
             kind: .characterwise(.lineEnd),
-            description: "\(operatorLabel) to line end"
+            hintFragment: "to line end"
         )
 
         bindTextMotion(
             [.character("w")],
             kind: .characterwise(.wordForward),
-            description: "\(operatorLabel) word"
+            hintFragment: "word"
         )
         bindTextMotion(
             [.character("b")],
             kind: .characterwise(.wordBackward),
-            description: "\(operatorLabel) previous word"
+            hintFragment: "previous word"
         )
         bindTextMotion(
             [.character("e")],
             kind: .characterwise(.wordEndForward),
-            description: "\(operatorLabel) to word end"
+            hintFragment: "to word end"
         )
 
         builder.describeGroup([.character("g")], label: "Go")
         bindTextMotion(
             [.character("g"), .character("g")],
             kind: .linewise(.goToLine(defaultDestination: .first)),
-            description: "\(operatorLabel) to first line"
+            hintFragment: "to first line"
         )
         bindTextMotion(
             [.character("G")],
             kind: .linewise(.goToLine(defaultDestination: .last)),
-            description: "\(operatorLabel) to last line"
+            hintFragment: "to last line"
         )
 
         bindCharacterArgumentMotion(
             [.character("f")],
-            description: "\(operatorLabel) through character"
+            hintFragment: "through character"
         ) { character in
             .characterwise(
                 .characterSearch(
@@ -1089,7 +1088,7 @@ extension VimOperatorMotionBindingTree {
         }
         bindCharacterArgumentMotion(
             [.character("F")],
-            description: "\(operatorLabel) backward through character"
+            hintFragment: "backward through character"
         ) { character in
             .characterwise(
                 .characterSearch(
@@ -1103,7 +1102,7 @@ extension VimOperatorMotionBindingTree {
         }
         bindCharacterArgumentMotion(
             [.character("t")],
-            description: "\(operatorLabel) until character"
+            hintFragment: "until character"
         ) { character in
             .characterwise(
                 .characterSearch(
@@ -1117,7 +1116,7 @@ extension VimOperatorMotionBindingTree {
         }
         bindCharacterArgumentMotion(
             [.character("T")],
-            description: "\(operatorLabel) backward until character"
+            hintFragment: "backward until character"
         ) { character in
             .characterwise(
                 .characterSearch(
@@ -1129,28 +1128,28 @@ extension VimOperatorMotionBindingTree {
                 )
             )
         }
-        builder.bind([.character(";")], description: "\(operatorLabel) by repeated character search") { _ in
+        builder.bind([.character(";")], description: "repeat character search") { _ in
             .characterwise(.repeatCharacterSearch(oppositeDirection: false))
         }
-        builder.bind([.character(",")], description: "\(operatorLabel) by repeated backward character search") { _ in
+        builder.bind([.character(",")], description: "repeat backward character search") { _ in
             .characterwise(.repeatCharacterSearch(oppositeDirection: true))
         }
 
         bindTextMotion(
             [.character("}")],
             kind: .linewise(.paragraphForward),
-            description: "\(operatorLabel) next paragraph"
+            hintFragment: "next paragraph"
         )
         bindTextMotion(
             [.character("{")],
             kind: .linewise(.paragraphBackward),
-            description: "\(operatorLabel) previous paragraph"
+            hintFragment: "previous paragraph"
         )
 
         return builder.build()
     }
 
-    static let normalModeDeleteOperator = normalMode(for: .delete, repeatedKey: "d")
-    static let normalModeChangeOperator = normalMode(for: .change, repeatedKey: "c")
-    static let normalModeYankOperator = normalMode(for: .yank, repeatedKey: "y")
+    static let normalModeDeleteOperator = normalMode(repeatedKey: "d")
+    static let normalModeChangeOperator = normalMode(repeatedKey: "c")
+    static let normalModeYankOperator = normalMode(repeatedKey: "y")
 }
