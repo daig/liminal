@@ -28,6 +28,18 @@ enum VimChangeResolver {
             )
         }
 
+        return changeResult(
+            replacing: selection,
+            in: text,
+            from: position
+        )
+    }
+
+    static func changeResult(
+        replacing selection: VimSelectionResult,
+        in text: NSString,
+        from position: Int
+    ) -> VimChangeResult {
         let selectedText = text.substring(with: selection.range)
         let replacementString = selection.linewise
             ? linewiseReplacementString(

@@ -39,6 +39,36 @@ enum VimPasteResolver {
         }
     }
 
+    static func replaceSelectionResult(
+        for payload: VimPastePayload,
+        replacing selection: VimSelectionResult,
+        count: Int?
+    ) -> VimPasteResult? {
+        guard !payload.text.isEmpty else { return nil }
+
+        let effectiveCount = max(count ?? 1, 1)
+        let replacementString: String
+
+        switch payload.style {
+        case .characterwise:
+            replacementString = repeatedText(payload.text, count: effectiveCount)
+        case .linewise:
+            replacementString = repeatedLinewiseText(payload.text, count: effectiveCount)
+        }
+
+        guard !replacementString.isEmpty else { return nil }
+
+        let insertedLength = (replacementString as NSString).length
+        let cursorAnchor = selection.range.location + max(insertedLength - 1, 0)
+
+        return VimPasteResult(
+            range: selection.range,
+            replacementString: replacementString,
+            cursorAnchor: cursorAnchor,
+            linewise: payload.style == .linewise
+        )
+    }
+
     private static func characterwisePasteResult(
         for textToPaste: String,
         placement: VimPastePlacement,

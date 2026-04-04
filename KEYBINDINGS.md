@@ -13,6 +13,7 @@ The list below describes the behaviors that are available today.
 | Key | Behavior |
 | --- | --- |
 | `i` | Enter Insert mode at the current cursor position. |
+| `v` | Enter characterwise Visual mode starting at the current cursor position. |
 | `a` | Enter Insert mode after the current character. On an empty or blank line, this behaves like inserting at the current line position. |
 | `I` | Enter Insert mode at the first non-blank character of the current line. |
 | `A` | Enter Insert mode at the end of the current line. |
@@ -43,8 +44,32 @@ Examples:
 ## Mouse
 
 - In Normal mode, clicking a character moves the cursor to that position.
+- In Visual mode, clicking a character extends or shrinks the current characterwise selection to that position.
 - If an operator is pending, such as after `d`, `c`, or `y`, clicking a character uses that clicked position as the motion target for the operator.
 - Operator-pending mouse motions are characterwise and span from the starting cursor position through the clicked position.
+
+## Visual Mode
+
+This editor currently supports characterwise Visual mode only. Linewise Visual mode, blockwise Visual mode, text objects, and most of Vim's visual-only command variants are not implemented yet.
+
+### Selection Movement
+
+- In Visual mode, the supported motion keys reuse the same movement subset as Normal mode and extend or shrink the active selection.
+- This includes basic movement, line anchors, word motions, `gg` / `G`, in-line character search, view-relative movement, wrapped-line movement, paragraph movement, and character clicks with the mouse.
+
+### Visual Actions
+
+| Key | Behavior |
+| --- | --- |
+| `v` | Leave Visual mode and return to Normal mode. |
+| `Esc` | Leave Visual mode and return to Normal mode. |
+| `d` | Delete the current selection, copy it to the system clipboard, and return to Normal mode. |
+| `x` | Delete the current selection and return to Normal mode. |
+| `c` | Change the current selection, copy the removed text to the system clipboard, and enter Insert mode. |
+| `s` | Equivalent to `c` for the current selection. |
+| `y` | Yank the current selection to the system clipboard and return to Normal mode. |
+| `p` | Replace the current selection with the current system clipboard contents and return to Normal mode. |
+| `P` | Same as `p` in the current Visual-mode implementation. |
 
 ## Normal Mode Navigation
 

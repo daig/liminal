@@ -4,6 +4,7 @@ import Observation
 enum VimMode: String {
     case normal
     case insert
+    case visual
 }
 
 @Observable

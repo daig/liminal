@@ -9,16 +9,19 @@ enum VimHandleResult {
 final class VimEngine {
     private let keymapCatalog: VimKeymapCatalog
     private let commandBindings: VimBindingTree
+    private let visualBindings: VimBindingTree
     private let operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree]
 
     private(set) var sessionState: VimSessionState
 
     init(
         keymapCatalog: VimKeymapCatalog = .normalMode,
+        visualBindings: VimBindingTree = .visualMode,
         initialState: VimSessionState = VimSessionState()
     ) {
         self.keymapCatalog = keymapCatalog
         self.commandBindings = keymapCatalog.commandBindings
+        self.visualBindings = visualBindings
         self.operatorMotionBindings = keymapCatalog.operatorMotionBindings
         self.sessionState = initialState
     }
@@ -49,22 +52,28 @@ final class VimEngine {
     }
 
     func handleTargetPosition(_ position: Int) -> VimHandleResult {
-        guard sessionState.mode == .normal else { return .ignored }
-
         let motion = VimTextMotion.targetPosition(position)
 
-        if let pendingOperator = sessionState.pendingOperator {
-            sessionState.clearPendingInput()
-            return resolvePendingOperator(
-                pendingOperator,
-                motion: .characterwise(motion),
-                operatorCount: nil,
-                motionCount: nil
-            )
-        }
+        switch sessionState.mode {
+        case .normal:
+            if let pendingOperator = sessionState.pendingOperator {
+                sessionState.clearPendingInput()
+                return resolvePendingOperator(
+                    pendingOperator,
+                    motion: .characterwise(motion),
+                    operatorCount: nil,
+                    motionCount: nil
+                )
+            }
 
-        sessionState.clearPendingInput()
-        return resolve(.moveText(motion, count: nil))
+            sessionState.clearPendingInput()
+            return resolve(.moveText(motion, count: nil))
+        case .visual:
+            sessionState.clearPendingInput()
+            return resolve(.moveText(motion, count: nil))
+        case .insert:
+            return .ignored
+        }
     }
 
     func setPreferredColumn(_ preferredColumn: Int?) {
@@ -77,6 +86,8 @@ final class VimEngine {
             handleNormalMode(keyPress)
         case .insert:
             .ignored
+        case .visual:
+            handleVisualMode(keyPress)
         }
     }
 
@@ -181,12 +192,77 @@ final class VimEngine {
         }
     }
 
+    private func handleVisualMode(_ keyPress: VimKeyPress) -> VimHandleResult {
+        if keyPress == .special(.escape) {
+            clearPendingInput()
+            return .handled(.exitVisual)
+        }
+
+        switch keyPress {
+        case .character("v"):
+            clearPendingInput()
+            return .handled(.exitVisual)
+        case .character("d"), .character("x"):
+            clearPendingInput()
+            return .handled(.deleteSelection)
+        case .character("c"), .character("s"):
+            clearPendingInput()
+            return .handled(.changeSelection)
+        case .character("y"):
+            clearPendingInput()
+            return .handled(.yankSelection)
+        case .character("p"), .character("P"):
+            let count = sessionState.pendingCount
+            clearPendingInput()
+            return .handled(.replaceSelectionWithPaste(count: count))
+        default:
+            break
+        }
+
+        if let characterCommandFactory = sessionState.pendingCharacterCommandFactory {
+            guard case .character(let character) = keyPress else {
+                clearPendingInput()
+                return .ignored
+            }
+
+            let count = sessionState.pendingCount
+            sessionState.clearPendingInput()
+            return resolve(characterCommandFactory(character, count))
+        }
+
+        if consumeCountDigitIfNeeded(keyPress) {
+            return .pending
+        }
+
+        let candidateKeys = sessionState.pendingKeys + [keyPress]
+
+        switch visualBindings.match(candidateKeys) {
+        case .exact(let commandFactory):
+            let count = sessionState.pendingCount
+            sessionState.clearPendingInput()
+            return resolve(commandFactory(count))
+        case .characterPending(let characterCommandFactory):
+            sessionState.pendingKeys = candidateKeys
+            sessionState.pendingCharacterCommandFactory = characterCommandFactory
+            return .pending
+        case .partial:
+            sessionState.pendingKeys = candidateKeys
+            return .pending
+        case .none:
+            sessionState.clearPendingInput()
+            return .ignored
+        }
+    }
+
     private func resolve(_ command: VimCommand) -> VimHandleResult {
         switch command {
         case .beginOperator(let op, let count):
             sessionState.pendingOperator = op
             sessionState.pendingOperatorCount = count
             return .pending
+        case .enterVisual, .exitVisual, .deleteSelection, .changeSelection, .yankSelection,
+            .replaceSelectionWithPaste:
+            return .handled(command)
         case .enterInsert:
             setMode(.insert)
             return .handled(command)

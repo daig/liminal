@@ -142,12 +142,18 @@ enum VimOperatorTarget {
 enum VimCommand {
     case beginOperator(VimOperator, count: Int?)
     case enterInsert(VimInsertTransition)
+    case enterVisual
+    case exitVisual
     case moveText(VimTextMotion, count: Int?)
     case moveLayout(VimLayoutMotion, count: Int?)
     case delete(VimOperatorTarget)
     case change(VimOperatorTarget)
     case yank(VimOperatorTarget)
+    case deleteSelection
+    case changeSelection
+    case yankSelection
     case paste(VimPastePlacement, count: Int?)
+    case replaceSelectionWithPaste(count: Int?)
     case undo(count: Int?)
     case redo(count: Int?)
 }
@@ -189,7 +195,7 @@ struct VimSessionState {
     var statusPresentation: VimStatusPresentation {
         VimStatusPresentation(
             mode: mode,
-            detailText: mode == .normal ? pendingDetailText : nil
+            detailText: mode == .insert ? nil : pendingDetailText
         )
     }
 
@@ -740,10 +746,8 @@ struct VimOperatorMotionBindingTree {
     }
 }
 
-extension VimBindingTree {
-    static let normalMode: VimBindingTree = {
-        var builder = Builder()
-
+private enum VimBindingRegistration {
+    static func registerSharedNavigationBindings(into builder: inout VimBindingTree.Builder) {
         func bindTextMotion(
             _ sequence: [VimKeyPress],
             motion: VimTextMotion,
@@ -798,71 +802,6 @@ extension VimBindingTree {
             description: "First non-blank"
         )
         bindTextMotion([.character("$")], motion: .lineEnd, description: "Line end")
-
-        builder.bind(
-            [.character("d")],
-            description: "Delete",
-            kind: .group
-        ) { .beginOperator(.delete, count: $0) }
-        builder.bind(
-            [.character("D")],
-            description: "Delete to line end"
-        ) { .delete(.characterwise(.lineEnd, count: $0)) }
-        builder.bind(
-            [.character("c")],
-            description: "Change",
-            kind: .group
-        ) { .beginOperator(.change, count: $0) }
-        builder.bind(
-            [.character("C")],
-            description: "Change to line end"
-        ) { .change(.characterwise(.lineEnd, count: $0)) }
-        builder.bind(
-            [.character("y")],
-            description: "Yank",
-            kind: .group
-        ) { .beginOperator(.yank, count: $0) }
-        builder.bind([.character("Y")], description: "Yank line") {
-            .yank(.currentLines(count: $0))
-        }
-        builder.bind([.character("s")], description: "Change character") {
-            .change(.characterwise(.right, count: $0))
-        }
-        builder.bind([.character("S")], description: "Change line") {
-            .change(.currentLines(count: $0))
-        }
-        builder.bind([.character("x")], description: "Delete character") {
-            .delete(.characterwise(.right, count: $0))
-        }
-        builder.bind([.character("X")], description: "Delete left character") {
-            .delete(.characterwise(.left, count: $0))
-        }
-        builder.bind([.special(.forwardDelete)], description: "Delete character") {
-            .delete(.characterwise(.right, count: $0))
-        }
-        builder.bind([.character("u")], description: "Undo") { .undo(count: $0) }
-        builder.bind([.special(.ctrlR)], description: "Redo") { .redo(count: $0) }
-        builder.bind([.character("i")], description: "Insert") { _ in .enterInsert(.atCursor) }
-        builder.bind([.character("a")], description: "Append") { _ in .enterInsert(.afterCursor) }
-        builder.bind(
-            [.character("I")],
-            description: "Insert at first non-blank"
-        ) { _ in .enterInsert(.lineFirstNonBlank) }
-        builder.bind([.character("A")], description: "Append at line end") {
-            _ in .enterInsert(.lineEnd)
-        }
-        builder.bind([.character("o")], description: "Open line below") {
-            _ in .enterInsert(.openLineBelow)
-        }
-        builder.bind([.character("O")], description: "Open line above") {
-            _ in .enterInsert(.openLineAbove)
-        }
-        builder.bind([.character("p")], description: "Paste after cursor") {
-            .paste(.afterCursor, count: $0)
-        }
-        builder.bind([.character("P")], description: "Paste before cursor") {
-            .paste(.beforeCursor, count: $0)
-        }
 
         bindTextMotion([.character("w")], motion: .wordForward, description: "Next word")
         bindTextMotion([.character("b")], motion: .wordBackward, description: "Previous word")
@@ -987,7 +926,86 @@ extension VimBindingTree {
             motion: .paragraphBackward,
             description: "Previous paragraph"
         )
+    }
+}
 
+extension VimBindingTree {
+    static let normalMode: VimBindingTree = {
+        var builder = Builder()
+        VimBindingRegistration.registerSharedNavigationBindings(into: &builder)
+
+        builder.bind(
+            [.character("d")],
+            description: "Delete",
+            kind: .group
+        ) { .beginOperator(.delete, count: $0) }
+        builder.bind(
+            [.character("D")],
+            description: "Delete to line end"
+        ) { .delete(.characterwise(.lineEnd, count: $0)) }
+        builder.bind(
+            [.character("c")],
+            description: "Change",
+            kind: .group
+        ) { .beginOperator(.change, count: $0) }
+        builder.bind(
+            [.character("C")],
+            description: "Change to line end"
+        ) { .change(.characterwise(.lineEnd, count: $0)) }
+        builder.bind(
+            [.character("y")],
+            description: "Yank",
+            kind: .group
+        ) { .beginOperator(.yank, count: $0) }
+        builder.bind([.character("Y")], description: "Yank line") {
+            .yank(.currentLines(count: $0))
+        }
+        builder.bind([.character("s")], description: "Change character") {
+            .change(.characterwise(.right, count: $0))
+        }
+        builder.bind([.character("S")], description: "Change line") {
+            .change(.currentLines(count: $0))
+        }
+        builder.bind([.character("x")], description: "Delete character") {
+            .delete(.characterwise(.right, count: $0))
+        }
+        builder.bind([.character("X")], description: "Delete left character") {
+            .delete(.characterwise(.left, count: $0))
+        }
+        builder.bind([.special(.forwardDelete)], description: "Delete character") {
+            .delete(.characterwise(.right, count: $0))
+        }
+        builder.bind([.character("u")], description: "Undo") { .undo(count: $0) }
+        builder.bind([.special(.ctrlR)], description: "Redo") { .redo(count: $0) }
+        builder.bind([.character("i")], description: "Insert") { _ in .enterInsert(.atCursor) }
+        builder.bind([.character("v")], description: "Visual mode") { _ in .enterVisual }
+        builder.bind([.character("a")], description: "Append") { _ in .enterInsert(.afterCursor) }
+        builder.bind(
+            [.character("I")],
+            description: "Insert at first non-blank"
+        ) { _ in .enterInsert(.lineFirstNonBlank) }
+        builder.bind([.character("A")], description: "Append at line end") {
+            _ in .enterInsert(.lineEnd)
+        }
+        builder.bind([.character("o")], description: "Open line below") {
+            _ in .enterInsert(.openLineBelow)
+        }
+        builder.bind([.character("O")], description: "Open line above") {
+            _ in .enterInsert(.openLineAbove)
+        }
+        builder.bind([.character("p")], description: "Paste after cursor") {
+            .paste(.afterCursor, count: $0)
+        }
+        builder.bind([.character("P")], description: "Paste before cursor") {
+            .paste(.beforeCursor, count: $0)
+        }
+
+        return builder.build()
+    }()
+
+    static let visualMode: VimBindingTree = {
+        var builder = Builder()
+        VimBindingRegistration.registerSharedNavigationBindings(into: &builder)
         return builder.build()
     }()
 }

@@ -37,12 +37,10 @@ struct ContentView: View {
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 3)
                                             .foregroundStyle(
-                                                editorVM.vimMode == .normal ? .orange : .secondary
+                                                modeForegroundStyle(for: editorVM.vimMode)
                                             )
                                             .background(
-                                                editorVM.vimMode == .normal
-                                                    ? Color.orange.opacity(0.15)
-                                                    : Color.secondary.opacity(0.1)
+                                                modeBackgroundColor(for: editorVM.vimMode)
                                             )
                                             .clipShape(RoundedRectangle(cornerRadius: 4))
 
@@ -103,5 +101,27 @@ struct ContentView: View {
             vaultViewModel.openVault()
         }
         .frame(minWidth: 600, minHeight: 400)
+    }
+
+    private func modeForegroundStyle(for mode: VimMode) -> Color {
+        switch mode {
+        case .normal:
+            .orange
+        case .visual:
+            .blue
+        case .insert:
+            .secondary
+        }
+    }
+
+    private func modeBackgroundColor(for mode: VimMode) -> Color {
+        switch mode {
+        case .normal:
+            Color.orange.opacity(0.15)
+        case .visual:
+            Color.blue.opacity(0.14)
+        case .insert:
+            Color.secondary.opacity(0.1)
+        }
     }
 }
