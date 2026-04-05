@@ -181,6 +181,20 @@ struct VimStatusPresentation: Equatable {
     let detailText: String?
 }
 
+struct VimCursorInfoItem: Equatable, Identifiable {
+    let label: String
+    let tint: VimDisplayTint?
+
+    var id: String {
+        label
+    }
+}
+
+struct VimCursorInfoPresentation: Equatable {
+    let sectionTitle: String
+    let items: [VimCursorInfoItem]
+}
+
 struct VimSessionState {
     var mode: VimMode = .normal
     var pendingCount: Int?
@@ -354,8 +368,7 @@ struct VimBindingTree {
         var characterCommandFactory: VimCharacterCommandFactory?
         var hintLabel: String?
         var hintItemKind: VimHintItemKind?
-        var argumentPlaceholder: String?
-        var argumentDescription: String?
+        var argumentPresentation: VimHintArgumentPresentation?
         var children: [VimKeyPress: Node] = [:]
         var childOrder: [VimKeyPress] = []
     }
@@ -388,8 +401,7 @@ struct VimBindingTree {
         mutating func bindCharacterArgument(
             _ sequence: [VimKeyPress],
             description: String,
-            argumentPlaceholder: String,
-            argumentDescription: String,
+            argumentHint: VimHintArgumentPresentation,
             command: @escaping VimCharacterCommandFactory
         ) {
             guard !sequence.isEmpty else { return }
@@ -398,8 +410,7 @@ struct VimBindingTree {
                 metadata: NodeMetadata(
                     label: description,
                     itemKind: .action,
-                    argumentPlaceholder: argumentPlaceholder,
-                    argumentDescription: argumentDescription
+                    argumentPresentation: argumentHint
                 ),
                 command: command,
                 at: &root
@@ -418,19 +429,16 @@ struct VimBindingTree {
         private struct NodeMetadata {
             let label: String?
             let itemKind: VimHintItemKind?
-            let argumentPlaceholder: String?
-            let argumentDescription: String?
+            let argumentPresentation: VimHintArgumentPresentation?
 
             init(
                 label: String? = nil,
                 itemKind: VimHintItemKind? = nil,
-                argumentPlaceholder: String? = nil,
-                argumentDescription: String? = nil
+                argumentPresentation: VimHintArgumentPresentation? = nil
             ) {
                 self.label = label
                 self.itemKind = itemKind
-                self.argumentPlaceholder = argumentPlaceholder
-                self.argumentDescription = argumentDescription
+                self.argumentPresentation = argumentPresentation
             }
         }
 
@@ -509,11 +517,8 @@ struct VimBindingTree {
             if let itemKind = metadata.itemKind {
                 node.hintItemKind = itemKind
             }
-            if let argumentPlaceholder = metadata.argumentPlaceholder {
-                node.argumentPlaceholder = argumentPlaceholder
-            }
-            if let argumentDescription = metadata.argumentDescription {
-                node.argumentDescription = argumentDescription
+            if let argumentPresentation = metadata.argumentPresentation {
+                node.argumentPresentation = argumentPresentation
             }
         }
 
@@ -562,8 +567,7 @@ struct VimOperatorMotionBindingTree {
         var characterMotionFactory: VimCharacterOperatorMotionFactory?
         var hintLabel: String?
         var hintItemKind: VimHintItemKind?
-        var argumentPlaceholder: String?
-        var argumentDescription: String?
+        var argumentPresentation: VimHintArgumentPresentation?
         var children: [VimKeyPress: Node] = [:]
         var childOrder: [VimKeyPress] = []
     }
@@ -596,8 +600,7 @@ struct VimOperatorMotionBindingTree {
         mutating func bindCharacterArgument(
             _ sequence: [VimKeyPress],
             description: String,
-            argumentPlaceholder: String,
-            argumentDescription: String,
+            argumentHint: VimHintArgumentPresentation,
             motion: @escaping VimCharacterOperatorMotionFactory
         ) {
             guard !sequence.isEmpty else { return }
@@ -606,8 +609,7 @@ struct VimOperatorMotionBindingTree {
                 metadata: NodeMetadata(
                     label: description,
                     itemKind: .action,
-                    argumentPlaceholder: argumentPlaceholder,
-                    argumentDescription: argumentDescription
+                    argumentPresentation: argumentHint
                 ),
                 motion: motion,
                 at: &root
@@ -626,19 +628,16 @@ struct VimOperatorMotionBindingTree {
         private struct NodeMetadata {
             let label: String?
             let itemKind: VimHintItemKind?
-            let argumentPlaceholder: String?
-            let argumentDescription: String?
+            let argumentPresentation: VimHintArgumentPresentation?
 
             init(
                 label: String? = nil,
                 itemKind: VimHintItemKind? = nil,
-                argumentPlaceholder: String? = nil,
-                argumentDescription: String? = nil
+                argumentPresentation: VimHintArgumentPresentation? = nil
             ) {
                 self.label = label
                 self.itemKind = itemKind
-                self.argumentPlaceholder = argumentPlaceholder
-                self.argumentDescription = argumentDescription
+                self.argumentPresentation = argumentPresentation
             }
         }
 
@@ -717,11 +716,8 @@ struct VimOperatorMotionBindingTree {
             if let itemKind = metadata.itemKind {
                 node.hintItemKind = itemKind
             }
-            if let argumentPlaceholder = metadata.argumentPlaceholder {
-                node.argumentPlaceholder = argumentPlaceholder
-            }
-            if let argumentDescription = metadata.argumentDescription {
-                node.argumentDescription = argumentDescription
+            if let argumentPresentation = metadata.argumentPresentation {
+                node.argumentPresentation = argumentPresentation
             }
         }
 
@@ -766,6 +762,24 @@ struct VimOperatorMotionBindingTree {
 
 private enum VimBindingRegistration {
     static func registerSharedNavigationBindings(into builder: inout VimBindingTree.Builder) {
+        let characterArgumentHint = VimHintArgumentPresentation.placeholder(
+            VimHintItem(
+                key: "<char>",
+                description: "Target character",
+                kind: .argument,
+                tint: nil
+            )
+        )
+        let markArgumentHint = VimHintArgumentPresentation.dynamic(
+            .localMarks,
+            fallback: VimHintItem(
+                key: "<mark>",
+                description: "Mark name",
+                kind: .argument,
+                tint: nil
+            )
+        )
+
         func bindTextMotion(
             _ sequence: [VimKeyPress],
             motion: VimTextMotion,
@@ -784,8 +798,7 @@ private enum VimBindingRegistration {
             builder.bindCharacterArgument(
                 sequence,
                 description: description,
-                argumentPlaceholder: "<char>",
-                argumentDescription: "Target character"
+                argumentHint: characterArgumentHint
             ) { character, count in
                 .moveText(motion(character), count: count)
             }
@@ -798,8 +811,7 @@ private enum VimBindingRegistration {
             builder.bindCharacterArgument(
                 sequence,
                 description: description,
-                argumentPlaceholder: "<mark>",
-                argumentDescription: "Mark name"
+                argumentHint: markArgumentHint
             ) { character, _ in
                 .moveText(.mark(character), count: nil)
             }
@@ -986,8 +998,15 @@ extension VimBindingTree {
         builder.bindCharacterArgument(
             [.character("m")],
             description: "Set mark",
-            argumentPlaceholder: "<mark>",
-            argumentDescription: "Mark name"
+            argumentHint: VimHintArgumentPresentation.dynamic(
+                .localMarks,
+                fallback: VimHintItem(
+                    key: "<mark>",
+                    description: "Mark name",
+                    kind: .argument,
+                    tint: nil
+                )
+            )
         ) { character, _ in
             .setMark(character)
         }
@@ -1070,6 +1089,23 @@ extension VimBindingTree {
 extension VimOperatorMotionBindingTree {
     private static func normalMode(repeatedKey: Character) -> VimOperatorMotionBindingTree {
         var builder = Builder()
+        let characterArgumentHint = VimHintArgumentPresentation.placeholder(
+            VimHintItem(
+                key: "<char>",
+                description: "Target character",
+                kind: .argument,
+                tint: nil
+            )
+        )
+        let markArgumentHint = VimHintArgumentPresentation.dynamic(
+            .localMarks,
+            fallback: VimHintItem(
+                key: "<mark>",
+                description: "Mark name",
+                kind: .argument,
+                tint: nil
+            )
+        )
 
         func bindTextMotion(
             _ sequence: [VimKeyPress],
@@ -1087,8 +1123,7 @@ extension VimOperatorMotionBindingTree {
             builder.bindCharacterArgument(
                 sequence,
                 description: hintFragment,
-                argumentPlaceholder: "<char>",
-                argumentDescription: "Target character"
+                argumentHint: characterArgumentHint
             ) { character, _ in
                 motion(character)
             }
@@ -1101,8 +1136,7 @@ extension VimOperatorMotionBindingTree {
             builder.bindCharacterArgument(
                 sequence,
                 description: hintFragment,
-                argumentPlaceholder: "<mark>",
-                argumentDescription: "Mark name"
+                argumentHint: markArgumentHint
             ) { character, _ in
                 .characterwise(.mark(character))
             }

@@ -6,6 +6,11 @@ struct VimMarkSnapshot: Equatable {
     let positions: [Character: Int]
 }
 
+struct VimResolvedMark: Equatable {
+    let name: Character
+    let position: Int
+}
+
 final class VimMarkStore {
     private var positions: [Character: Int] = [:]
 
@@ -29,6 +34,28 @@ final class VimMarkStore {
         guard Self.isSupportedLocalMarkName(name) else { return nil }
         guard let storedPosition = positions[name] else { return nil }
         return normalizedMarkPosition(storedPosition, in: text)
+    }
+
+    func groupedMarksByPosition(in text: NSString) -> [Int: [Character]] {
+        var grouped: [Int: [Character]] = [:]
+
+        for (name, storedPosition) in positions {
+            let normalizedPosition = normalizedMarkPosition(storedPosition, in: text)
+            grouped[normalizedPosition, default: []].append(name)
+        }
+
+        for key in grouped.keys {
+            grouped[key]?.sort()
+        }
+
+        return grouped
+    }
+
+    func resolvedLocalMarks(in text: NSString) -> [VimResolvedMark] {
+        positions.keys.sorted().compactMap { name in
+            guard let position = position(of: name, in: text) else { return nil }
+            return VimResolvedMark(name: name, position: position)
+        }
     }
 
     func apply(_ edit: VimTextEdit) {

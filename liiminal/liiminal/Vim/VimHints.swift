@@ -10,9 +10,42 @@ struct VimHintItem: Equatable, Identifiable {
     let key: String
     let description: String
     let kind: VimHintItemKind
+    let tint: VimDisplayTint?
 
     var id: String {
-        "\(key)|\(description)|\(String(describing: kind))"
+        "\(key)|\(description)|\(String(describing: kind))|\(String(describing: tint))"
+    }
+}
+
+enum VimDynamicHintOptionsSource: Hashable {
+    case localMarks
+}
+
+struct VimHintContext {
+    static let empty = VimHintContext()
+
+    var dynamicOptions: [VimDynamicHintOptionsSource: [VimHintItem]] = [:]
+
+    func items(for source: VimDynamicHintOptionsSource) -> [VimHintItem] {
+        dynamicOptions[source] ?? []
+    }
+}
+
+enum VimHintArgumentPresentation {
+    case placeholder(VimHintItem)
+    case fixed([VimHintItem], fallback: VimHintItem? = nil)
+    case dynamic(VimDynamicHintOptionsSource, fallback: VimHintItem? = nil)
+
+    func items(in context: VimHintContext) -> [VimHintItem] {
+        switch self {
+        case .placeholder(let item):
+            return [item]
+        case .fixed(let items, let fallback):
+            return items.isEmpty ? fallback.map { [$0] } ?? [] : items
+        case .dynamic(let source, let fallback):
+            let items = context.items(for: source)
+            return items.isEmpty ? fallback.map { [$0] } ?? [] : items
+        }
     }
 }
 
@@ -46,18 +79,22 @@ struct VimKeymapCatalog {
         )
     }()
 
-    func rootHintCandidate() -> VimHintCandidate {
+    func rootHintCandidate(in context: VimHintContext = .empty) -> VimHintCandidate {
         VimHintCandidate(
             snapshot: commandBindings.hintSnapshot(
                 at: [],
                 titlePrefix: "Commands",
-                argumentPending: false
+                argumentPending: false,
+                context: context
             ) ?? VimHintSnapshot(title: "Commands", items: []),
             source: .rootHelp
         )
     }
 
-    func hintCandidate(for sessionState: VimSessionState) -> VimHintCandidate? {
+    func hintCandidate(
+        for sessionState: VimSessionState,
+        in context: VimHintContext = .empty
+    ) -> VimHintCandidate? {
         guard sessionState.mode == .normal else { return nil }
 
         if let pendingOperator = sessionState.pendingOperator {
@@ -69,7 +106,8 @@ struct VimKeymapCatalog {
                 let snapshot = bindingTree.hintSnapshot(
                     at: sessionState.pendingKeys,
                     titlePrefix: pendingOperator.displayLabel,
-                    argumentPending: sessionState.pendingCharacterOperatorMotionFactory != nil
+                    argumentPending: sessionState.pendingCharacterOperatorMotionFactory != nil,
+                    context: context
                 )
             else {
                 return nil
@@ -87,7 +125,8 @@ struct VimKeymapCatalog {
             let snapshot = commandBindings.hintSnapshot(
                 at: sessionState.pendingKeys,
                 titlePrefix: nil,
-                argumentPending: sessionState.pendingCharacterCommandFactory != nil
+                argumentPending: sessionState.pendingCharacterCommandFactory != nil,
+                context: context
             )
         else {
             return nil
@@ -115,8 +154,7 @@ extension VimOperatorMotionBindingTree: VimHintQueryableTree {
 private protocol VimHintQueryableNode {
     var hintLabel: String? { get }
     var hintItemKind: VimHintItemKind? { get }
-    var argumentPlaceholder: String? { get }
-    var argumentDescription: String? { get }
+    var argumentPresentation: VimHintArgumentPresentation? { get }
     var childrenKeyOrder: [VimKeyPress] { get }
     func child(for key: VimKeyPress) -> Self?
 }
@@ -141,13 +179,14 @@ private extension VimHintQueryableTree where Node: VimHintQueryableNode {
     func hintSnapshot(
         at keys: [VimKeyPress],
         titlePrefix: String?,
-        argumentPending: Bool
+        argumentPending: Bool,
+        context: VimHintContext
     ) -> VimHintSnapshot? {
         guard let node = node(at: keys) else { return nil }
 
         let items =
             argumentPending
-            ? argumentHintItems(for: node)
+            ? argumentHintItems(for: node, context: context)
             : childHintItems(for: node)
 
         guard !items.isEmpty else { return nil }
@@ -191,26 +230,14 @@ private extension VimHintQueryableTree where Node: VimHintQueryableNode {
             return VimHintItem(
                 key: keyPress.displayNotation,
                 description: child.hintLabel ?? fallbackDescription(for: child),
-                kind: child.hintItemKind ?? inferredKind(for: child)
+                kind: child.hintItemKind ?? inferredKind(for: child),
+                tint: nil
             )
         }
     }
 
-    private func argumentHintItems(for node: Node) -> [VimHintItem] {
-        guard
-            let placeholder = node.argumentPlaceholder,
-            let description = node.argumentDescription
-        else {
-            return []
-        }
-
-        return [
-            VimHintItem(
-                key: placeholder,
-                description: description,
-                kind: .argument
-            )
-        ]
+    private func argumentHintItems(for node: Node, context: VimHintContext) -> [VimHintItem] {
+        node.argumentPresentation?.items(in: context) ?? []
     }
 
     private func fallbackDescription(for node: Node) -> String {

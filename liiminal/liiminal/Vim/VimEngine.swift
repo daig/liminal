@@ -26,12 +26,12 @@ final class VimEngine {
         self.sessionState = initialState
     }
 
-    var hintCandidate: VimHintCandidate? {
-        keymapCatalog.hintCandidate(for: sessionState)
+    func hintCandidate(in context: VimHintContext = .empty) -> VimHintCandidate? {
+        keymapCatalog.hintCandidate(for: sessionState, in: context)
     }
 
-    func rootHintCandidate() -> VimHintCandidate {
-        keymapCatalog.rootHintCandidate()
+    func rootHintCandidate(in context: VimHintContext = .empty) -> VimHintCandidate {
+        keymapCatalog.rootHintCandidate(in: context)
     }
 
     func setMode(_ mode: VimMode) {

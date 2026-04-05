@@ -39,6 +39,7 @@ Examples:
 
 - After a short delay, Normal mode shows a bottom-of-editor hint panel for pending prefixes such as `d`, `c`, `y`, `g`, `f`, and `t`.
 - The hint panel is generated directly from the currently registered command bindings, so it always matches the actual supported commands.
+- Argument-pending hint screens can also show concrete live options from the current editor state. For example, mark-jump screens show the currently available local marks with their mark colors and positions.
 - `Space` in idle Normal mode opens the top-level command catalog immediately.
 - `Esc` closes the hint panel when it is open and there is no active pending command.
 
@@ -51,6 +52,7 @@ Examples:
 - Double-click-plus-drag keeps updating the characterwise Visual selection, and triple-click-plus-drag keeps updating a linewise Visual selection.
 - In Visual mode, a single click cancels Visual mode and moves the cursor to the clicked position.
 - After that click-to-cancel behavior, continuing to drag starts a fresh characterwise Visual selection from the new clicked position.
+- Hovering a marked character shows its mark labels in a tooltip.
 - If an operator is pending, such as after `d`, `c`, or `y`, clicking a character uses that clicked position as the motion target for the operator.
 - Operator-pending mouse motions are characterwise and span from the starting cursor position through the clicked position.
 
@@ -180,6 +182,9 @@ These motions operate on screen lines created by soft wrapping, not on logical d
 ### Marks
 
 Local marks currently use exact character positions within the current file. Only lowercase mark names `a` through `z` are supported. This intentionally diverges from Vim for now: exact-position mark jumps are supported, but line-oriented mark jumps are not.
+Marked positions are shown in the editor with colored dots derived from the mark name. When multiple marks share one position, those dots stack together at that character.
+When the active Vim cursor is on a marked position in Normal mode or Visual mode, the toolbar shows those marks with their colors.
+When a mark name is expected, the hint panel shows the currently available local marks with their colors.
 
 | Key | Behavior |
 | --- | --- |

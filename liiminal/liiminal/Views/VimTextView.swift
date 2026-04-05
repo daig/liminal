@@ -11,10 +11,22 @@ final class VimTextView: NSTextView {
         case below
     }
 
+    private struct MarkIndicatorDot {
+        let mark: Character
+        let frame: CGRect
+    }
+
+    private struct MarkIndicatorLayout {
+        let bounds: CGRect
+        let dots: [MarkIndicatorDot]
+    }
+
     private enum MouseDragState {
         case normalAnchor(position: Int, visualKind: VimVisualKind)
         case visualAdjusting
     }
+
+    private var markTrackingArea: NSTrackingArea?
 
     weak var vimDelegate: VimTextViewDelegate?
 
@@ -25,6 +37,7 @@ final class VimTextView: NSTextView {
     private var isSynchronizingDocumentHeight = false
     private var isShowingRootHintCatalog = false
     private var mouseDragState: MouseDragState?
+    private var currentCursorInfo: VimCursorInfoPresentation?
     private var visualState: VimVisualState? {
         didSet {
             if let visualState {
@@ -38,6 +51,10 @@ final class VimTextView: NSTextView {
 
     private static let cursorHighlightKey = NSAttributedString.Key("vimCursorHighlight")
     private static let cursorColor = NSColor.systemOrange.withAlphaComponent(0.4)
+    private static let markDotDiameter: CGFloat = 4.0
+    private static let markDotGap: CGFloat = 2.0
+    private static let markDotColumns = 3
+    private static let markDotOffset: CGFloat = 1.5
 
     /// Current editing mode.
     private(set) var mode: VimMode = .normal {
@@ -68,15 +85,19 @@ final class VimTextView: NSTextView {
         case .visual, .visualLine:
             isEditable = false
             clearNormalCursor()
+            refreshMarkIndicators()
             let selectionRange = visualSelectionDisplayRange()
             setSelectedRange(selectionRange)
+            refreshCursorInfo()
             ensureActiveCursorVisible()
         case .insert:
             clearNormalCursor()
+            refreshMarkIndicators()
             // Place the real insertion point at the tracked position
             setSelectedRange(NSRange(location: insertionPointPosition(), length: 0))
             isEditable = true
             insertionPointColor = .textColor
+            refreshCursorInfo()
         }
     }
 
@@ -92,6 +113,7 @@ final class VimTextView: NSTextView {
             .backgroundColor,
             forCharacterRange: NSRange(location: 0, length: length)
         )
+        refreshMarkIndicators()
 
         guard length > 0 else { return }
         let pos = min(normalCursorPosition, length - 1)
@@ -105,6 +127,7 @@ final class VimTextView: NSTextView {
             forCharacterRange: highlightRange
         )
 
+        refreshCursorInfo()
         ensureActiveCursorVisible()
     }
 
@@ -130,6 +153,7 @@ final class VimTextView: NSTextView {
 
         let selectionRange = visualSelectionDisplayRange()
         setSelectedRange(selectionRange)
+        refreshCursorInfo()
         ensureActiveCursorVisible()
     }
 
@@ -158,6 +182,8 @@ final class VimTextView: NSTextView {
         activeMarkStore = markStore
         isShowingRootHintCatalog = false
         mouseDragState = nil
+        currentCursorInfo = nil
+        toolTip = nil
         visualState = nil
         string = text
         normalCursorPosition = 0
@@ -171,6 +197,8 @@ final class VimTextView: NSTextView {
         }
 
         synchronizeDocumentHeightToContent()
+        refreshMarkIndicators()
+        updateHoverTooltip(at: nil)
         publishVimState()
     }
 
@@ -185,6 +213,11 @@ final class VimTextView: NSTextView {
         case .insert:
             handleInsertMode(event)
         }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawMarkIndicators(in: dirtyRect)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -220,6 +253,31 @@ final class VimTextView: NSTextView {
         }
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        updateHoverTooltip(at: mouseTargetPosition(for: event, strictHitTesting: true))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        updateHoverTooltip(at: nil)
+    }
+
+    override func updateTrackingAreas() {
+        if let markTrackingArea {
+            removeTrackingArea(markTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.inVisibleRect, .activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        markTrackingArea = trackingArea
+
+        super.updateTrackingAreas()
+    }
+
     override func shouldChangeText(
         in affectedCharRange: NSRange,
         replacementString: String?
@@ -243,6 +301,9 @@ final class VimTextView: NSTextView {
     override func didChangeText() {
         super.didChangeText()
         synchronizeDocumentHeightToContent()
+        refreshMarkIndicators()
+        refreshHoverTooltipForCurrentMouseLocation()
+        refreshCursorInfo()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -947,6 +1008,7 @@ final class VimTextView: NSTextView {
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
         drawNormalCursor()
+        refreshHoverTooltipForCurrentMouseLocation()
     }
 
     private func currentViewportCursorPosition() -> Int {
@@ -1055,6 +1117,9 @@ final class VimTextView: NSTextView {
             return
         }
 
+        refreshMarkIndicators()
+        refreshHoverTooltipForCurrentMouseLocation()
+        refreshCursorInfo()
         activeUndoHistory?.updateCurrentMarkSnapshot(currentMarkSnapshot())
     }
 
@@ -1129,6 +1194,154 @@ final class VimTextView: NSTextView {
         }
     }
 
+    private func refreshMarkIndicators() {
+        needsDisplay = true
+    }
+
+    private func drawMarkIndicators(in dirtyRect: NSRect) {
+        let text = string as NSString
+        guard text.length > 0 else { return }
+        guard let layoutManager, let textContainer else { return }
+        guard let groupedMarks = activeMarkStore?.groupedMarksByPosition(in: text) else { return }
+
+        for (position, marks) in groupedMarks {
+            guard
+                let indicatorLayout = markIndicatorLayout(
+                    for: position,
+                    marks: marks,
+                    in: text,
+                    layoutManager: layoutManager,
+                    textContainer: textContainer
+                ),
+                indicatorLayout.bounds.intersects(dirtyRect)
+            else {
+                continue
+            }
+
+            for dot in indicatorLayout.dots {
+                let tint = VimMarkPalette.tint(for: dot.mark)
+                let color = NSColor(
+                    calibratedHue: tint.hue,
+                    saturation: tint.saturation,
+                    brightness: tint.brightness,
+                    alpha: 0.92
+                )
+
+                color.setFill()
+                NSBezierPath(ovalIn: dot.frame).fill()
+            }
+        }
+    }
+
+    private func marksAtPosition(_ position: Int?) -> [Character] {
+        guard let position else { return [] }
+        let text = string as NSString
+        guard text.length > 0 else { return [] }
+        return activeMarkStore?.groupedMarksByPosition(in: text)[position] ?? []
+    }
+
+    private func updateHoverTooltip(at position: Int?) {
+        let marks = marksAtPosition(position)
+        toolTip = marks.isEmpty ? nil : markTooltipText(for: marks)
+    }
+
+    private func refreshHoverTooltipForCurrentMouseLocation() {
+        guard let window else {
+            updateHoverTooltip(at: nil)
+            return
+        }
+
+        let localPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard bounds.contains(localPoint) else {
+            updateHoverTooltip(at: nil)
+            return
+        }
+
+        updateHoverTooltip(at: mouseTargetPosition(for: localPoint, strictHitTesting: true))
+    }
+
+    private func refreshCursorInfo() {
+        let info = currentCursorInfoPosition().flatMap(cursorInfo(at:))
+        guard info != currentCursorInfo else { return }
+        currentCursorInfo = info
+        vimDelegate?.vimTextView(self, didChangeCursorInfo: info)
+    }
+
+    private func currentCursorInfoPosition() -> Int? {
+        let text = string as NSString
+        guard text.length > 0 else { return nil }
+
+        switch mode {
+        case .normal:
+            return max(0, min(normalCursorPosition, text.length - 1))
+        case .visual, .visualLine:
+            guard let visualState else { return nil }
+            return max(0, min(visualState.cursorPosition, text.length - 1))
+        case .insert:
+            return nil
+        }
+    }
+
+    private func cursorInfo(at position: Int) -> VimCursorInfoPresentation? {
+        let marks = marksAtPosition(position)
+        guard !marks.isEmpty else { return nil }
+
+        return VimCursorInfoPresentation(
+            sectionTitle: "MARKS",
+            items: marks.map {
+                VimCursorInfoItem(label: String($0), tint: VimMarkPalette.tint(for: $0))
+            }
+        )
+    }
+
+    private func mouseTargetPosition(
+        for point: NSPoint,
+        strictHitTesting: Bool = false
+    ) -> Int? {
+        let text = string as NSString
+        guard text.length > 0 else { return nil }
+        guard let layoutManager, let textContainer else { return nil }
+
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let characterIndex = min(layoutManager.characterIndexForGlyph(at: glyphIndex), text.length - 1)
+        if strictHitTesting {
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            let viewRect = glyphRect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            var hitRect = viewRect.insetBy(dx: -2, dy: -1)
+
+            let marks = activeMarkStore?.groupedMarksByPosition(in: text)[characterIndex] ?? []
+            if
+                !marks.isEmpty,
+                let indicatorLayout = markIndicatorLayout(
+                    for: characterIndex,
+                    marks: marks,
+                    in: text,
+                    layoutManager: layoutManager,
+                    textContainer: textContainer
+                )
+            {
+                hitRect = hitRect.union(indicatorLayout.bounds.insetBy(dx: -1, dy: -1))
+            }
+
+            if !hitRect.contains(point) {
+                return nil
+            }
+        }
+        return characterIndex
+    }
+
+    private func markTooltipText(for marks: [Character]) -> String {
+        let labels = marks.map(String.init).joined(separator: ", ")
+        return marks.count == 1 ? "Mark \(labels)" : "Marks \(labels)"
+    }
+
     private func committedNormalCursorPosition() -> Int {
         let text = string as NSString
         guard text.length > 0 else { return 0 }
@@ -1164,27 +1377,128 @@ final class VimTextView: NSTextView {
 
     private func currentHintCandidate() -> VimHintCandidate? {
         guard mode == .normal else { return nil }
+        let hintContext = currentHintContext()
 
         if isShowingRootHintCatalog {
-            return vimEngine.rootHintCandidate()
+            return vimEngine.rootHintCandidate(in: hintContext)
         }
 
-        return vimEngine.hintCandidate
+        return vimEngine.hintCandidate(in: hintContext)
     }
 
-    private func mouseTargetPosition(for event: NSEvent) -> Int? {
+    private func currentHintContext() -> VimHintContext {
         let text = string as NSString
-        guard text.length > 0 else { return 0 }
-        guard let layoutManager, let textContainer else { return nil }
+        let localMarkItems = activeMarkStore?.resolvedLocalMarks(in: text).map { mark in
+            VimHintItem(
+                key: String(mark.name),
+                description: "Saved position",
+                kind: .argument,
+                tint: VimMarkPalette.tint(for: mark.name)
+            )
+        } ?? []
 
-        let viewPoint = convert(event.locationInWindow, from: nil)
-        let containerPoint = NSPoint(
-            x: viewPoint.x - textContainerOrigin.x,
-            y: viewPoint.y - textContainerOrigin.y
+        return VimHintContext(
+            dynamicOptions: [
+                .localMarks: localMarkItems
+            ]
         )
-        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
-        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
-        return min(characterIndex, text.length - 1)
+    }
+
+    private func mouseTargetPosition(
+        for event: NSEvent,
+        strictHitTesting: Bool = false
+    ) -> Int? {
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        return mouseTargetPosition(for: viewPoint, strictHitTesting: strictHitTesting)
+    }
+
+    private func markIndicatorLayout(
+        for position: Int,
+        marks: [Character],
+        in text: NSString,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> MarkIndicatorLayout? {
+        guard !marks.isEmpty else { return nil }
+        guard let glyphRect = markIndicatorGlyphRect(
+            for: position,
+            in: text,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        ) else {
+            return nil
+        }
+
+        let rows = stride(from: 0, to: marks.count, by: Self.markDotColumns).map {
+            Array(marks[$0..<min($0 + Self.markDotColumns, marks.count)])
+        }
+        var dots: [MarkIndicatorDot] = []
+        var bounds = CGRect.null
+
+        for (rowIndex, rowMarks) in rows.enumerated() {
+            let rowWidth =
+                CGFloat(rowMarks.count) * Self.markDotDiameter
+                + CGFloat(max(0, rowMarks.count - 1)) * Self.markDotGap
+            let rowOriginX = glyphRect.midX - (rowWidth / 2)
+
+            let rowOriginY: CGFloat
+            if isFlipped {
+                rowOriginY =
+                    glyphRect.maxY + Self.markDotOffset
+                    + CGFloat(rowIndex) * (Self.markDotDiameter + Self.markDotGap)
+            } else {
+                rowOriginY =
+                    glyphRect.minY - Self.markDotOffset - Self.markDotDiameter
+                    - CGFloat(rowIndex) * (Self.markDotDiameter + Self.markDotGap)
+            }
+
+            for (columnIndex, mark) in rowMarks.enumerated() {
+                let frame = CGRect(
+                    x: rowOriginX + CGFloat(columnIndex) * (Self.markDotDiameter + Self.markDotGap),
+                    y: rowOriginY,
+                    width: Self.markDotDiameter,
+                    height: Self.markDotDiameter
+                )
+                dots.append(MarkIndicatorDot(mark: mark, frame: frame))
+                bounds = bounds.union(frame)
+            }
+        }
+
+        return MarkIndicatorLayout(bounds: bounds, dots: dots)
+    }
+
+    private func markIndicatorGlyphRect(
+        for position: Int,
+        in text: NSString,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> CGRect? {
+        guard text.length > 0 else { return nil }
+
+        let clampedPosition = max(0, min(position, text.length - 1))
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: clampedPosition)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+
+        var glyphRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+        )
+
+        if glyphRect.isEmpty {
+            let lineUsedRect = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            glyphRect = CGRect(
+                x: max(lineUsedRect.minX, lineUsedRect.maxX - 1),
+                y: lineUsedRect.minY,
+                width: 1,
+                height: lineUsedRect.height
+            )
+        }
+
+        return glyphRect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
     }
 
     private func keyPress(for event: NSEvent) -> VimKeyPress? {
@@ -1234,4 +1548,5 @@ protocol VimTextViewDelegate: AnyObject {
     func vimTextView(_ textView: VimTextView, didChangeMode mode: VimMode)
     func vimTextView(_ textView: VimTextView, didChangeStatus status: VimStatusPresentation)
     func vimTextView(_ textView: VimTextView, didChangeHintCandidate candidate: VimHintCandidate?)
+    func vimTextView(_ textView: VimTextView, didChangeCursorInfo info: VimCursorInfoPresentation?)
 }

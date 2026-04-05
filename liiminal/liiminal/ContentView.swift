@@ -59,6 +59,38 @@ struct ContentView: View {
                                                 .background(Color.secondary.opacity(0.08))
                                                 .clipShape(RoundedRectangle(cornerRadius: 4))
                                         }
+
+                                        if let cursorInfo = editorVM.vimCursorInfo {
+                                            HStack(spacing: 6) {
+                                                Text(cursorInfo.sectionTitle)
+                                                    .font(
+                                                        .system(
+                                                            size: 10,
+                                                            weight: .semibold,
+                                                            design: .monospaced
+                                                        )
+                                                    )
+                                                    .foregroundStyle(.secondary)
+
+                                                ForEach(cursorInfo.items) { item in
+                                                    Text(item.label)
+                                                        .font(
+                                                            .system(
+                                                                size: 11,
+                                                                weight: .semibold,
+                                                                design: .monospaced
+                                                            )
+                                                        )
+                                                        .padding(.horizontal, 6)
+                                                        .padding(.vertical, 3)
+                                                        .foregroundStyle(cursorInfoForeground(for: item))
+                                                        .background(
+                                                            cursorInfoForeground(for: item).opacity(0.12)
+                                                        )
+                                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -123,5 +155,14 @@ struct ContentView: View {
         case .insert:
             Color.secondary.opacity(0.1)
         }
+    }
+
+    private func cursorInfoForeground(for item: VimCursorInfoItem) -> Color {
+        guard let tint = item.tint else { return .secondary }
+        return Color(
+            hue: tint.hue,
+            saturation: tint.saturation,
+            brightness: tint.brightness
+        )
     }
 }

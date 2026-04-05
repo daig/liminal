@@ -19,10 +19,17 @@ struct VimHintOverlayView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Text(item.key)
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(keyForegroundColor(for: item))
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(Color.secondary.opacity(0.12))
+                                .background(keyBackgroundColor(for: item))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .strokeBorder(
+                                            keyBorderColor(for: item),
+                                            lineWidth: item.tint == nil ? 0 : 1
+                                        )
+                                )
                                 .clipShape(RoundedRectangle(cornerRadius: 5))
 
                             Text(displayDescription(for: item))
@@ -63,5 +70,37 @@ struct VimHintOverlayView: View {
         case .action, .argument:
             return item.description
         }
+    }
+
+    private func keyForegroundColor(for item: VimHintItem) -> Color {
+        if let tint = item.tint {
+            return color(for: tint)
+        }
+
+        return .primary
+    }
+
+    private func keyBackgroundColor(for item: VimHintItem) -> Color {
+        if let tint = item.tint {
+            return color(for: tint).opacity(0.14)
+        }
+
+        return Color.secondary.opacity(0.12)
+    }
+
+    private func keyBorderColor(for item: VimHintItem) -> Color {
+        if let tint = item.tint {
+            return color(for: tint).opacity(0.4)
+        }
+
+        return .clear
+    }
+
+    private func color(for tint: VimDisplayTint) -> Color {
+        Color(
+            hue: tint.hue,
+            saturation: tint.saturation,
+            brightness: tint.brightness
+        )
     }
 }

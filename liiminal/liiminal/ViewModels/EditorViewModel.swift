@@ -27,6 +27,7 @@ final class EditorViewModel {
     var vimMode: VimMode = .normal
     var vimStatus = VimStatusPresentation(mode: .normal, detailText: nil)
     var vimHintSnapshot: VimHintSnapshot?
+    var vimCursorInfo: VimCursorInfoPresentation?
 
     let fileService: FileSystemService
     @ObservationIgnored private var pendingVimHintCandidate: VimHintCandidate?
@@ -52,6 +53,7 @@ final class EditorViewModel {
         isDirty = false
         document = Document(blocks: BlockParser.parse(loaded.content))
         clearVimHints()
+        vimCursorInfo = nil
     }
 
     func updateVimHintCandidate(_ candidate: VimHintCandidate?) {
@@ -92,6 +94,10 @@ final class EditorViewModel {
         vimHintTask?.cancel()
         vimHintTask = nil
         vimHintSnapshot = nil
+    }
+
+    func updateVimCursorInfo(_ info: VimCursorInfoPresentation?) {
+        vimCursorInfo = info
     }
 
     func textDidChange(_ newText: String) {
