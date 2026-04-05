@@ -1,6 +1,7 @@
 import XCTest
 @testable import liiminal
 
+@MainActor
 final class VimEngineOperatorArgumentTests: XCTestCase {
     func testDeleteInnerWordParsesAsTextObjectArgument() {
         XCTAssertEqual(

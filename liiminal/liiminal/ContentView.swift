@@ -119,7 +119,9 @@ struct ContentView: View {
         }
         .onAppear {
             editorViewModel = EditorViewModel(fileService: vaultViewModel.fileService)
-            vaultViewModel.restorePreviousVault()
+            if AppRuntime.isRunningUnitTests == false {
+                vaultViewModel.restorePreviousVault()
+            }
         }
         .onChange(of: vaultViewModel.selectedNoteID) { _, _ in
             if let note = vaultViewModel.selectedNote {

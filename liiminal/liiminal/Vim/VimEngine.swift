@@ -6,11 +6,9 @@ enum VimHandleResult: Equatable {
     case ignored
 }
 
-final class VimEngine {
+nonisolated final class VimEngine {
     private let keymapCatalog: VimKeymapCatalog
-    private let commandBindings: VimBindingTree
     private let visualBindings: VimBindingTree
-    private let operatorArgumentBindings: [VimOperator: VimOperatorArgumentBindingTree]
 
     private(set) var sessionState: VimSessionState
 
@@ -20,9 +18,7 @@ final class VimEngine {
         initialState: VimSessionState = VimSessionState()
     ) {
         self.keymapCatalog = keymapCatalog
-        self.commandBindings = keymapCatalog.commandBindings
         self.visualBindings = visualBindings
-        self.operatorArgumentBindings = keymapCatalog.operatorArgumentBindings
         self.sessionState = initialState
     }
 
@@ -116,7 +112,7 @@ final class VimEngine {
 
         let candidateKeys = sessionState.pendingKeys + [keyPress]
 
-        switch commandBindings.match(candidateKeys) {
+        switch keymapCatalog.commandBindings.match(candidateKeys) {
         case .exact(let commandFactory):
             let count = sessionState.pendingCount
             sessionState.clearPendingInput()
@@ -158,7 +154,7 @@ final class VimEngine {
             return .pending
         }
 
-        guard let operatorBindings = operatorArgumentBindings[pendingOperator] else {
+        guard let operatorBindings = keymapCatalog.operatorArgumentBindings[pendingOperator] else {
             sessionState.clearPendingInput()
             return .ignored
         }

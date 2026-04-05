@@ -4,7 +4,11 @@ import SwiftUI
 struct liiminalApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if AppRuntime.isRunningUnitTests {
+                EmptyView()
+            } else {
+                ContentView()
+            }
         }
         .defaultSize(width: 1000, height: 700)
         .commands {
@@ -20,4 +24,11 @@ struct liiminalApp: App {
 
 extension Notification.Name {
     static let openVault = Notification.Name("openVault")
+}
+
+enum AppRuntime {
+    static var isRunningUnitTests: Bool {
+        NSClassFromString("XCTestCase") != nil
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
 }
