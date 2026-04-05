@@ -11,6 +11,7 @@ struct VimUndoTransaction {
 struct VimUndoNavigationResult {
     let text: String
     let cursorPosition: Int
+    let markSnapshot: VimMarkSnapshot
 }
 
 private struct VimUndoNode {
@@ -19,6 +20,7 @@ private struct VimUndoNode {
     var childIDs: [Int]
     let transaction: VimUndoTransaction?
     let cursorPosition: Int
+    var markSnapshot: VimMarkSnapshot
 }
 
 private struct VimActiveInsertSession {
@@ -42,7 +44,8 @@ final class VimUndoHistory {
             parentID: nil,
             childIDs: [],
             transaction: nil,
-            cursorPosition: 0
+            cursorPosition: 0,
+            markSnapshot: .empty
         )
 
         nodes = [rootNode.id: rootNode]
@@ -78,7 +81,10 @@ final class VimUndoHistory {
         self.activeInsertSession = activeInsertSession
     }
 
-    func commitInsertSession(finalCursorPosition: Int) {
+    func commitInsertSession(
+        finalCursorPosition: Int,
+        markSnapshot: VimMarkSnapshot
+    ) {
         guard let activeInsertSession else { return }
         self.activeInsertSession = nil
 
@@ -90,13 +96,14 @@ final class VimUndoHistory {
             afterCursorPosition: clampedCursor(finalCursorPosition, for: currentTextStorage),
             timestamp: activeInsertSession.startedAt
         )
-        appendNode(for: transaction)
+        appendNode(for: transaction, markSnapshot: markSnapshot)
     }
 
     func commitImmediateEdits(
         _ edits: [VimTextEdit],
         beforeCursorPosition: Int,
-        afterCursorPosition: Int
+        afterCursorPosition: Int,
+        markSnapshot: VimMarkSnapshot
     ) {
         let meaningfulEdits = edits.filter { !isNoOp($0) }
         guard !meaningfulEdits.isEmpty else { return }
@@ -112,7 +119,13 @@ final class VimUndoHistory {
             afterCursorPosition: afterCursorPosition,
             beforeText: beforeText
         )
-        appendNode(for: transaction)
+        appendNode(for: transaction, markSnapshot: markSnapshot)
+    }
+
+    func updateCurrentMarkSnapshot(_ markSnapshot: VimMarkSnapshot) {
+        guard var currentNode = nodes[currentNodeID] else { return }
+        currentNode.markSnapshot = markSnapshot
+        nodes[currentNodeID] = currentNode
     }
 
     func undo(count: Int) -> VimUndoNavigationResult? {
@@ -162,7 +175,10 @@ final class VimUndoHistory {
         return navigationResult()
     }
 
-    private func appendNode(for transaction: VimUndoTransaction) {
+    private func appendNode(
+        for transaction: VimUndoTransaction,
+        markSnapshot: VimMarkSnapshot
+    ) {
         let parentID = currentNodeID
         let nodeID = nextNodeID
         nextNodeID += 1
@@ -179,7 +195,8 @@ final class VimUndoHistory {
             cursorPosition: clampedCursor(
                 transaction.afterCursorPosition,
                 for: currentTextStorage
-            )
+            ),
+            markSnapshot: markSnapshot
         )
 
         nodes[nodeID] = node
@@ -241,9 +258,11 @@ final class VimUndoHistory {
 
     private func navigationResult() -> VimUndoNavigationResult {
         let cursorPosition = nodes[currentNodeID]?.cursorPosition ?? 0
+        let markSnapshot = nodes[currentNodeID]?.markSnapshot ?? .empty
         return VimUndoNavigationResult(
             text: currentTextStorage,
-            cursorPosition: cursorPosition
+            cursorPosition: cursorPosition,
+            markSnapshot: markSnapshot
         )
     }
 

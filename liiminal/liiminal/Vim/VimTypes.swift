@@ -4,6 +4,7 @@ typealias VimCommandFactory = (Int?) -> VimCommand
 typealias VimCharacterCommandFactory = (Character, Int?) -> VimCommand
 typealias VimOperatorMotionFactory = (Int?) -> VimOperatorMotion
 typealias VimCharacterOperatorMotionFactory = (Character, Int?) -> VimOperatorMotion
+typealias VimMarkResolver = (Character) -> Int?
 
 enum VimSpecialKey: Hashable {
     case escape
@@ -59,6 +60,7 @@ enum VimTextMotion {
     case up
     case down
     case targetPosition(Int)
+    case mark(Character)
     case lineStart
     case lineFirstNonBlank
     case lineEnd
@@ -155,6 +157,7 @@ enum VimOperatorTarget {
 
 enum VimCommand {
     case beginOperator(VimOperator, count: Int?)
+    case setMark(Character)
     case enterInsert(VimInsertTransition)
     case enterVisual(VimVisualKind)
     case exitVisual
@@ -788,6 +791,20 @@ private enum VimBindingRegistration {
             }
         }
 
+        func bindMarkMotion(
+            _ sequence: [VimKeyPress],
+            description: String
+        ) {
+            builder.bindCharacterArgument(
+                sequence,
+                description: description,
+                argumentPlaceholder: "<mark>",
+                argumentDescription: "Mark name"
+            ) { character, _ in
+                .moveText(.mark(character), count: nil)
+            }
+        }
+
         builder.bind(
             [.special(.leftArrow)],
             description: "Move left"
@@ -821,6 +838,7 @@ private enum VimBindingRegistration {
         bindTextMotion([.character("w")], motion: .wordForward, description: "Next word")
         bindTextMotion([.character("b")], motion: .wordBackward, description: "Previous word")
         bindTextMotion([.character("e")], motion: .wordEndForward, description: "Word end")
+        bindMarkMotion([.character("`")], description: "Jump to mark")
 
         builder.describeGroup([.character("g")], label: "Go")
         bindTextMotion(
@@ -965,6 +983,14 @@ extension VimBindingTree {
             description: "Delete",
             kind: .group
         ) { .beginOperator(.delete, count: $0) }
+        builder.bindCharacterArgument(
+            [.character("m")],
+            description: "Set mark",
+            argumentPlaceholder: "<mark>",
+            argumentDescription: "Mark name"
+        ) { character, _ in
+            .setMark(character)
+        }
         builder.bind(
             [.character("D")],
             description: "Delete to line end"
@@ -1068,6 +1094,20 @@ extension VimOperatorMotionBindingTree {
             }
         }
 
+        func bindMarkMotion(
+            _ sequence: [VimKeyPress],
+            hintFragment: String
+        ) {
+            builder.bindCharacterArgument(
+                sequence,
+                description: hintFragment,
+                argumentPlaceholder: "<mark>",
+                argumentDescription: "Mark name"
+            ) { character, _ in
+                .characterwise(.mark(character))
+            }
+        }
+
         builder.bind(
             [.character(repeatedKey)],
             description: "current line"
@@ -1109,6 +1149,7 @@ extension VimOperatorMotionBindingTree {
             kind: .characterwise(.wordEndForward),
             hintFragment: "to word end"
         )
+        bindMarkMotion([.character("`")], hintFragment: "to mark")
 
         builder.describeGroup([.character("g")], label: "Go")
         bindTextMotion(

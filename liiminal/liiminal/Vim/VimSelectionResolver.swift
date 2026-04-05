@@ -11,7 +11,8 @@ enum VimSelectionResolver {
         for target: VimOperatorTarget,
         in text: NSString,
         from position: Int,
-        preferredColumn: Int?
+        preferredColumn: Int?,
+        markResolver: VimMarkResolver? = nil
     ) -> VimSelectionResult? {
         guard text.length > 0 else { return nil }
 
@@ -29,7 +30,8 @@ enum VimSelectionResolver {
                 motion: motion,
                 count: max(count ?? 1, 1),
                 in: text,
-                from: currentPosition
+                from: currentPosition,
+                markResolver: markResolver
             )
         case .linewise(let motion, let count):
             return selectLinewise(
@@ -105,7 +107,8 @@ enum VimSelectionResolver {
         motion: VimTextMotion,
         count: Int,
         in text: NSString,
-        from position: Int
+        from position: Int,
+        markResolver: VimMarkResolver?
     ) -> VimSelectionResult? {
         let lineRange = text.lineRange(for: NSRange(location: position, length: 0))
         let lineLowerBound = lineRange.location
@@ -122,6 +125,14 @@ enum VimSelectionResolver {
             range = nsRange(from: position, toExclusive: end)
         case .targetPosition(let targetPosition):
             let destination = VimNavigator.normalizedPosition(targetPosition, in: text)
+            guard destination != position else { return nil }
+
+            let lowerBound = min(position, destination)
+            let upperBound = min(max(position, destination) + 1, text.length)
+            range = nsRange(from: lowerBound, toExclusive: upperBound)
+        case .mark(let name):
+            guard let markPosition = markResolver?(name) else { return nil }
+            let destination = VimNavigator.normalizedPosition(markPosition, in: text)
             guard destination != position else { return nil }
 
             let lowerBound = min(position, destination)

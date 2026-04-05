@@ -62,6 +62,7 @@ This editor currently supports characterwise Visual mode and linewise Visual mod
 
 - In Visual mode, the supported motion keys reuse the same movement subset as Normal mode and extend or shrink the active selection.
 - This includes basic movement, line anchors, word motions, `gg` / `G`, in-line character search, view-relative movement, wrapped-line movement, paragraph movement, and character clicks with the mouse.
+- It also includes exact-position mark jumps with `` `<mark>``.
 - In linewise Visual mode, the selected range always expands or contracts by whole lines, regardless of the motion used to move the cursor within the selection.
 
 ### Visual Actions
@@ -176,6 +177,15 @@ These motions operate on screen lines created by soft wrapping, not on logical d
 | `{` | Move backward to the start of the previous paragraph. |
 | `}` | Move forward to the start of the next paragraph. |
 
+### Marks
+
+Local marks currently use exact character positions within the current file. Only lowercase mark names `a` through `z` are supported. This intentionally diverges from Vim for now: exact-position mark jumps are supported, but line-oriented mark jumps are not.
+
+| Key | Behavior |
+| --- | --- |
+| `m<mark>` | Set local mark `<mark>` at the current cursor position. |
+| `` `<mark>`` | Jump to the exact position stored in local mark `<mark>`. |
+
 ## Normal Mode Deletion
 
 Delete now uses Vim's `d` operator model over the currently supported motion subset. Counts can be used before the command, such as `2dd` or `3dw`.
@@ -214,6 +224,7 @@ Standalone delete aliases:
 | `d` + `w` | Delete forward by word. |
 | `d` + `b` | Delete backward by word. |
 | `d` + `e` | Delete to the end of the current or next word. |
+| `d` + `` `<mark>`` | Delete from the cursor through the exact position stored in local mark `<mark>`. |
 | `d` + `f<char>` | Delete forward through the next occurrence of `<char>` on the current line. |
 | `d` + `F<char>` | Delete backward through the previous occurrence of `<char>` on the current line. |
 | `d` + `t<char>` | Delete forward until just before the next occurrence of `<char>` on the current line. |
@@ -275,6 +286,7 @@ Standalone yank aliases:
 | `y` + `w` | Yank forward by word. |
 | `y` + `b` | Yank backward by word. |
 | `y` + `e` | Yank to the end of the current or next word. |
+| `y` + `` `<mark>`` | Yank from the cursor through the exact position stored in local mark `<mark>`. |
 | `y` + `f<char>` | Yank forward through the next occurrence of `<char>` on the current line. |
 | `y` + `F<char>` | Yank backward through the previous occurrence of `<char>` on the current line. |
 | `y` + `t<char>` | Yank forward until just before the next occurrence of `<char>` on the current line. |
@@ -319,6 +331,7 @@ Standalone change aliases:
 | `c` + `w` | Change forward by word. This follows the same `w` motion semantics used by `d` and `y`. |
 | `c` + `b` | Change backward by word. |
 | `c` + `e` | Change to the end of the current or next word. |
+| `c` + `` `<mark>`` | Change from the cursor through the exact position stored in local mark `<mark>`. |
 | `c` + `f<char>` | Change forward through the next occurrence of `<char>` on the current line. |
 | `c` + `F<char>` | Change backward through the previous occurrence of `<char>` on the current line. |
 | `c` + `t<char>` | Change forward until just before the next occurrence of `<char>` on the current line. |

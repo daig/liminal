@@ -33,7 +33,9 @@ final class EditorViewModel {
     @ObservationIgnored private var vimHintTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
     private var undoHistories: [URL: VimUndoHistory] = [:]
+    private var markStores: [URL: VimMarkStore] = [:]
     private var scratchUndoHistory = VimUndoHistory(rootText: "")
+    private var scratchMarkStore = VimMarkStore()
 
     init(fileService: FileSystemService) {
         self.fileService = fileService
@@ -100,22 +102,39 @@ final class EditorViewModel {
     }
 
     func undoHistory(for note: Note?) -> VimUndoHistory {
+        ensureEditorState(for: note).undoHistory
+    }
+
+    func markStore(for note: Note?) -> VimMarkStore {
+        ensureEditorState(for: note).markStore
+    }
+
+    private func ensureEditorState(for note: Note?) -> (undoHistory: VimUndoHistory, markStore: VimMarkStore) {
         let loadedText = note?.content ?? ""
 
         guard let noteID = note?.id else {
             if scratchUndoHistory.currentText != loadedText {
                 scratchUndoHistory = VimUndoHistory(rootText: loadedText)
+                scratchMarkStore = VimMarkStore()
             }
-            return scratchUndoHistory
+            return (scratchUndoHistory, scratchMarkStore)
         }
 
         if let existingHistory = undoHistories[noteID], existingHistory.currentText == loadedText {
-            return existingHistory
+            if let existingMarkStore = markStores[noteID] {
+                return (existingHistory, existingMarkStore)
+            }
+
+            let markStore = VimMarkStore()
+            markStores[noteID] = markStore
+            return (existingHistory, markStore)
         }
 
         let history = VimUndoHistory(rootText: loadedText)
+        let markStore = VimMarkStore()
         undoHistories[noteID] = history
-        return history
+        markStores[noteID] = markStore
+        return (history, markStore)
     }
 
     func save() {

@@ -20,6 +20,7 @@ final class VimTextView: NSTextView {
 
     private let vimEngine = VimEngine()
     private var activeUndoHistory: VimUndoHistory?
+    private var activeMarkStore: VimMarkStore?
     private var suppressUndoCapture = false
     private var isSynchronizingDocumentHeight = false
     private var isShowingRootHintCatalog = false
@@ -147,9 +148,14 @@ final class VimTextView: NSTextView {
         return visualState?.selection(in: text)
     }
 
-    func loadDocumentText(_ text: String, undoHistory: VimUndoHistory) {
+    func loadDocumentText(
+        _ text: String,
+        undoHistory: VimUndoHistory,
+        markStore: VimMarkStore
+    ) {
         finalizeActiveInsertSessionIfNeeded()
         activeUndoHistory = undoHistory
+        activeMarkStore = markStore
         isShowingRootHintCatalog = false
         mouseDragState = nil
         visualState = nil
@@ -224,6 +230,10 @@ final class VimTextView: NSTextView {
         }
 
         captureInsertEditIfNeeded(
+            in: affectedCharRange,
+            replacementString: replacementString ?? ""
+        )
+        captureMarkEditIfNeeded(
             in: affectedCharRange,
             replacementString: replacementString ?? ""
         )
@@ -454,7 +464,10 @@ final class VimTextView: NSTextView {
         mode = .normal
         normalCursorPosition = committedNormalCursorPosition()
         drawNormalCursor()
-        activeUndoHistory?.commitInsertSession(finalCursorPosition: normalCursorPosition)
+        activeUndoHistory?.commitInsertSession(
+            finalCursorPosition: normalCursorPosition,
+            markSnapshot: currentMarkSnapshot()
+        )
     }
 
     private func enterVisualMode(_ kind: VimVisualKind) {
@@ -494,6 +507,8 @@ final class VimTextView: NSTextView {
         switch command {
         case .beginOperator:
             return
+        case .setMark(let name):
+            applySetMark(name)
         case .enterVisual(let kind):
             enterVisualMode(kind)
         case .exitVisual:
@@ -512,7 +527,8 @@ final class VimTextView: NSTextView {
                 count: count,
                 in: string as NSString,
                 from: normalCursorPosition,
-                preferredColumn: vimEngine.sessionState.preferredColumn
+                preferredColumn: vimEngine.sessionState.preferredColumn,
+                markResolver: currentMarkResolver(in: string as NSString)
             )
 
             vimEngine.setPreferredColumn(navigationResult.preferredColumn)
@@ -756,7 +772,8 @@ final class VimTextView: NSTextView {
         activeUndoHistory?.commitImmediateEdits(
             [pasteEdit],
             beforeCursorPosition: beforeCursor,
-            afterCursorPosition: finalCursor
+            afterCursorPosition: finalCursor,
+            markSnapshot: currentMarkSnapshot()
         )
         enterNormalModeFromVisual(at: finalCursor)
     }
@@ -789,7 +806,8 @@ final class VimTextView: NSTextView {
         activeUndoHistory?.commitImmediateEdits(
             [deleteEdit],
             beforeCursorPosition: beforeCursorPosition,
-            afterCursorPosition: finalCursor
+            afterCursorPosition: finalCursor,
+            markSnapshot: currentMarkSnapshot()
         )
     }
 
@@ -847,7 +865,8 @@ final class VimTextView: NSTextView {
             for: target,
             in: string as NSString,
             from: position,
-            preferredColumn: vimEngine.sessionState.preferredColumn
+            preferredColumn: vimEngine.sessionState.preferredColumn,
+            markResolver: currentMarkResolver(in: string as NSString)
         )
     }
 
@@ -888,7 +907,8 @@ final class VimTextView: NSTextView {
         activeUndoHistory?.commitImmediateEdits(
             [pasteEdit],
             beforeCursorPosition: beforeCursor,
-            afterCursorPosition: finalCursor
+            afterCursorPosition: finalCursor,
+            markSnapshot: currentMarkSnapshot()
         )
     }
 
@@ -923,6 +943,7 @@ final class VimTextView: NSTextView {
             ? max(0, min(navigationResult.cursorPosition, updatedText.length - 1))
             : 0
 
+        activeMarkStore?.restore(navigationResult.markSnapshot)
         normalCursorPosition = finalCursor
         setSelectedRange(NSRange(location: min(finalCursor, updatedText.length), length: 0))
         drawNormalCursor()
@@ -1028,6 +1049,15 @@ final class VimTextView: NSTextView {
         return true
     }
 
+    private func applySetMark(_ name: Character) {
+        let text = string as NSString
+        guard activeMarkStore?.setLocalMark(named: name, at: normalCursorPosition, in: text) == true else {
+            return
+        }
+
+        activeUndoHistory?.updateCurrentMarkSnapshot(currentMarkSnapshot())
+    }
+
     private func captureInsertEditIfNeeded(
         in affectedCharRange: NSRange,
         replacementString: String
@@ -1041,6 +1071,25 @@ final class VimTextView: NSTextView {
         guard NSMaxRange(affectedCharRange) <= text.length else { return }
 
         activeUndoHistory.appendEditToActiveInsertSession(
+            textEdit(
+                in: affectedCharRange,
+                replacementString: replacementString,
+                from: text
+            )
+        )
+    }
+
+    private func captureMarkEditIfNeeded(
+        in affectedCharRange: NSRange,
+        replacementString: String
+    ) {
+        guard let activeMarkStore else { return }
+        guard affectedCharRange.location != NSNotFound else { return }
+
+        let text = string as NSString
+        guard NSMaxRange(affectedCharRange) <= text.length else { return }
+
+        activeMarkStore.apply(
             textEdit(
                 in: affectedCharRange,
                 replacementString: replacementString,
@@ -1065,8 +1114,19 @@ final class VimTextView: NSTextView {
     private func finalizeActiveInsertSessionIfNeeded() {
         guard activeUndoHistory?.hasActiveInsertSession == true else { return }
         activeUndoHistory?.commitInsertSession(
-            finalCursorPosition: committedNormalCursorPosition()
+            finalCursorPosition: committedNormalCursorPosition(),
+            markSnapshot: currentMarkSnapshot()
         )
+    }
+
+    private func currentMarkSnapshot() -> VimMarkSnapshot {
+        activeMarkStore?.snapshot() ?? .empty
+    }
+
+    private func currentMarkResolver(in text: NSString) -> VimMarkResolver {
+        { [weak self] name in
+            self?.activeMarkStore?.position(of: name, in: text)
+        }
     }
 
     private func committedNormalCursorPosition() -> Int {

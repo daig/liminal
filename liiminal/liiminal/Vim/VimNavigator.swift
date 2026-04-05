@@ -11,7 +11,8 @@ enum VimNavigator {
         count: Int?,
         in text: NSString,
         from position: Int,
-        preferredColumn: Int?
+        preferredColumn: Int?,
+        markResolver: VimMarkResolver? = nil
     ) -> VimNavigationResult {
         guard text.length > 0 else {
             return VimNavigationResult(position: 0, preferredColumn: nil)
@@ -53,6 +54,15 @@ enum VimNavigator {
         case .targetPosition(let targetPosition):
             return VimNavigationResult(
                 position: normalizedCursorPosition(targetPosition, in: text),
+                preferredColumn: nil
+            )
+        case .mark(let name):
+            guard let markPosition = markResolver?(name) else {
+                return VimNavigationResult(position: currentPosition, preferredColumn: nil)
+            }
+
+            return VimNavigationResult(
+                position: normalizedCursorPosition(markPosition, in: text),
                 preferredColumn: nil
             )
         case .lineStart:

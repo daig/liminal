@@ -56,14 +56,16 @@ struct EditorView: NSViewRepresentable {
         if let note = editorViewModel.currentNote {
             textView.loadDocumentText(
                 note.content,
-                undoHistory: editorViewModel.undoHistory(for: note)
+                undoHistory: editorViewModel.undoHistory(for: note),
+                markStore: editorViewModel.markStore(for: note)
             )
             context.coordinator.currentNoteID = note.id
             context.coordinator.applyHighlighting()
         } else {
             textView.loadDocumentText(
                 "",
-                undoHistory: editorViewModel.undoHistory(for: nil)
+                undoHistory: editorViewModel.undoHistory(for: nil),
+                markStore: editorViewModel.markStore(for: nil)
             )
         }
 
@@ -78,7 +80,8 @@ struct EditorView: NSViewRepresentable {
             context.coordinator.currentNoteID = newNoteID
             textView.loadDocumentText(
                 editorViewModel.currentNote?.content ?? "",
-                undoHistory: editorViewModel.undoHistory(for: editorViewModel.currentNote)
+                undoHistory: editorViewModel.undoHistory(for: editorViewModel.currentNote),
+                markStore: editorViewModel.markStore(for: editorViewModel.currentNote)
             )
             textView.scrollToBeginningOfDocument(nil)
             context.coordinator.applyHighlighting()
