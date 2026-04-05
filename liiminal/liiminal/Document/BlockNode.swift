@@ -69,6 +69,9 @@ struct HeadingBlock: Equatable, Sendable {
     let level: Int
     let content: [InlineNode]
     let sourceLength: Int
+    let contentSourceLength: Int
+    let blockID: String?
+    let blockIDSourceLength: Int
 
     /// Characters before inline content starts (e.g. "## " = 3).
     var prefixLength: Int { level + 1 }
@@ -78,6 +81,9 @@ struct ParagraphBlock: Equatable, Sendable {
     let content: [InlineNode]
     let sourceLength: Int
     let trailingNewlineCount: Int
+    let contentSourceLength: Int
+    let blockID: String?
+    let blockIDSourceLength: Int
 }
 
 struct FencedCodeBlock: Equatable, Sendable {
@@ -120,6 +126,9 @@ struct ListItem: Equatable, Sendable {
     let number: Int  // actual number from source (0 for unordered)
     let sourceLength: Int
     let markerLength: Int
+    let contentSourceLength: Int
+    let blockID: String?
+    let blockIDSourceLength: Int
 }
 
 struct TableCell: Equatable, Sendable {

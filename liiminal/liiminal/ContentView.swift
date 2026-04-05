@@ -13,20 +13,64 @@ struct ContentView: View {
                     SidebarView(vaultViewModel: vaultViewModel)
                 } detail: {
                     if let editorVM = editorViewModel, editorVM.currentNote != nil {
-                        Group {
-                            if showPreview {
-                                RenderedDocumentView(document: editorVM.document, baseFontSize: $previewFontSize)
-                            } else {
-                                ZStack(alignment: .bottom) {
-                                    EditorView(editorViewModel: editorVM)
+                        HSplitView {
+                            Group {
+                                if showPreview {
+                                    RenderedDocumentView(
+                                        document: editorVM.document,
+                                        documentIndex: editorVM.documentIndex,
+                                        currentNoteID: editorVM.currentNote?.id,
+                                        navigationRequest: vaultViewModel.navigationRequest,
+                                        onOpenWikiTarget: { target in
+                                            vaultViewModel.activateTarget(
+                                                target,
+                                                from: editorVM.currentNote?.id
+                                            )
+                                        },
+                                        baseFontSize: $previewFontSize
+                                    )
+                                } else {
+                                    ZStack(alignment: .bottom) {
+                                        EditorView(
+                                            editorViewModel: editorVM,
+                                            currentNoteID: editorVM.currentNote?.id,
+                                            documentIndex: editorVM.documentIndex,
+                                            navigationRequest: vaultViewModel.navigationRequest,
+                                            referenceResolver: { offset in
+                                                guard
+                                                    let noteID = editorVM.currentNote?.id,
+                                                    let content = editorVM.currentNote?.content,
+                                                    let reference = editorVM.documentIndex.reference(
+                                                        containing: offset
+                                                    )
+                                                else {
+                                                    return nil
+                                                }
+                                                return vaultViewModel.resolveReference(
+                                                    reference,
+                                                    from: noteID,
+                                                    content: content
+                                                )
+                                            },
+                                            onActivateReference: { reference in
+                                                vaultViewModel.activateReference(reference)
+                                            }
+                                        )
 
-                                    if let hintSnapshot = editorVM.vimHintSnapshot {
-                                        VimHintOverlayView(snapshot: hintSnapshot)
-                                            .transition(.opacity)
-                                            .zIndex(1)
+                                        if let hintSnapshot = editorVM.vimHintSnapshot {
+                                            VimHintOverlayView(snapshot: hintSnapshot)
+                                                .transition(.opacity)
+                                                .zIndex(1)
+                                        }
                                     }
                                 }
                             }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                            LinkInspectorView(
+                                vaultViewModel: vaultViewModel,
+                                noteID: editorVM.currentNote?.id
+                            )
                         }
                         .toolbar {
                             if !showPreview {
@@ -126,7 +170,14 @@ struct ContentView: View {
         .onChange(of: vaultViewModel.selectedNoteID) { _, _ in
             if let note = vaultViewModel.selectedNote {
                 editorViewModel?.openNote(note)
+                if vaultViewModel.navigationRequest?.noteID != note.id {
+                    vaultViewModel.clearNavigationRequest()
+                }
             }
+        }
+        .onChange(of: editorViewModel?.currentNote?.content) { _, newContent in
+            guard let noteID = editorViewModel?.currentNote?.id, let newContent else { return }
+            vaultViewModel.updateNoteContent(noteID: noteID, content: newContent)
         }
         .onChange(of: showPreview) { _, _ in
             editorViewModel?.clearVimHints()

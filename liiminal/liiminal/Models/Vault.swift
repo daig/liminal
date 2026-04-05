@@ -2,14 +2,19 @@ import Foundation
 
 struct Note: Identifiable, Hashable {
     let id: URL
+    let relativePath: String
     var title: String
     var content: String
     var lastModified: Date
 
     var filename: String { id.lastPathComponent }
+    var relativePathWithoutExtension: String {
+        (relativePath as NSString).deletingPathExtension
+    }
 
-    init(url: URL, content: String = "", lastModified: Date = .now) {
+    init(url: URL, relativePath: String, content: String = "", lastModified: Date = .now) {
         self.id = url
+        self.relativePath = relativePath
         self.title = url.deletingPathExtension().lastPathComponent
         self.content = content
         self.lastModified = lastModified

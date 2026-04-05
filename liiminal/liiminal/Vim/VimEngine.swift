@@ -258,7 +258,7 @@ nonisolated final class VimEngine {
             sessionState.pendingOperator = op
             sessionState.pendingOperatorCount = count
             return .pending
-        case .setMark:
+        case .setMark, .followReferenceUnderCursor:
             return .handled(command)
         case .enterVisual(let kind):
             setMode(kind.mode)

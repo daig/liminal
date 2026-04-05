@@ -3,6 +3,11 @@ import SwiftUI
 
 struct EditorView: NSViewRepresentable {
     let editorViewModel: EditorViewModel
+    let currentNoteID: URL?
+    let documentIndex: DocumentIndex
+    let navigationRequest: NoteNavigationRequest?
+    let referenceResolver: (Int) -> ResolvedReference?
+    let onActivateReference: (ResolvedReference) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let textContentStorage = NSTextContentStorage()
@@ -52,6 +57,10 @@ struct EditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.vimDelegate = context.coordinator
         context.coordinator.textView = textView
+        context.coordinator.documentIndex = documentIndex
+        context.coordinator.navigationRequest = navigationRequest
+        context.coordinator.referenceResolver = referenceResolver
+        context.coordinator.onActivateReference = onActivateReference
 
         if let note = editorViewModel.currentNote {
             textView.loadDocumentText(
@@ -74,6 +83,10 @@ struct EditorView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
+        context.coordinator.documentIndex = documentIndex
+        context.coordinator.navigationRequest = navigationRequest
+        context.coordinator.referenceResolver = referenceResolver
+        context.coordinator.onActivateReference = onActivateReference
 
         let newNoteID = editorViewModel.currentNote?.id
         if context.coordinator.currentNoteID != newNoteID {
@@ -85,11 +98,20 @@ struct EditorView: NSViewRepresentable {
             )
             textView.scrollToBeginningOfDocument(nil)
             context.coordinator.applyHighlighting()
+            context.coordinator.applyPendingNavigationIfNeeded()
+        } else {
+            context.coordinator.applyPendingNavigationIfNeeded()
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(editorViewModel: editorViewModel)
+        Coordinator(
+            editorViewModel: editorViewModel,
+            documentIndex: documentIndex,
+            navigationRequest: navigationRequest,
+            referenceResolver: referenceResolver,
+            onActivateReference: onActivateReference
+        )
     }
 
     // MARK: - Coordinator
@@ -98,8 +120,13 @@ struct EditorView: NSViewRepresentable {
         var textView: VimTextView?
         var currentNoteID: URL?
         let editorViewModel: EditorViewModel
+        var documentIndex: DocumentIndex
+        var navigationRequest: NoteNavigationRequest?
+        var referenceResolver: (Int) -> ResolvedReference?
+        var onActivateReference: (ResolvedReference) -> Void
         private var isHighlighting = false
         private var isEditing = false
+        private var lastHandledNavigationNonce: UUID?
 
         /// Cell content ranges within tables, sorted by location.
         /// Cursor positions from range.location through NSMaxRange(range) are valid.
@@ -107,8 +134,18 @@ struct EditorView: NSViewRepresentable {
         /// Full table block ranges, sorted by location.
         var tableFramingRanges: [NSRange] = []
 
-        init(editorViewModel: EditorViewModel) {
+        init(
+            editorViewModel: EditorViewModel,
+            documentIndex: DocumentIndex,
+            navigationRequest: NoteNavigationRequest?,
+            referenceResolver: @escaping (Int) -> ResolvedReference?,
+            onActivateReference: @escaping (ResolvedReference) -> Void
+        ) {
             self.editorViewModel = editorViewModel
+            self.documentIndex = documentIndex
+            self.navigationRequest = navigationRequest
+            self.referenceResolver = referenceResolver
+            self.onActivateReference = onActivateReference
         }
 
         // MARK: - Vim Delegate
@@ -128,6 +165,17 @@ struct EditorView: NSViewRepresentable {
 
         func vimTextView(_ textView: VimTextView, didChangeCursorInfo info: VimCursorInfoPresentation?) {
             editorViewModel.updateVimCursorInfo(info)
+        }
+
+        func vimTextView(_ textView: VimTextView, didActivateLink url: URL, at offset: Int) {
+            guard wikiTarget(from: url) != nil else { return }
+            guard let reference = referenceResolver(offset) else { return }
+            onActivateReference(reference)
+        }
+
+        func vimTextView(_ textView: VimTextView, didRequestFollowReferenceAt offset: Int) {
+            guard let reference = referenceResolver(offset) else { return }
+            onActivateReference(reference)
         }
 
         // MARK: - Table Position Queries
@@ -230,6 +278,19 @@ struct EditorView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: pos, length: 0))
         }
 
+        func applyPendingNavigationIfNeeded() {
+            guard let textView else { return }
+            guard let navigationRequest else { return }
+            guard navigationRequest.noteID == currentNoteID else { return }
+            guard navigationRequest.nonce != lastHandledNavigationNonce else { return }
+
+            lastHandledNavigationNonce = navigationRequest.nonce
+
+            guard let anchor = navigationRequest.anchor else { return }
+            guard let offset = documentIndex.blockOffset(for: anchor) else { return }
+            textView.revealSourceOffset(offset)
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !isHighlighting else { return }
             guard let textView = notification.object as? NSTextView else { return }
@@ -326,6 +387,11 @@ struct EditorView: NSViewRepresentable {
                 highlightHeading(h, at: offset, in: storage)
             case .paragraph(let p):
                 highlightInlines(p.content, at: offset, in: storage)
+                highlightBlockIDSyntax(
+                    at: offset + p.contentSourceLength,
+                    length: p.blockIDSourceLength,
+                    in: storage
+                )
             case .fencedCode(let c):
                 highlightFencedCode(c, at: offset, in: storage)
             case .frontmatter(let f):
@@ -357,13 +423,21 @@ struct EditorView: NSViewRepresentable {
             let prefixRange = NSRange(location: offset, length: h.prefixLength)
             storage.addAttributes(HighlightTheme.syntaxAttributes, range: prefixRange)
 
-            // Style the entire heading line with heading font
+            // Style the heading content, excluding any trailing block ID syntax.
             let headingFont = HighlightTheme.headingFont(level: h.level)
-            let fullRange = NSRange(location: offset, length: h.sourceLength)
-            storage.addAttribute(.font, value: headingFont, range: fullRange)
+            let contentRange = NSRange(
+                location: offset,
+                length: h.prefixLength + h.contentSourceLength
+            )
+            storage.addAttribute(.font, value: headingFont, range: contentRange)
 
             // Highlight inline content within the heading
             highlightInlines(h.content, at: offset + h.prefixLength, in: storage)
+            highlightBlockIDSyntax(
+                at: offset + h.prefixLength + h.contentSourceLength,
+                length: h.blockIDSourceLength,
+                in: storage
+            )
         }
 
         private func highlightFencedCode(
@@ -413,6 +487,11 @@ struct EditorView: NSViewRepresentable {
                 }
                 // Highlight inline content
                 highlightInlines(item.content, at: pos + item.markerLength, in: storage)
+                highlightBlockIDSyntax(
+                    at: pos + item.markerLength + item.contentSourceLength,
+                    length: item.blockIDSourceLength,
+                    in: storage
+                )
                 pos += item.sourceLength
             }
         }
@@ -533,6 +612,18 @@ struct EditorView: NSViewRepresentable {
             }
         }
 
+        private func highlightBlockIDSyntax(
+            at offset: Int,
+            length: Int,
+            in storage: NSTextStorage
+        ) {
+            guard length > 0 else { return }
+            storage.addAttributes(
+                HighlightTheme.blockIDAttributes,
+                range: NSRange(location: offset, length: length)
+            )
+        }
+
         private func highlightInline(
             _ node: InlineNode, at offset: Int, in storage: NSTextStorage
         ) {
@@ -604,9 +695,14 @@ struct EditorView: NSViewRepresentable {
                     HighlightTheme.syntaxAttributes,
                     range: NSRange(location: offset + node.sourceLength - n, length: n))
 
-            case .wikilink:
+            case .wikilink(let target, _):
                 let range = NSRange(location: offset, length: node.sourceLength)
-                storage.addAttributes(HighlightTheme.wikilinkAttributes, range: range)
+                highlightReference(
+                    kind: .link,
+                    target: target,
+                    range: range,
+                    in: storage
+                )
                 // Dim brackets
                 storage.addAttributes(
                     HighlightTheme.syntaxAttributes,
@@ -615,9 +711,14 @@ struct EditorView: NSViewRepresentable {
                     HighlightTheme.syntaxAttributes,
                     range: NSRange(location: offset + node.sourceLength - 2, length: 2))
 
-            case .embed:
+            case .embed(let target, _):
                 let range = NSRange(location: offset, length: node.sourceLength)
-                storage.addAttributes(HighlightTheme.embedAttributes, range: range)
+                highlightReference(
+                    kind: .embed,
+                    target: target,
+                    range: range,
+                    in: storage
+                )
                 storage.addAttributes(
                     HighlightTheme.syntaxAttributes,
                     range: NSRange(location: offset, length: 3))
@@ -680,6 +781,38 @@ struct EditorView: NSViewRepresentable {
                 break
             }
         }
+
+        private func highlightReference(
+            kind: ReferenceKind,
+            target: WikiTarget,
+            range: NSRange,
+            in storage: NSTextStorage
+        ) {
+            let reference = referenceResolver(range.location)
+            storage.addAttributes(
+                HighlightTheme.attributes(for: reference?.resolution, kind: kind),
+                range: range
+            )
+
+            if let linkURL = linkURL(for: target) {
+                storage.addAttribute(.link, value: linkURL, range: range)
+            }
+        }
+
+        private func linkURL(for target: WikiTarget) -> URL? {
+            let encoded = target.rawTargetString.addingPercentEncoding(
+                withAllowedCharacters: .urlPathAllowed
+            ) ?? target.rawTargetString
+            return URL(string: "wikilink:///\(encoded)")
+        }
+
+        private func wikiTarget(from url: URL) -> WikiTarget? {
+            guard url.scheme == "wikilink" else { return nil }
+            let rawTarget = url.path
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .removingPercentEncoding ?? ""
+            return WikiTarget.parse(rawTarget)
+        }
     }
 }
 
@@ -702,6 +835,8 @@ enum HighlightTheme {
     static let syntaxColor = NSColor.secondaryLabelColor
     static let wikilinkColor = NSColor.systemBlue
     static let linkColor = NSColor.systemCyan
+    static let unresolvedLinkColor = NSColor.systemRed
+    static let partialLinkColor = NSColor.systemOrange
     static let codeColor = NSColor.systemGreen.withAlphaComponent(0.8)
     static let commentColor = NSColor.systemGray
     static let latexColor = NSColor.systemOrange
@@ -765,6 +900,10 @@ enum HighlightTheme {
         .foregroundColor: embedColor,
     ]
 
+    static let blockIDAttributes: [NSAttributedString.Key: Any] = [
+        .foregroundColor: syntaxColor,
+    ]
+
     static let linkAttributes: [NSAttributedString.Key: Any] = [
         .foregroundColor: linkColor,
         .underlineStyle: NSUnderlineStyle.single.rawValue,
@@ -789,4 +928,32 @@ enum HighlightTheme {
         .foregroundColor: htmlColor,
         .backgroundColor: NSColor.quaternaryLabelColor,
     ]
+
+    static func attributes(
+        for resolution: ReferenceResolution?,
+        kind: ReferenceKind
+    ) -> [NSAttributedString.Key: Any] {
+        let base = kind == .embed ? embedAttributes : wikilinkAttributes
+
+        guard let resolution else { return base }
+
+        switch resolution {
+        case .resolved:
+            return base
+        case .noteResolved:
+            return [
+                .foregroundColor: partialLinkColor,
+            ]
+        case .unresolved:
+            return [
+                .foregroundColor: unresolvedLinkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ]
+        case .ambiguous:
+            return [
+                .foregroundColor: partialLinkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ]
+        }
+    }
 }

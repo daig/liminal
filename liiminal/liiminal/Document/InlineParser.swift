@@ -229,11 +229,11 @@ private struct InlineScanner {
                 let inner = String(chars[position..<searchPos])
                 position = searchPos + 2
                 if let pipeIdx = inner.firstIndex(of: "|") {
-                    let target = String(inner[inner.startIndex..<pipeIdx])
+                    let target = WikiTarget.parse(String(inner[inner.startIndex..<pipeIdx]))
                     let alias = String(inner[inner.index(after: pipeIdx)...])
                     return .wikilink(target: target, alias: alias)
                 }
-                return .wikilink(target: inner, alias: nil)
+                return .wikilink(target: WikiTarget.parse(inner), alias: nil)
             }
             if chars[searchPos] == "\n" { break }
             searchPos += 1
@@ -256,11 +256,11 @@ private struct InlineScanner {
                 let inner = String(chars[position..<searchPos])
                 position = searchPos + 2
                 if let pipeIdx = inner.firstIndex(of: "|") {
-                    let target = String(inner[inner.startIndex..<pipeIdx])
+                    let target = WikiTarget.parse(String(inner[inner.startIndex..<pipeIdx]))
                     let params = String(inner[inner.index(after: pipeIdx)...])
                     return .embed(target: target, params: params)
                 }
-                return .embed(target: inner, params: nil)
+                return .embed(target: WikiTarget.parse(inner), params: nil)
             }
             if chars[searchPos] == "\n" { break }
             searchPos += 1

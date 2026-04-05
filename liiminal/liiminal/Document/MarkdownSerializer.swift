@@ -11,10 +11,10 @@ struct MarkdownSerializer {
         switch block {
         case .heading(let h):
             let prefix = String(repeating: "#", count: h.level) + " "
-            return prefix + serializeInlines(h.content) + "\n"
+            return prefix + serializeInlines(h.content) + serializeBlockIDSuffix(h.blockID) + "\n"
         case .paragraph(let p):
             let trailing = String(repeating: "\n", count: max(p.trailingNewlineCount, 1))
-            return serializeInlines(p.content) + trailing
+            return serializeInlines(p.content) + serializeBlockIDSuffix(p.blockID) + trailing
         case .fencedCode(let c):
             let lang = c.language ?? ""
             return c.fence + lang + "\n" + c.code + "\n" + c.fence + "\n"
@@ -41,7 +41,7 @@ struct MarkdownSerializer {
                 if let checked = item.checked {
                     prefix += checked ? "[x] " : "[ ] "
                 }
-                return prefix + serializeInlines(item.content) + "\n"
+                return prefix + serializeInlines(item.content) + serializeBlockIDSuffix(item.blockID) + "\n"
             }.joined()
         case .table(let t):
             var result = ""
@@ -76,6 +76,11 @@ struct MarkdownSerializer {
         }
     }
 
+    private static func serializeBlockIDSuffix(_ blockID: String?) -> String {
+        guard let blockID, !blockID.isEmpty else { return "" }
+        return " ^\(blockID)"
+    }
+
     // MARK: - Inlines
 
     static func serializeInlines(_ nodes: [InlineNode]) -> String {
@@ -107,11 +112,11 @@ struct MarkdownSerializer {
             if let t = title { result += " \"" + t + "\"" }
             return result + ")"
         case .wikilink(let target, let alias):
-            if let a = alias { return "[[" + target + "|" + a + "]]" }
-            return "[[" + target + "]]"
+            if let a = alias { return "[[" + target.rawTargetString + "|" + a + "]]" }
+            return "[[" + target.rawTargetString + "]]"
         case .embed(let target, let params):
-            if let p = params { return "![[" + target + "|" + p + "]]" }
-            return "![[" + target + "]]"
+            if let p = params { return "![[" + target.rawTargetString + "|" + p + "]]" }
+            return "![[" + target.rawTargetString + "]]"
         case .comment(let s):
             return "%%" + s + "%%"
         case .inlineLatex(let s):

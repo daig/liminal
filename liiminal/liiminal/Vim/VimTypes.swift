@@ -193,6 +193,7 @@ enum VimOperatorArgument: Equatable {
 enum VimCommand: Equatable {
     case beginOperator(VimOperator, count: Int?)
     case setMark(Character)
+    case followReferenceUnderCursor
     case enterInsert(VimInsertTransition)
     case enterVisual(VimVisualKind)
     case exitVisual
@@ -1204,6 +1205,9 @@ extension VimBindingTree {
         }
         builder.bind([.character("P")], description: "Paste before cursor") {
             .paste(.beforeCursor, count: $0)
+        }
+        builder.bind([.character("g"), .character("f")], description: "Follow link") {
+            _ in .followReferenceUnderCursor
         }
 
         return builder.build()

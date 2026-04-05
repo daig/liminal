@@ -13,8 +13,8 @@ indirect enum InlineNode: Equatable, Sendable {
     // Leaves
     case text(String)
     case codeSpan(code: String, backtickCount: Int)
-    case wikilink(target: String, alias: String?)
-    case embed(target: String, params: String?)
+    case wikilink(target: WikiTarget, alias: String?)
+    case embed(target: WikiTarget, params: String?)
     case image(alt: String, url: String, title: String?)
     case comment(String)
     case inlineLatex(String)
@@ -51,14 +51,14 @@ indirect enum InlineNode: Equatable, Sendable {
             return alt.count + url.count + 5
         case .wikilink(let target, let alias):
             if let a = alias {
-                return target.count + a.count + 5
+                return target.rawTargetString.count + a.count + 5
             }
-            return target.count + 4
+            return target.rawTargetString.count + 4
         case .embed(let target, let params):
             if let p = params {
-                return target.count + p.count + 6
+                return target.rawTargetString.count + p.count + 6
             }
-            return target.count + 5
+            return target.rawTargetString.count + 5
         case .comment(let s):
             return s.count + 4
         case .inlineLatex(let s):
@@ -98,9 +98,9 @@ indirect enum InlineNode: Equatable, Sendable {
         case .image(let alt, _, _):
             return alt.count
         case .wikilink(let target, let alias):
-            return (alias ?? target).count
+            return (alias ?? target.notePath ?? target.heading ?? target.blockID ?? "").count
         case .embed(let target, let params):
-            return (params ?? target).count
+            return (params ?? target.notePath ?? target.heading ?? target.blockID ?? "").count
         case .comment:
             return 0
         case .inlineLatex(let s):

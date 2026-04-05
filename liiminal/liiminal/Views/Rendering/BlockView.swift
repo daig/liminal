@@ -4,13 +4,14 @@ import SwiftUI
 /// Dispatches rendering for a single BlockNode to the appropriate view.
 struct BlockView: View {
     let block: BlockNode
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
 
     var body: some View {
         switch block {
         case .heading(let h):
             HeadingBlockView(heading: h)
         case .paragraph(let p):
-            ParagraphBlockView(paragraph: p)
+            ParagraphBlockView(paragraph: p, onOpenWikiTarget: onOpenWikiTarget)
         case .fencedCode(let c):
             CodeBlockView(codeBlock: c)
         case .thematicBreak:
@@ -20,11 +21,11 @@ struct BlockView: View {
         case .blankLine:
             Spacer().frame(height: 4)
         case .blockquote(let b):
-            BlockquoteBlockView(blockquote: b)
+            BlockquoteBlockView(blockquote: b, onOpenWikiTarget: onOpenWikiTarget)
         case .list(let l):
-            ListBlockView(list: l)
+            ListBlockView(list: l, onOpenWikiTarget: onOpenWikiTarget)
         case .table(let t):
-            TableBlockView(table: t)
+            TableBlockView(table: t, onOpenWikiTarget: onOpenWikiTarget)
         case .displayLatex(let d):
             DisplayLatexBlockView(latex: d)
         case .htmlBlock(let h):
@@ -65,11 +66,12 @@ struct HeadingBlockView: View {
 
 struct ParagraphBlockView: View {
     let paragraph: ParagraphBlock
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
     @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
         if let embed = singleEmbed {
-            EmbedView(target: embed.target, params: embed.params)
+            EmbedView(target: embed.target, params: embed.params, onOpenWikiTarget: onOpenWikiTarget)
         } else {
             Text(InlineRenderer.render(paragraph.content, style: .body(size: baseFontSize)))
                 .textSelection(.enabled)
@@ -78,7 +80,7 @@ struct ParagraphBlockView: View {
         }
     }
 
-    private var singleEmbed: (target: String, params: String?)? {
+    private var singleEmbed: (target: WikiTarget, params: String?)? {
         guard paragraph.content.count == 1,
             case .embed(let target, let params) = paragraph.content[0]
         else { return nil }
@@ -89,20 +91,23 @@ struct ParagraphBlockView: View {
 // MARK: - Embed (standalone)
 
 struct EmbedView: View {
-    let target: String
+    let target: WikiTarget
     let params: String?
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
 
     var body: some View {
-        let isImage = target.hasSuffix(".png") || target.hasSuffix(".jpg")
-            || target.hasSuffix(".jpeg") || target.hasSuffix(".gif")
-            || target.hasSuffix(".svg") || target.hasSuffix(".webp")
+        let targetLabel = target.notePath ?? target.heading ?? target.blockID ?? target.rawTargetString
+        let isImage = targetLabel.hasSuffix(".png") || targetLabel.hasSuffix(".jpg")
+            || targetLabel.hasSuffix(".jpeg") || targetLabel.hasSuffix(".gif")
+            || targetLabel.hasSuffix(".svg") || targetLabel.hasSuffix(".webp")
 
         if isImage {
             VStack(spacing: 8) {
                 Image(systemName: "photo")
                     .font(.system(size: 32))
                     .foregroundStyle(.secondary)
-                Text(target)
+                Text(targetLabel)
+                    .lineLimit(1)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -112,17 +117,23 @@ struct EmbedView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .padding(.vertical, 4)
         } else {
-            HStack(spacing: 8) {
-                Image(systemName: "doc.text")
-                    .foregroundStyle(.secondary)
-                Text(target)
-                    .foregroundStyle(RenderStyle.embedColor)
+            Button {
+                onOpenWikiTarget?(target)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(.secondary)
+                    Text(targetLabel)
+                        .foregroundStyle(RenderStyle.embedColor)
+                    Spacer()
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RenderStyle.codeBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .padding(.vertical, 4)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RenderStyle.codeBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.vertical, 4)
+            .buttonStyle(.plain)
         }
     }
 }
@@ -201,6 +212,7 @@ struct FrontmatterBlockView: View {
 
 struct BlockquoteBlockView: View {
     let blockquote: BlockquoteBlock
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -212,7 +224,7 @@ struct BlockquoteBlockView: View {
                 ForEach(
                     Array(blockquote.children.enumerated()), id: \.offset
                 ) { _, child in
-                    BlockView(block: child)
+                    BlockView(block: child, onOpenWikiTarget: onOpenWikiTarget)
                 }
             }
         }
@@ -225,6 +237,7 @@ struct BlockquoteBlockView: View {
 
 struct ListBlockView: View {
     let list: ListBlock
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -238,7 +251,7 @@ struct ListBlockView: View {
                     }
                 }
 
-                ListItemView(item: item, ordered: list.ordered)
+                ListItemView(item: item, ordered: list.ordered, onOpenWikiTarget: onOpenWikiTarget)
             }
         }
         .padding(.vertical, 4)
@@ -260,6 +273,7 @@ struct GapIndicator: View {
 struct ListItemView: View {
     let item: ListItem
     let ordered: Bool
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
     @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {
@@ -294,6 +308,7 @@ struct ListItemView: View {
 
 struct TableBlockView: View {
     let table: TableBlock
+    var onOpenWikiTarget: ((WikiTarget) -> Void)? = nil
     @Environment(\.baseFontSize) private var baseFontSize
 
     var body: some View {

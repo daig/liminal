@@ -24,12 +24,13 @@ final class EditorViewModel {
     var currentNote: Note?
     var isDirty: Bool = false
     var document: Document = Document(blocks: [])
+    var documentIndex: DocumentIndex = .empty
     var vimMode: VimMode = .normal
     var vimStatus = VimStatusPresentation(mode: .normal, detailText: nil)
     var vimHintSnapshot: VimHintSnapshot?
     var vimCursorInfo: VimCursorInfoPresentation?
 
-    let fileService: FileSystemService
+    @ObservationIgnored let fileService: FileSystemService
     @ObservationIgnored private var pendingVimHintCandidate: VimHintCandidate?
     @ObservationIgnored private var vimHintTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
@@ -52,6 +53,7 @@ final class EditorViewModel {
         currentNote = loaded
         isDirty = false
         document = Document(blocks: BlockParser.parse(loaded.content))
+        documentIndex = DocumentIndex.build(from: document)
         clearVimHints()
         vimCursorInfo = nil
     }
@@ -104,6 +106,7 @@ final class EditorViewModel {
         currentNote?.content = newText
         isDirty = true
         document = Document(blocks: BlockParser.parse(newText))
+        documentIndex = DocumentIndex.build(from: document)
         scheduleSave()
     }
 

@@ -406,11 +406,15 @@ private struct ParserState {
         let raw = accumulator.joinedContent
         let trailingNewlines = raw.reversed().prefix(while: { $0 == "\n" }).count
         let contentText = String(raw.dropLast(trailingNewlines))
-        let inlines = InlineParser.parse(contentText)
+        let blockIDParse = Self.extractTrailingBlockID(from: contentText)
+        let inlines = InlineParser.parse(blockIDParse.content)
 
         blocks.append(.paragraph(ParagraphBlock(
             content: inlines, sourceLength: totalSourceLength,
-            trailingNewlineCount: trailingNewlines
+            trailingNewlineCount: trailingNewlines,
+            contentSourceLength: blockIDParse.content.count,
+            blockID: blockIDParse.blockID,
+            blockIDSourceLength: blockIDParse.syntaxLength
         )))
         accumulator.reset()
         isFirstBlock = false
@@ -427,12 +431,17 @@ private struct ParserState {
         for (line, info) in listItems {
             let contentText =
                 String(line.dropFirst(info.contentStart)).trimmingTrailingNewline
-            let inlines = InlineParser.parse(contentText)
+            let blockIDParse = Self.extractTrailingBlockID(from: contentText)
+            let inlines = InlineParser.parse(blockIDParse.content)
             let indentLevel = info.indent / 2
             items.append(ListItem(
                 content: inlines, checked: info.checked,
                 indent: indentLevel, number: info.number,
-                sourceLength: line.count, markerLength: info.contentStart
+                sourceLength: line.count,
+                markerLength: info.contentStart,
+                contentSourceLength: blockIDParse.content.count,
+                blockID: blockIDParse.blockID,
+                blockIDSourceLength: blockIDParse.syntaxLength
             ))
             totalSourceLength += line.count
         }
@@ -500,10 +509,16 @@ private struct ParserState {
         }
 
         let contentText = String(chars[contentStart..<contentEnd])
-        let inlines = InlineParser.parse(contentText)
+        let blockIDParse = Self.extractTrailingBlockID(from: contentText)
+        let inlines = InlineParser.parse(blockIDParse.content)
         isFirstBlock = false
         return .heading(HeadingBlock(
-            level: level, content: inlines, sourceLength: line.count
+            level: level,
+            content: inlines,
+            sourceLength: line.count,
+            contentSourceLength: blockIDParse.content.count,
+            blockID: blockIDParse.blockID,
+            blockIDSourceLength: blockIDParse.syntaxLength
         ))
     }
 
@@ -624,6 +639,62 @@ private struct ParserState {
             separatorOffset: separatorOffset, separatorLength: separatorLength
         )
         return (table, consumed)
+    }
+
+    static func extractTrailingBlockID(from content: String) -> (
+        content: String, blockID: String?, syntaxLength: Int
+    ) {
+        let chars = Array(content)
+        guard !chars.isEmpty else {
+            return (content, nil, 0)
+        }
+
+        func isBlockIDCharacter(_ char: Character) -> Bool {
+            char.isLetter || char.isNumber || char == "-" || char == "_"
+        }
+
+        var end = chars.count
+        while end > 0 && chars[end - 1].isWhitespace {
+            end -= 1
+        }
+
+        guard end > 0 else {
+            return (content, nil, 0)
+        }
+
+        var idStart = end
+        while idStart > 0 && isBlockIDCharacter(chars[idStart - 1]) {
+            idStart -= 1
+        }
+
+        guard idStart < end else {
+            return (content, nil, 0)
+        }
+
+        let caretIndex = idStart - 1
+        guard caretIndex >= 0, chars[caretIndex] == "^" else {
+            return (content, nil, 0)
+        }
+
+        guard caretIndex > 0, chars[caretIndex - 1].isWhitespace else {
+            return (content, nil, 0)
+        }
+
+        var contentEnd = caretIndex - 1
+        while contentEnd > 0 && chars[contentEnd - 1].isWhitespace {
+            contentEnd -= 1
+        }
+
+        let blockID = String(chars[idStart..<end])
+        guard !blockID.isEmpty else {
+            return (content, nil, 0)
+        }
+
+        return (
+            String(chars[0..<contentEnd]),
+            blockID,
+            chars.count - contentEnd
+        )
     }
 
     private static func isTableSeparator(_ line: String) -> Bool {

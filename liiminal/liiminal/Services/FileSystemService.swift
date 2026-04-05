@@ -7,6 +7,7 @@ final class FileSystemService {
 
     func scanDirectory(at url: URL) -> [Note] {
         let fm = FileManager.default
+        let basePath = url.standardizedFileURL.path
         guard let enumerator = fm.enumerator(
             at: url,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
@@ -26,10 +27,27 @@ final class FileSystemService {
 
             let content = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
             let modified = values.contentModificationDate ?? .now
-            notes.append(Note(url: fileURL, content: content, lastModified: modified))
+            let standardizedPath = fileURL.standardizedFileURL.path
+            let relativePath = String(standardizedPath.dropFirst(basePath.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            notes.append(
+                Note(
+                    url: fileURL,
+                    relativePath: relativePath,
+                    content: content,
+                    lastModified: modified
+                )
+            )
         }
 
-        return notes.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        return notes.sorted {
+            let lhsTitleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if lhsTitleOrder == .orderedSame {
+                return $0.relativePath.localizedCaseInsensitiveCompare($1.relativePath)
+                    == .orderedAscending
+            }
+            return lhsTitleOrder == .orderedAscending
+        }
     }
 
     func readFile(at url: URL) throws -> String {
@@ -41,17 +59,38 @@ final class FileSystemService {
     }
 
     func createNote(titled title: String, in vaultURL: URL) throws -> URL {
-        var filename = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if filename.isEmpty { filename = "Untitled" }
-        if !filename.hasSuffix(".md") { filename += ".md" }
+        try createNote(atRelativePath: title, in: vaultURL)
+    }
 
-        var fileURL = vaultURL.appendingPathComponent(filename)
+    func createNote(atRelativePath relativePath: String, in vaultURL: URL) throws -> URL {
+        var normalizedPath = relativePath
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/").union(.whitespacesAndNewlines))
 
-        // Deduplicate if file exists
+        if normalizedPath.isEmpty {
+            normalizedPath = "Untitled"
+        }
+
+        if !normalizedPath.lowercased().hasSuffix(".md") {
+            normalizedPath += ".md"
+        }
+
+        var fileURL = vaultURL.appendingPathComponent(normalizedPath)
+        let directoryURL = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+
         var counter = 1
         while FileManager.default.fileExists(atPath: fileURL.path) {
-            let base = filename.replacingOccurrences(of: ".md", with: "")
-            fileURL = vaultURL.appendingPathComponent("\(base) \(counter).md")
+            let extensionPart = fileURL.pathExtension
+            let stem = fileURL.deletingPathExtension().lastPathComponent
+            let deduplicatedStem = "\(stem) \(counter)"
+            fileURL = directoryURL.appendingPathComponent(deduplicatedStem)
+            if !extensionPart.isEmpty {
+                fileURL = fileURL.appendingPathExtension(extensionPart)
+            }
             counter += 1
         }
 

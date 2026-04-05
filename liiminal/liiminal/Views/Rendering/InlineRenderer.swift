@@ -73,19 +73,19 @@ struct InlineRenderer {
             return attr
 
         case .wikilink(let target, let alias):
-            let display = alias ?? target
+            let display = alias ?? target.notePath ?? target.heading ?? target.blockID ?? ""
             var attr = AttributedString(display)
             attr.font = style.font
             attr.foregroundColor = RenderStyle.wikilinkColor
             let encoded =
-                target.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
-                ?? target
+                target.rawTargetString.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+                ?? target.rawTargetString
             attr.link = URL(string: "wikilink:///\(encoded)")
             return attr
 
         case .embed(let target, _):
             // Inline embed reference; standalone embeds handled at block level
-            var attr = AttributedString(target)
+            var attr = AttributedString(target.notePath ?? target.heading ?? target.blockID ?? "")
             attr.font = style.font
             attr.foregroundColor = RenderStyle.embedColor
             return attr

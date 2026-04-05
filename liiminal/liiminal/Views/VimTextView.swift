@@ -221,6 +221,10 @@ final class VimTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if handleLinkActivationIfNeeded(event) {
+            return
+        }
+
         switch mode {
         case .normal:
             handleNormalModeMouseDown(event)
@@ -570,6 +574,11 @@ final class VimTextView: NSTextView {
             return
         case .setMark(let name):
             applySetMark(name)
+        case .followReferenceUnderCursor:
+            vimDelegate?.vimTextView(
+                self,
+                didRequestFollowReferenceAt: currentViewportCursorPosition()
+            )
         case .enterVisual(let kind):
             enterVisualMode(kind)
         case .exitVisual:
@@ -1349,6 +1358,24 @@ final class VimTextView: NSTextView {
         return marks.count == 1 ? "Mark \(labels)" : "Marks \(labels)"
     }
 
+    private func handleLinkActivationIfNeeded(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) else {
+            return false
+        }
+        guard let position = mouseTargetPosition(for: event, strictHitTesting: true) else {
+            return false
+        }
+        guard let textStorage, position < textStorage.length else {
+            return false
+        }
+        guard let link = textStorage.attribute(.link, at: position, effectiveRange: nil) as? URL else {
+            return false
+        }
+
+        vimDelegate?.vimTextView(self, didActivateLink: link, at: position)
+        return true
+    }
+
     private func committedNormalCursorPosition() -> Int {
         let text = string as NSString
         guard text.length > 0 else { return 0 }
@@ -1547,6 +1574,20 @@ final class VimTextView: NSTextView {
 
         return .character(char)
     }
+
+    func revealSourceOffset(_ offset: Int) {
+        let text = string as NSString
+        guard text.length > 0 else { return }
+
+        let clampedOffset = max(0, min(offset, text.length - 1))
+        normalCursorPosition = clampedOffset
+        setSelectedRange(NSRange(location: clampedOffset, length: 0))
+        scrollRangeToVisible(NSRange(location: clampedOffset, length: 1))
+
+        if mode == .normal {
+            drawNormalCursor()
+        }
+    }
 }
 
 // MARK: - Delegate Protocol
@@ -1556,4 +1597,6 @@ protocol VimTextViewDelegate: AnyObject {
     func vimTextView(_ textView: VimTextView, didChangeStatus status: VimStatusPresentation)
     func vimTextView(_ textView: VimTextView, didChangeHintCandidate candidate: VimHintCandidate?)
     func vimTextView(_ textView: VimTextView, didChangeCursorInfo info: VimCursorInfoPresentation?)
+    func vimTextView(_ textView: VimTextView, didActivateLink url: URL, at offset: Int)
+    func vimTextView(_ textView: VimTextView, didRequestFollowReferenceAt offset: Int)
 }
