@@ -58,7 +58,7 @@ Examples:
 
 ## Visual Mode
 
-This editor currently supports characterwise Visual mode and linewise Visual mode. Blockwise Visual mode, text objects, and most of Vim's visual-only command variants are not implemented yet.
+This editor currently supports characterwise Visual mode and linewise Visual mode. Blockwise Visual mode, Visual-mode text objects, and most of Vim's visual-only command variants are not implemented yet.
 
 ### Selection Movement
 
@@ -191,9 +191,27 @@ When a mark name is expected, the hint panel shows the currently available local
 | `m<mark>` | Set local mark `<mark>` at the current cursor position. |
 | `` `<mark>`` | Jump to the exact position stored in local mark `<mark>`. |
 
+## Operator Text Objects
+
+The `d`, `c`, and `y` operators now accept both the motion subset above and a focused text-object subset. Counts compose normally, so commands like `2d3aw` affect 6 words.
+
+Supported operator-pending text objects:
+
+- Word objects: `aw`, `iw`, `aW`, `iW`
+- Sentence and paragraph objects: `as`, `is`, `ap`, `ip`
+- Block objects: `ab`, `ib`, `a(`, `i(`, `a)`, `i)`, `aB`, `iB`, `a{`, `i{`, `a}`, `i}`, `a[`, `i[`, `a]`, `i]`, `a<`, `i<`, `a>`, `i>`
+- Tag objects: `at`, `it`
+- Quote objects: `a"`, `i"`, `a'`, `i'`, `` a` ``, `` i` ``
+
+Notes:
+
+- `dd`, `cc`, and `yy` still use their normal whole-line behavior instead of going through text-object parsing.
+- Paragraph objects resolve linewise. The other supported text objects resolve characterwise.
+- Visual-mode text objects are still out of scope for now.
+
 ## Normal Mode Deletion
 
-Delete now uses Vim's `d` operator model over the currently supported motion subset. Counts can be used before the command, such as `2dd` or `3dw`.
+Delete now uses Vim's `d` operator model over the currently supported motion and text-object subset. Counts can be used before the command, such as `2dd`, `3dw`, or `diw`.
 Successful deletes also write the removed text to the system clipboard. Linewise deletes preserve linewise paste behavior when pasted back inside this editor.
 
 Standalone delete aliases:
@@ -237,6 +255,8 @@ Standalone delete aliases:
 | `d` + `;` | Repeat the last `df`, `dF`, `dt`, or `dT` search in the same direction. |
 | `d` + `,` | Repeat the last `df`, `dF`, `dt`, or `dT` search in the opposite direction. |
 
+Delete also supports the operator text objects listed above, for example `diw`, `daw`, `di(`, `dat`, and `da"`.
+
 ## Normal Mode Paste
 
 Paste uses the current system clipboard contents.
@@ -259,7 +279,7 @@ Undo history is stored per note for the current app session. Normal-mode edit co
 
 ## Normal Mode Yank
 
-Yank uses Vim's `y` operator model over the same currently supported motion subset as delete. Successful yanks write the selected text to the system clipboard but do not modify the document or move the cursor.
+Yank uses Vim's `y` operator model over the same currently supported motion and text-object subset as delete. Successful yanks write the selected text to the system clipboard but do not modify the document or move the cursor.
 
 Standalone yank aliases:
 
@@ -299,9 +319,11 @@ Standalone yank aliases:
 | `y` + `;` | Repeat the last `yf`, `yF`, `yt`, or `yT` search in the same direction. |
 | `y` + `,` | Repeat the last `yf`, `yF`, `yt`, or `yT` search in the opposite direction. |
 
+Yank also supports the operator text objects listed above, for example `yiw`, `yaw`, `yi(`, `yat`, and `ya"`.
+
 ## Normal Mode Change
 
-Change uses Vim's `c` operator model over the same currently supported motion subset as delete. Successful changes write the removed text to the system clipboard, replace the selected text, and enter Insert mode at the start of the changed range.
+Change uses Vim's `c` operator model over the same currently supported motion and text-object subset as delete. Successful changes write the removed text to the system clipboard, replace the selected text, and enter Insert mode at the start of the changed range.
 Unlike stock Vim, this editor handles `c` with the same literal motion semantics as `d` and `y`, so `cw` follows the actual `w` motion instead of using Vim's historical `cw` special case.
 
 Standalone change aliases:
@@ -344,6 +366,8 @@ Standalone change aliases:
 | `c` + `;` | Repeat the last `cf`, `cF`, `ct`, or `cT` search in the same direction. |
 | `c` + `,` | Repeat the last `cf`, `cF`, `ct`, or `cT` search in the opposite direction. |
 
+Change also supports the operator text objects listed above, for example `ciw`, `caw`, `ci(`, `cit`, and `ci"`.
+
 ## Not Yet Supported
 
 This is not full Vim yet. Some important Vim features are intentionally still out of scope for now:
@@ -352,5 +376,5 @@ This is not full Vim yet. Some important Vim features are intentionally still ou
 - marks and register-based jumps
 - named registers and advanced put variants like `gp`, `gP`, `[p`, and `]p`
 - advanced undo-tree navigation like `g-` and `g+`
-- Visual mode
+- blockwise Visual mode and Visual-mode text objects
 - command-line mode and Ex commands

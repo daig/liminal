@@ -9,33 +9,6 @@ struct VimChangeResult {
 
 enum VimChangeResolver {
     static func changeResult(
-        for target: VimOperatorTarget,
-        in text: NSString,
-        from position: Int,
-        preferredColumn: Int?
-    ) -> VimChangeResult {
-        guard let selection = VimSelectionResolver.selectionResult(
-            for: target,
-            in: text,
-            from: position,
-            preferredColumn: preferredColumn
-        ) else {
-            return VimChangeResult(
-                range: nil,
-                replacementString: "",
-                insertionLocation: fallbackInsertionLocation(in: text, from: position),
-                clipboardPayload: nil
-            )
-        }
-
-        return changeResult(
-            replacing: selection,
-            in: text,
-            from: position
-        )
-    }
-
-    static func changeResult(
         replacing selection: VimSelectionResult,
         in text: NSString,
         from position: Int

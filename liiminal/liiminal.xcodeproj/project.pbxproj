@@ -10,14 +10,30 @@
 		231255EE2F807DF1001A9B4C /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = CCC100000000000000000001 /* LaTeXSwiftUI */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A10000000000000000000008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2312554A2F803DB6001A9B4C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 231255512F803DB6001A9B4C;
+			remoteInfo = liiminal;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		231255522F803DB6001A9B4C /* liiminal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = liiminal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000001 /* liiminalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = liiminalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		231255542F803DB6001A9B4C /* liiminal */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = liiminal;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000002 /* liiminalTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = liiminalTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +47,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				231255542F803DB6001A9B4C /* liiminal */,
+				A10000000000000000000002 /* liiminalTests */,
 				231255532F803DB6001A9B4C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +70,7 @@
 			isa = PBXGroup;
 			children = (
 				231255522F803DB6001A9B4C /* liiminal.app */,
+				A10000000000000000000001 /* liiminalTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,6 +101,29 @@
 			productReference = 231255522F803DB6001A9B4C /* liiminal.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A10000000000000000000006 /* liiminalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000009 /* Build configuration list for PBXNativeTarget "liiminalTests" */;
+			buildPhases = (
+				A10000000000000000000005 /* Sources */,
+				A10000000000000000000003 /* Frameworks */,
+				A10000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A10000000000000000000007 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000002 /* liiminalTests */,
+			);
+			name = liiminalTests;
+			packageProductDependencies = (
+			);
+			productName = liiminalTests;
+			productReference = A10000000000000000000001 /* liiminalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -88,6 +136,10 @@
 				TargetAttributes = {
 					231255512F803DB6001A9B4C = {
 						CreatedOnToolsVersion = 26.4;
+					};
+					A10000000000000000000006 = {
+						CreatedOnToolsVersion = 26.4;
+						TestTargetID = 231255512F803DB6001A9B4C;
 					};
 				};
 			};
@@ -109,12 +161,20 @@
 			projectRoot = "";
 			targets = (
 				231255512F803DB6001A9B4C /* liiminal */,
+				A10000000000000000000006 /* liiminalTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		231255502F803DB6001A9B4C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -131,7 +191,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A10000000000000000000007 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 231255512F803DB6001A9B4C /* liiminal */;
+			targetProxy = A10000000000000000000008 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		2312555B2F803DB7001A9B4C /* Debug */ = {
@@ -318,6 +393,55 @@
 			};
 			name = Release;
 		};
+		A1000000000000000000000A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8DWR7MSCR6;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				PRODUCT_BUNDLE_IDENTIFIER = sub.dev.liiminalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/liiminal.app/Contents/MacOS/liiminal";
+				TEST_TARGET_NAME = liiminal;
+			};
+			name = Debug;
+		};
+		A1000000000000000000000B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8DWR7MSCR6;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.3;
+				PRODUCT_BUNDLE_IDENTIFIER = sub.dev.liiminalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/liiminal.app/Contents/MacOS/liiminal";
+				TEST_TARGET_NAME = liiminal;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -335,6 +459,15 @@
 			buildConfigurations = (
 				2312555E2F803DB7001A9B4C /* Debug */,
 				2312555F2F803DB7001A9B4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000009 /* Build configuration list for PBXNativeTarget "liiminalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1000000000000000000000A /* Debug */,
+				A1000000000000000000000B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

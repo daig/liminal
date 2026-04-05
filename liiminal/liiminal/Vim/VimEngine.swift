@@ -1,6 +1,6 @@
 import Foundation
 
-enum VimHandleResult {
+enum VimHandleResult: Equatable {
     case handled(VimCommand)
     case pending
     case ignored
@@ -10,7 +10,7 @@ final class VimEngine {
     private let keymapCatalog: VimKeymapCatalog
     private let commandBindings: VimBindingTree
     private let visualBindings: VimBindingTree
-    private let operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree]
+    private let operatorArgumentBindings: [VimOperator: VimOperatorArgumentBindingTree]
 
     private(set) var sessionState: VimSessionState
 
@@ -22,7 +22,7 @@ final class VimEngine {
         self.keymapCatalog = keymapCatalog
         self.commandBindings = keymapCatalog.commandBindings
         self.visualBindings = visualBindings
-        self.operatorMotionBindings = keymapCatalog.operatorMotionBindings
+        self.operatorArgumentBindings = keymapCatalog.operatorArgumentBindings
         self.sessionState = initialState
     }
 
@@ -60,9 +60,7 @@ final class VimEngine {
                 sessionState.clearPendingInput()
                 return resolvePendingOperator(
                     pendingOperator,
-                    motion: .characterwise(motion),
-                    operatorCount: nil,
-                    motionCount: nil
+                    argument: .characterwiseMotion(motion)
                 )
             }
 
@@ -140,20 +138,19 @@ final class VimEngine {
         _ keyPress: VimKeyPress,
         pendingOperator: VimOperator
     ) -> VimHandleResult {
-        if let characterMotionFactory = sessionState.pendingCharacterOperatorMotionFactory {
+        if let characterArgumentFactory = sessionState.pendingCharacterOperatorArgumentFactory {
             guard case .character(let character) = keyPress else {
                 clearPendingInput()
                 return .ignored
             }
 
             let operatorCount = sessionState.pendingOperatorCount
-            let motionCount = sessionState.pendingCount
+            let argumentCount = sessionState.pendingCount
             sessionState.clearPendingInput()
             return resolvePendingOperator(
                 pendingOperator,
-                motion: characterMotionFactory(character, motionCount),
-                operatorCount: operatorCount,
-                motionCount: motionCount
+                argument: characterArgumentFactory(character, argumentCount).applying(
+                    operatorCount: operatorCount)
             )
         }
 
@@ -161,7 +158,7 @@ final class VimEngine {
             return .pending
         }
 
-        guard let operatorBindings = operatorMotionBindings[pendingOperator] else {
+        guard let operatorBindings = operatorArgumentBindings[pendingOperator] else {
             sessionState.clearPendingInput()
             return .ignored
         }
@@ -169,19 +166,17 @@ final class VimEngine {
         let candidateKeys = sessionState.pendingKeys + [keyPress]
 
         switch operatorBindings.match(candidateKeys) {
-        case .exact(let motionFactory):
+        case .exact(let argumentFactory):
             let operatorCount = sessionState.pendingOperatorCount
-            let motionCount = sessionState.pendingCount
+            let argumentCount = sessionState.pendingCount
             sessionState.clearPendingInput()
             return resolvePendingOperator(
                 pendingOperator,
-                motion: motionFactory(motionCount),
-                operatorCount: operatorCount,
-                motionCount: motionCount
+                argument: argumentFactory(argumentCount).applying(operatorCount: operatorCount)
             )
-        case .characterPending(let characterMotionFactory):
+        case .characterPending(let characterArgumentFactory):
             sessionState.pendingKeys = candidateKeys
-            sessionState.pendingCharacterOperatorMotionFactory = characterMotionFactory
+            sessionState.pendingCharacterOperatorArgumentFactory = characterArgumentFactory
             return .pending
         case .partial:
             sessionState.pendingKeys = candidateKeys
@@ -312,23 +307,48 @@ final class VimEngine {
     }
 
     private func resolveOperatorCharacterSearch(
-        _ target: VimOperatorTarget,
-        commandBuilder: (VimOperatorTarget) -> VimCommand
+        _ target: VimOperatorArgument,
+        commandBuilder: (VimOperatorArgument) -> VimCommand
     ) -> VimHandleResult {
         switch target {
-        case .characterwise(.characterSearch(let search), let count):
-            sessionState.lastCharacterSearch = search
-            return .handled(commandBuilder(.characterwise(.characterSearch(search), count: count)))
-        case .characterwise(.repeatCharacterSearch(let oppositeDirection), let count):
-            guard let lastCharacterSearch = sessionState.lastCharacterSearch else {
-                return .ignored
+        case .motion(let argument) where argument.granularity == .characterwise:
+            switch argument.motion {
+            case .characterSearch(let search):
+                sessionState.lastCharacterSearch = search
+                return .handled(
+                    commandBuilder(
+                        .motion(
+                            VimMotionArgument(
+                                motion: .characterSearch(search),
+                                granularity: .characterwise,
+                                count: argument.count
+                            )
+                        )
+                    )
+                )
+            case .repeatCharacterSearch(let oppositeDirection):
+                guard let lastCharacterSearch = sessionState.lastCharacterSearch else {
+                    return .ignored
+                }
+
+                let search = oppositeDirection
+                    ? lastCharacterSearch.reversed()
+                    : lastCharacterSearch
+
+                return .handled(
+                    commandBuilder(
+                        .motion(
+                            VimMotionArgument(
+                                motion: .characterSearch(search),
+                                granularity: .characterwise,
+                                count: argument.count
+                            )
+                        )
+                    )
+                )
+            default:
+                return .handled(commandBuilder(target))
             }
-
-            let search = oppositeDirection
-                ? lastCharacterSearch.reversed()
-                : lastCharacterSearch
-
-            return .handled(commandBuilder(.characterwise(.characterSearch(search), count: count)))
         default:
             return .handled(commandBuilder(target))
         }
@@ -336,75 +356,15 @@ final class VimEngine {
 
     private func resolvePendingOperator(
         _ op: VimOperator,
-        motion: VimOperatorMotion,
-        operatorCount: Int?,
-        motionCount: Int?
+        argument: VimOperatorArgument
     ) -> VimHandleResult {
-        let effectiveCount = effectiveCount(
-            for: motion,
-            operatorCount: operatorCount,
-            motionCount: motionCount
-        )
-
         switch op {
         case .delete:
-            switch motion {
-            case .currentLines:
-                return resolve(.delete(.currentLines(count: effectiveCount)))
-            case .characterwise(let textMotion):
-                return resolve(.delete(.characterwise(textMotion, count: effectiveCount)))
-            case .linewise(let textMotion):
-                return resolve(.delete(.linewise(textMotion, count: effectiveCount)))
-            }
+            return resolve(.delete(argument))
         case .change:
-            switch motion {
-            case .currentLines:
-                return resolve(.change(.currentLines(count: effectiveCount)))
-            case .characterwise(let textMotion):
-                return resolve(.change(.characterwise(textMotion, count: effectiveCount)))
-            case .linewise(let textMotion):
-                return resolve(.change(.linewise(textMotion, count: effectiveCount)))
-            }
+            return resolve(.change(argument))
         case .yank:
-            switch motion {
-            case .currentLines:
-                return resolve(.yank(.currentLines(count: effectiveCount)))
-            case .characterwise(let textMotion):
-                return resolve(.yank(.characterwise(textMotion, count: effectiveCount)))
-            case .linewise(let textMotion):
-                return resolve(.yank(.linewise(textMotion, count: effectiveCount)))
-            }
-        }
-    }
-
-    private func effectiveCount(
-        for motion: VimOperatorMotion,
-        operatorCount: Int?,
-        motionCount: Int?
-    ) -> Int? {
-        switch motion {
-        case .currentLines:
-            return combinedRelativeCount(operatorCount, motionCount)
-        case .characterwise(let textMotion), .linewise(let textMotion):
-            switch textMotion {
-            case .goToLine:
-                return motionCount ?? operatorCount
-            default:
-                return combinedRelativeCount(operatorCount, motionCount)
-            }
-        }
-    }
-
-    private func combinedRelativeCount(_ lhs: Int?, _ rhs: Int?) -> Int? {
-        switch (lhs, rhs) {
-        case (nil, nil):
-            return nil
-        case (let lhs?, nil):
-            return lhs
-        case (nil, let rhs?):
-            return rhs
-        case (let lhs?, let rhs?):
-            return lhs * rhs
+            return resolve(.yank(argument))
         }
     }
 

@@ -735,7 +735,7 @@ final class VimTextView: NSTextView {
         return range.location
     }
 
-    private func applyDelete(_ target: VimOperatorTarget) {
+    private func applyDelete(_ target: VimOperatorArgument) {
         guard let selection = resolvedSelection(for: target, from: normalCursorPosition) else {
             return
         }
@@ -743,7 +743,7 @@ final class VimTextView: NSTextView {
         applyDelete(selection, beforeCursorPosition: normalCursorPosition)
     }
 
-    private func applyChange(_ target: VimOperatorTarget) {
+    private func applyChange(_ target: VimOperatorArgument) {
         guard let selection = resolvedSelection(for: target, from: normalCursorPosition) else {
             return
         }
@@ -751,7 +751,7 @@ final class VimTextView: NSTextView {
         applyChange(selection, beforeCursorPosition: normalCursorPosition)
     }
 
-    private func applyYank(_ target: VimOperatorTarget) {
+    private func applyYank(_ target: VimOperatorArgument) {
         guard let selection = resolvedSelection(for: target, from: normalCursorPosition) else {
             return
         }
@@ -919,16 +919,23 @@ final class VimTextView: NSTextView {
     }
 
     private func resolvedSelection(
-        for target: VimOperatorTarget,
+        for target: VimOperatorArgument,
         from position: Int
     ) -> VimSelectionResult? {
-        VimSelectionResolver.selectionResult(
+        guard let resolvedTarget = VimOperatorArgumentResolver.resolvedTarget(
             for: target,
             in: string as NSString,
             from: position,
             preferredColumn: vimEngine.sessionState.preferredColumn,
             markResolver: currentMarkResolver(in: string as NSString)
-        )
+        ) else {
+            return nil
+        }
+
+        switch resolvedTarget {
+        case .text(let selection):
+            return selection
+        }
     }
 
     private func applyPaste(_ placement: VimPastePlacement, count: Int?) {

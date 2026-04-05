@@ -66,12 +66,12 @@ struct VimHintCandidate: Equatable {
 
 struct VimKeymapCatalog {
     let commandBindings: VimBindingTree
-    let operatorMotionBindings: [VimOperator: VimOperatorMotionBindingTree]
+    let operatorArgumentBindings: [VimOperator: VimOperatorArgumentBindingTree]
 
     static let normalMode: VimKeymapCatalog = {
-        VimKeymapCatalog(
-            commandBindings: .normalMode,
-            operatorMotionBindings: [
+            VimKeymapCatalog(
+                commandBindings: .normalMode,
+            operatorArgumentBindings: [
                 .delete: .normalModeDeleteOperator,
                 .change: .normalModeChangeOperator,
                 .yank: .normalModeYankOperator,
@@ -98,7 +98,7 @@ struct VimKeymapCatalog {
         guard sessionState.mode == .normal else { return nil }
 
         if let pendingOperator = sessionState.pendingOperator {
-            guard let bindingTree = operatorMotionBindings[pendingOperator] else {
+            guard let bindingTree = operatorArgumentBindings[pendingOperator] else {
                 return nil
             }
 
@@ -106,7 +106,7 @@ struct VimKeymapCatalog {
                 let snapshot = bindingTree.hintSnapshot(
                     at: sessionState.pendingKeys,
                     titlePrefix: pendingOperator.displayLabel,
-                    argumentPending: sessionState.pendingCharacterOperatorMotionFactory != nil,
+                    argumentPending: sessionState.pendingCharacterOperatorArgumentFactory != nil,
                     context: context
                 )
             else {
@@ -147,7 +147,7 @@ extension VimBindingTree: VimHintQueryableTree {
     fileprivate var rootNode: Node { root }
 }
 
-extension VimOperatorMotionBindingTree: VimHintQueryableTree {
+extension VimOperatorArgumentBindingTree: VimHintQueryableTree {
     fileprivate var rootNode: Node { root }
 }
 
@@ -167,10 +167,10 @@ extension VimBindingTree.Node: VimHintQueryableNode {
     }
 }
 
-extension VimOperatorMotionBindingTree.Node: VimHintQueryableNode {
+extension VimOperatorArgumentBindingTree.Node: VimHintQueryableNode {
     fileprivate var childrenKeyOrder: [VimKeyPress] { childOrder }
 
-    fileprivate func child(for key: VimKeyPress) -> VimOperatorMotionBindingTree.Node? {
+    fileprivate func child(for key: VimKeyPress) -> VimOperatorArgumentBindingTree.Node? {
         children[key]
     }
 }

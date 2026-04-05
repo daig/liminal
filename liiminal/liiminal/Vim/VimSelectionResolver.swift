@@ -1,6 +1,6 @@
 import Foundation
 
-struct VimSelectionResult {
+struct VimSelectionResult: Equatable {
     let range: NSRange
     let cursorAnchor: Int
     let linewise: Bool
@@ -8,7 +8,7 @@ struct VimSelectionResult {
 
 enum VimSelectionResolver {
     static func selectionResult(
-        for target: VimOperatorTarget,
+        for argument: VimMotionArgument,
         in text: NSString,
         from position: Int,
         preferredColumn: Int?,
@@ -18,30 +18,33 @@ enum VimSelectionResolver {
 
         let currentPosition = clamp(position, in: text)
 
-        switch target {
-        case .currentLines(let count):
-            return selectCurrentLines(
-                count: max(count ?? 1, 1),
-                in: text,
-                from: currentPosition
-            )
-        case .characterwise(let motion, let count):
+        switch argument.granularity {
+        case .characterwise:
             return selectCharacterwise(
-                motion: motion,
-                count: max(count ?? 1, 1),
+                motion: argument.motion,
+                count: max(argument.count ?? 1, 1),
                 in: text,
                 from: currentPosition,
                 markResolver: markResolver
             )
-        case .linewise(let motion, let count):
+        case .linewise:
             return selectLinewise(
-                motion: motion,
-                count: count,
+                motion: argument.motion,
+                count: argument.count,
                 in: text,
                 from: currentPosition,
                 preferredColumn: preferredColumn
             )
         }
+    }
+
+    static func currentLineSelectionResult(
+        count: Int,
+        in text: NSString,
+        from position: Int
+    ) -> VimSelectionResult? {
+        guard text.length > 0 else { return nil }
+        return selectCurrentLines(count: max(count, 1), in: text, from: clamp(position, in: text))
     }
 
     static func wordSelectionResult(
@@ -80,7 +83,7 @@ enum VimSelectionResolver {
         return VimSelectionResult(range: range, cursorAnchor: range.location, linewise: false)
     }
 
-    private static func selectCurrentLines(
+    static func selectCurrentLines(
         count: Int,
         in text: NSString,
         from position: Int
