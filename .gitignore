@@ -1,0 +1,19 @@
+# macOS metadata
+.DS_Store
+
+# Editor and local tool state
+.nvimlog
+.claude/
+
+# Xcode user-specific state
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Xcode and Swift build output
+DerivedData/
+.build/
+.swiftpm/
