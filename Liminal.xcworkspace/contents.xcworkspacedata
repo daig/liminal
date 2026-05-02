@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Workspace
+   version = "1.0">
+   <FileRef
+      location = "group:Packages/LiminalCore">
+   </FileRef>
+   <FileRef
+      location = "group:liminal_markup_syntax_spec_v0_1.md">
+   </FileRef>
+</Workspace>

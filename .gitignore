@@ -1,3 +1,7 @@
 .DS_Store
 .nvimlog
-
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/xcode/package.xcworkspace/
