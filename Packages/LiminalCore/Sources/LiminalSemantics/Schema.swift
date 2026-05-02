@@ -1,5 +1,3 @@
-import LiminalModel
-
 public struct LiminalSchema: Equatable, Sendable {
     public var name: String
     public var types: [SchemaTypeDeclaration]
@@ -181,7 +179,11 @@ public enum LiminalPrelude {
 public struct SchemaValidator: Sendable {
     public init() {}
 
-    public func validate(_ document: LiminalDocument, against schema: LiminalSchema) -> LiminalDocument {
-        document
+    public func validate(
+        _ document: LiminalDocument,
+        against schema: LiminalSchema
+    ) -> LiminalDocument {
+        _ = schema
+        return document
     }
 }

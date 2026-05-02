@@ -1,4 +1,5 @@
-import LiminalText
+import Cambium
+import LiminalSyntax
 
 public enum NodeKind: String, Hashable, Sendable {
     case document
@@ -134,7 +135,11 @@ public struct LiminalEmbed: Equatable, Sendable {
     public var fallback: [LiminalInline]
     public var target: String
 
-    public init(expectedType: QualifiedName? = nil, fallback: [LiminalInline] = [], target: String) {
+    public init(
+        expectedType: QualifiedName? = nil,
+        fallback: [LiminalInline] = [],
+        target: String
+    ) {
         self.expectedType = expectedType
         self.fallback = fallback
         self.target = target
@@ -155,30 +160,44 @@ public struct LiminalTemplateExpression: Equatable, Sendable, ExpressibleByStrin
 
 public struct SurfaceForm: Equatable, Sendable {
     public var name: String?
-    public var range: SourceRange?
+    public var range: TextRange?
     public var rawSource: String?
 
-    public init(name: String? = nil, range: SourceRange? = nil, rawSource: String? = nil) {
+    public init(
+        name: String? = nil,
+        range: TextRange? = nil,
+        rawSource: String? = nil
+    ) {
         self.name = name
         self.range = range
         self.rawSource = rawSource
     }
 }
 
-public struct LiminalDocument: Equatable, Sendable {
-    public var source: String
+public struct LiminalDocument: Sendable {
+    public var syntaxTree: SharedSyntaxTree<LiminalLanguage>?
     public var blocks: [LiminalBlock]
-    public var diagnostics: [Diagnostic]
+    public var diagnostics: [LiminalDiagnostic]
 
-    public init(source: String, diagnostics: [Diagnostic] = []) {
-        self.source = source
-        self.blocks = []
+    public init(
+        syntaxTree: SharedSyntaxTree<LiminalLanguage>? = nil,
+        blocks: [LiminalBlock] = [],
+        diagnostics: [LiminalDiagnostic] = []
+    ) {
+        self.syntaxTree = syntaxTree
+        self.blocks = blocks
         self.diagnostics = diagnostics
     }
 
-    public init(source: String, blocks: [LiminalBlock], diagnostics: [Diagnostic] = []) {
-        self.source = source
+    public init(parseResult: LiminalParseResult, blocks: [LiminalBlock] = []) {
+        self.syntaxTree = parseResult.tree
         self.blocks = blocks
-        self.diagnostics = diagnostics
+        self.diagnostics = parseResult.diagnostics
+    }
+
+    public var sourceText: String? {
+        syntaxTree?.withRoot { root in
+            root.makeString()
+        }
     }
 }

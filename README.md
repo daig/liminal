@@ -10,14 +10,11 @@ Open `Liminal.xcworkspace` from the repository root.
 
 ## Package Layout
 
-- `LiminalText`: source locations, ranges, and diagnostics.
-- `LiminalSyntax`: parser-facing syntax scaffolding.
-- `LiminalModel`: semantic document model scaffolding.
-- `LiminalSchema`: schema and validation scaffolding.
-- `LiminalLowering`: syntax-to-model boundary.
-- `LiminalSurfaces`: surface reader/printer extension points.
-- `LiminalPrinting`: lossless and canonical print entry points.
-- `LiminalWorkspace`: vault and file-level workspace concepts.
+- `LiminalSyntax`: Cambium language definition, parser, syntax tree result, and parse session.
+- `LiminalSemantics`: typed document model, schema/prelude, lowering, surfaces, and printing.
+- `LiminalWorkspace`: vault, note, document index, wiki-link, and backlink concepts.
 - `LiminalEditor`: editor session boundary.
-- `LiminalRender`: rendering boundary for future UI clients.
+- `LiminalRendering`: platform-neutral rendering boundary for future UI clients.
 - `liminal-cli`: command-line utility target for quick parser and printer checks.
+
+The language design spec lives at `Docs/Language/liminal_markup_syntax_spec_v0_1.md`.

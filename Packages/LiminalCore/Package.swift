@@ -1,78 +1,67 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 
 import PackageDescription
 
 let package = Package(
     name: "LiminalCore",
     platforms: [
-        .macOS(.v14),
-        .iOS(.v17)
+        .macOS(.v15)
     ],
     products: [
         .library(name: "LiminalCore", targets: ["LiminalCore"]),
-        .library(name: "LiminalText", targets: ["LiminalText"]),
         .library(name: "LiminalSyntax", targets: ["LiminalSyntax"]),
-        .library(name: "LiminalModel", targets: ["LiminalModel"]),
-        .library(name: "LiminalSchema", targets: ["LiminalSchema"]),
-        .library(name: "LiminalLowering", targets: ["LiminalLowering"]),
-        .library(name: "LiminalSurfaces", targets: ["LiminalSurfaces"]),
-        .library(name: "LiminalPrinting", targets: ["LiminalPrinting"]),
+        .library(name: "LiminalSemantics", targets: ["LiminalSemantics"]),
         .library(name: "LiminalWorkspace", targets: ["LiminalWorkspace"]),
         .library(name: "LiminalEditor", targets: ["LiminalEditor"]),
-        .library(name: "LiminalRender", targets: ["LiminalRender"]),
+        .library(name: "LiminalRendering", targets: ["LiminalRendering"]),
         .executable(name: "liminal", targets: ["liminal-cli"])
     ],
+    dependencies: [
+        .package(path: "../../../cambium")
+    ],
     targets: [
-        .target(name: "LiminalText"),
         .target(
             name: "LiminalSyntax",
-            dependencies: ["LiminalText"]
+            dependencies: [
+                .product(name: "Cambium", package: "cambium")
+            ]
         ),
         .target(
-            name: "LiminalModel",
-            dependencies: ["LiminalText"]
-        ),
-        .target(
-            name: "LiminalSchema",
-            dependencies: ["LiminalModel"]
-        ),
-        .target(
-            name: "LiminalLowering",
-            dependencies: ["LiminalModel", "LiminalSyntax"]
-        ),
-        .target(
-            name: "LiminalSurfaces",
-            dependencies: ["LiminalModel", "LiminalSyntax"]
-        ),
-        .target(
-            name: "LiminalPrinting",
-            dependencies: ["LiminalModel", "LiminalSurfaces"]
+            name: "LiminalSemantics",
+            dependencies: [
+                "LiminalSyntax",
+                .product(name: "Cambium", package: "cambium")
+            ]
         ),
         .target(
             name: "LiminalWorkspace",
-            dependencies: ["LiminalModel", "LiminalSchema", "LiminalText"]
+            dependencies: [
+                "LiminalSemantics",
+                "LiminalSyntax",
+                .product(name: "CambiumCore", package: "cambium")
+            ]
         ),
         .target(
             name: "LiminalEditor",
-            dependencies: ["LiminalLowering", "LiminalSyntax", "LiminalWorkspace"]
+            dependencies: [
+                "LiminalSemantics",
+                "LiminalSyntax",
+                "LiminalWorkspace",
+                .product(name: "Cambium", package: "cambium")
+            ]
         ),
         .target(
-            name: "LiminalRender",
-            dependencies: ["LiminalModel"]
+            name: "LiminalRendering",
+            dependencies: ["LiminalSemantics"]
         ),
         .target(
             name: "LiminalCore",
             dependencies: [
-                "LiminalText",
                 "LiminalSyntax",
-                "LiminalModel",
-                "LiminalSchema",
-                "LiminalLowering",
-                "LiminalSurfaces",
-                "LiminalPrinting",
+                "LiminalSemantics",
                 "LiminalWorkspace",
                 "LiminalEditor",
-                "LiminalRender"
+                "LiminalRendering"
             ]
         ),
         .executableTarget(
@@ -80,16 +69,24 @@ let package = Package(
             dependencies: ["LiminalCore"]
         ),
         .testTarget(
-            name: "LiminalTextTests",
-            dependencies: ["LiminalText"]
+            name: "LiminalSyntaxTests",
+            dependencies: [
+                "LiminalSyntax",
+                .product(name: "CambiumCore", package: "cambium")
+            ]
         ),
         .testTarget(
-            name: "LiminalModelTests",
-            dependencies: ["LiminalModel"]
+            name: "LiminalSemanticsTests",
+            dependencies: ["LiminalSemantics"]
+        ),
+        .testTarget(
+            name: "LiminalWorkspaceTests",
+            dependencies: ["LiminalWorkspace"]
         ),
         .testTarget(
             name: "LiminalScaffoldTests",
             dependencies: ["LiminalCore"]
         )
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

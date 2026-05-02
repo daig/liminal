@@ -1,10 +1,5 @@
 @_exported import LiminalEditor
-@_exported import LiminalLowering
-@_exported import LiminalModel
-@_exported import LiminalPrinting
-@_exported import LiminalRender
-@_exported import LiminalSchema
-@_exported import LiminalSurfaces
+@_exported import LiminalRendering
+@_exported import LiminalSemantics
 @_exported import LiminalSyntax
-@_exported import LiminalText
 @_exported import LiminalWorkspace

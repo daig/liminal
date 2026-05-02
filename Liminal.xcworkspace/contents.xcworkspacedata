@@ -5,6 +5,6 @@
       location = "group:Packages/LiminalCore">
    </FileRef>
    <FileRef
-      location = "group:liminal_markup_syntax_spec_v0_1.md">
+      location = "group:Docs/Language/liminal_markup_syntax_spec_v0_1.md">
    </FileRef>
 </Workspace>

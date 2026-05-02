@@ -13,8 +13,8 @@ struct LiminalCLI {
 
         do {
             let source = try String(contentsOfFile: path, encoding: .utf8)
-            let parsed = LiminalParser().parse(source)
-            let document = LiminalLowerer().lower(parsed.document)
+            let parsed = try LiminalParser().parse(source)
+            let document = LiminalLowerer().lower(parsed)
             let rendered = LiminalPrinter().print(document)
             print(rendered)
         } catch {
