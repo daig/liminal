@@ -2,7 +2,7 @@
 <Workspace
    version = "1.0">
    <FileRef
-      location = "group:Packages/LiminalCore">
+      location = "group:Liminal.xcodeproj">
    </FileRef>
    <FileRef
       location = "group:Docs/Language/liminal_markup_syntax_spec_v0_1.md">
