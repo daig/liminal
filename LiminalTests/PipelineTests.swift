@@ -3,8 +3,8 @@ import Testing
 
 @Suite("Pipeline")
 struct PipelineTests {
-    @Test("parse, lower, and print preserves source through the Cambium tree")
-    func parseLowerPrintPreservesSourceThroughCambiumTree() throws {
+    @Test("scaffold lowerer and lossless printer preserve source through the Cambium tree")
+    func scaffoldLowererAndLosslessPrinterPreserveSourceThroughCambiumTree() throws {
         let source = "# Typed documents\n"
         let parsed = try LiminalParser().parse(source)
         let document = LiminalLowerer().lower(parsed)
@@ -12,6 +12,15 @@ struct PipelineTests {
 
         #expect(printed == source)
         #expect(parsed.diagnostics.isEmpty)
+    }
+
+    @Test("scaffold canonical printer currently mirrors lossless source")
+    func scaffoldCanonicalPrinterCurrentlyMirrorsLosslessSource() throws {
+        let source = "# Typed documents\n\nBody\n"
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        #expect(LiminalPrinter().print(document, mode: .canonical) == source)
     }
 
     @Test("editor session owns the parse session boundary")

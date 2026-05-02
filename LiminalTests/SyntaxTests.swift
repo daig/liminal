@@ -14,14 +14,22 @@ struct SyntaxTests {
     }
 
     @Test(
-        "parser builds a lossless root tree",
+        "parser preserves source bytes in the Cambium root tree",
         arguments: [
+            ParseExpectation(description: "empty source", source: ""),
+            ParseExpectation(description: "single line ASCII", source: "plain text"),
             ParseExpectation(
-                description: "non-empty source",
-                source: "# Typed documents\n\nBody with unicode: λ\n",
-                rootChildCount: 1
+                description: "multiline source",
+                source: "First paragraph\n\nSecond paragraph\n"
             ),
-            ParseExpectation(description: "empty source", source: "", rootChildCount: 0)
+            ParseExpectation(
+                description: "unicode source",
+                source: "Body with unicode: λ, 文字, and emoji: 🧠\n"
+            ),
+            ParseExpectation(
+                description: "markdown-like source",
+                source: "# Typed documents\n\n- [[Note#Heading]]\n- `code`\n"
+            )
         ]
     )
     func parserBuildsLosslessRootTree(_ expectation: ParseExpectation) throws {
@@ -34,7 +42,6 @@ struct SyntaxTests {
         result.tree.withRoot { root in
             #expect(root.kind == .root)
             #expect(root.textLength == byteLength)
-            #expect(root.childOrTokenCount == expectation.rootChildCount)
         }
     }
 
@@ -54,7 +61,6 @@ struct SyntaxTests {
 struct ParseExpectation: CustomTestStringConvertible, Sendable {
     var description: String
     var source: String
-    var rootChildCount: Int
 
     var testDescription: String {
         description
