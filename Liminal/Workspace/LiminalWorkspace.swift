@@ -137,8 +137,11 @@ private struct DocumentIndexBuilder {
     private var references: [DocumentReference] = []
 
     mutating func build(document: LiminalDocument) -> DocumentIndex {
-        for block in document.blocks {
-            append(block)
+        for item in document.items {
+            switch item {
+            case .block(.node(let node)), .value(let node):
+                append(node)
+            }
         }
 
         return DocumentIndex(
@@ -149,10 +152,8 @@ private struct DocumentIndexBuilder {
         )
     }
 
-    private mutating func append(_ block: LiminalBlock) {
-        guard case .node(let node) = block,
-              let range = node.source?.range
-        else {
+    private mutating func append(_ node: LiminalNode) {
+        guard let range = node.source?.range else {
             return
         }
 
@@ -173,15 +174,23 @@ private struct DocumentIndexBuilder {
             appendWikiEmbedReference(node, kind: .embed)
 
         default:
-            appendReferences(in: node.content)
+            appendReferences(in: node)
         }
     }
 
     private mutating func appendReferences(in content: LiminalContent?) {
-        guard case .inline(let inlines) = content else {
-            return
+        switch content {
+        case .inline(let inlines):
+            appendReferences(in: inlines)
+        case .blocks(let blocks):
+            for block in blocks {
+                if case .node(let node) = block {
+                    appendReferences(in: node)
+                }
+            }
+        case nil:
+            break
         }
-        appendReferences(in: inlines)
     }
 
     private mutating func appendReferences(in inlines: [LiminalInline]) {
@@ -203,7 +212,7 @@ private struct DocumentIndexBuilder {
         switch node.type.rawValue {
         case "WikiLink":
             appendWikiReference(node, kind: .link)
-        case "WikiEmbedInline":
+        case "WikiEmbedInline", "WikiEmbedBlock":
             appendWikiEmbedReference(node, kind: .embed)
         case "Link":
             appendReferences(in: node.content)
@@ -215,6 +224,38 @@ private struct DocumentIndexBuilder {
             }
         default:
             appendReferences(in: node.content)
+            appendReferences(in: node.fields)
+        }
+    }
+
+    private mutating func appendReferences(in fields: [LiminalField]) {
+        for field in fields {
+            appendReferences(in: field.value)
+        }
+    }
+
+    private mutating func appendReferences(in value: LiminalValue) {
+        switch value {
+        case .scalar, .reference, .embed:
+            // .embed loses its source range during lowering today; slice 3
+            // unifies EmbedValue with the node-shaped embed surfaces.
+            break
+        case .list(let values):
+            for nested in values {
+                appendReferences(in: nested)
+            }
+        case .record(let fields):
+            appendReferences(in: fields)
+        case .node(let node):
+            appendReferences(in: node)
+        case .inlineLiteral(let inlines):
+            appendReferences(in: inlines)
+        case .blockLiteral(let blocks):
+            for block in blocks {
+                if case .node(let node) = block {
+                    appendReferences(in: node)
+                }
+            }
         }
     }
 

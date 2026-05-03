@@ -178,6 +178,27 @@ struct WorkspaceLinkingTests {
         #expect(index.references[2].alias == "raw payload")
     }
 
+    @Test("document index walks references in value declarations and typed-block bodies")
+    func documentIndexWalksReferencesInValueDeclarationsAndTypedBlockBodies() throws {
+        let source = """
+        @Person#ada{
+          bio: @[See [[Bio Note]] for details]
+        }
+
+        :::Callout
+        Body with [[Linked Note]] inside.
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        let targets = index.references.map(\.target.rawTargetString).sorted()
+        #expect(targets == ["Bio Note", "Linked Note"])
+        // Both top-level items contribute to block offsets: the value
+        // declaration and the typed block.
+        #expect(index.blockOffsets.count == 2)
+    }
+
     @Test("vault link index resolves anchors and backlinks from explicit indexes")
     func vaultLinkIndexResolvesAnchorsAndBacklinksFromExplicitIndexes() {
         let sourceNote = makeNote(
