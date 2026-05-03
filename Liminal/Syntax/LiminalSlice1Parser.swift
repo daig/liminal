@@ -1,6 +1,19 @@
 import CambiumBuilder
 import CambiumCore
 
+// MARK: - Slice 1 reuse boundaries
+//
+// Reusable (atomic, self-bounded by source delimiters):
+//   paragraph, atxHeading, codeSpan, mdLink, mdImage, wikilink,
+//   wikiEmbed, wikiEmbedBlock.
+//
+// Not reusable: inlineContent — the same kind is emitted under headings,
+// paragraphs, link labels, and wikilink aliases with diverging stop rules,
+// so a reused subtree could silently apply the wrong ones.
+//
+// Sub-nodes (linkLabel, linkDestination, wikiTarget) and trivial atoms
+// (softBreak, hardBreak, blankLine) are not worth their own reuse boundary.
+
 struct LiminalSlice1CSTParser {
     private let source: String
     private let lines: [SourceLine]

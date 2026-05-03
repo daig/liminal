@@ -316,13 +316,18 @@ Good reuse candidates:
 - `pipeTable`
 - `wikilink`
 - `wikiEmbed`
+- `wikiEmbedBlock`
 - `mdLink`
+- `mdImage`
 - `codeSpan`
 
 Excluded initially:
 
 - emphasis/strong/highlight delimiter chains, because adjacent delimiter
   context can change associativity and recovery.
+- `inlineContent`, because the same kind is emitted under headings,
+  paragraphs, link labels, and wikilink aliases with diverging stop rules;
+  reusing across contexts would silently apply the wrong ones.
 
 Reuse boundary decisions are made during parser slices. Phase 6 wires the
 mechanism.
