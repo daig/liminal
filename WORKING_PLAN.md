@@ -65,14 +65,15 @@ source text
 Cambium CST             exact bytes, delimiters, trivia, ranges, errors
   -> typed CST overlay
 Typed CST overlay       ergonomic Swift views over source forms
-  -> LiminalLowerer
-LiminalDocument         ordered document items, schema-validated
-  -> rendering / editing / indexing / vault
+  ├─> LiminalLowerer       -> LiminalDocument   -> rendering / editing
+  └─> DocumentIndexBuilder -> DocumentIndex     -> vault navigation
 ```
 
-Each layer talks only to its neighbors. The CST never knows about schemas. The
-renderer and workspace index never rescan raw strings once equivalent CST
-extraction exists.
+Lowering and indexing are sibling consumers of the typed overlay. Indexing
+does not depend on the lowerer; it reads provenance from CST tokens
+directly so vault navigation stays schema-independent and gets sub-token
+ranges. Each layer talks only to its neighbors. The CST never knows about
+schemas. The renderer and workspace index never rescan raw strings.
 
 The semantic model must evolve from a blocks-only document to an item-oriented
 document. It should still expose a renderable block subset for UI rendering.
@@ -172,10 +173,13 @@ Build parser, kinds, overlays, lowerer, and tests in lockstep.
    block literals `@{...}`. This slice includes reserved-name hooks for raw
    `MathBlock` and `HtmlBlock` fences even if their full payload behavior lands
    later.
-3. **Slice 3 - block IDs and index extraction.** Trailing block IDs on
-   paragraphs, headings, and list items. Walk the CST to populate heading
-   anchors, block anchors, wikilinks, wiki embeds, markdown links, and
-   structured embeds in `DocumentIndex`.
+3. **Slice 3 - block IDs.** Trailing `^block-id` suffix on paragraphs,
+   headings, and (where they exist) list items. Parser emits
+   `blockIdSuffix`, typed overlay exposes `blockIdToken:
+   LiminalTokenSyntax?`, lowerer sets `LiminalNode.id`, and
+   `DocumentIndexBuilder` adds a `BlockAnchor` from the suffix's anchor-
+   text token range. Heading-anchor and reference extraction shipped
+   pre-slice-3 with the CST-indexer migration.
 4. **Slice 4 - recursive containers.** Ordered/unordered/task lists,
    blockquotes, nesting, continuation indentation, and no lazy continuation.
 5. **Slice 5 - content blocks and rich inline.** Fenced code, `MathBlock`,
@@ -260,20 +264,37 @@ prelude-shape validation pass described above as part of this phase.
 
 ### Phase 4 - Workspace Migration onto the CST
 
-`Liminal/Workspace/LiminalWorkspace.swift` currently keeps vault links and
-indexes independent of the parser. `VaultLinkIndex` already consumes explicit
-`DocumentIndex` values; the missing piece is a CST-backed `DocumentIndex`
-extractor. Once slice 3 lowers/indexes headings, wikilinks, embeds, and block
-IDs, build that extractor from the CST:
+The CST-backed `DocumentIndexBuilder` ships pre-slice-3 as a standalone
+walker over `RootSyntax`. `DocumentIndex.build(from:)` no longer goes
+through the lowerer; references carry both `sourceRange` (whole construct,
+for cursor containment) and `targetRange` (sub-token, for hover / Cmd-click
+/ rename), and `VaultLinkIndex` propagates the latter into
+`ResolvedReference`. `DocumentIndex.reference(containing:)` and
+`VaultLinkIndex.reference(in:at:)` return the innermost containing
+reference.
 
-- Heading anchors come from `AtxHeadingSyntax`.
-- Block anchors come from a trailing `blockId` token on supported blocks/items.
-- References come from `WikiLinkSyntax`, `WikiEmbedSyntax`, `MdLinkSyntax`, and
-  structured embed syntax.
+Indexing sources today:
 
-Keep the existing `WikiTarget`, `DocumentIndex`, and `VaultLinkIndex` concepts.
-Do not redesign vault resolution in this phase, and do not introduce or retain
-ad hoc string extraction once equivalent CST extraction exists.
+- Heading anchors come from top-level `AtxHeadingSyntax` only. Headings
+  inside typed-block bodies and block literal values are content; the
+  spec'd way to anchor inside those constructs is a block ID (`^id`).
+- References come from `WikilinkSyntax`, `WikiEmbedSyntax`, and
+  `WikiEmbedBlockSyntax`.
+
+Slice 3 adds block anchors via `paragraph.blockIdToken` /
+`atxHeading.blockIdToken`. After that, no other Phase 4 work is
+outstanding; vault resolution stays as-is.
+
+Deferred indexing (token accessors land but no references emitted):
+
+- Markdown link/image destinations
+  (`MdLinkSyntax.destinationTextToken`,
+  `MdImageSyntax.destinationTextToken`).
+- Structured embed targets (`StructuredEmbed*Syntax.targetTextToken`).
+- Both share the failure mode where `https://example.org` flows through
+  `WikiTarget.parse` into `LinkActivationPolicy.decision` as
+  `.createNote(relativePath: "https://...")`. They unblock as a unit
+  once a separate vault-resolution PR introduces an external-URI policy.
 
 ### Phase 5 - Printer
 
@@ -404,8 +425,10 @@ These are no longer open design questions:
   recovery emits sentinels, and reuse candidates are recorded.
 - **Phase 3 per slice.** `LiminalDocument` document items populate correctly,
   renderable block views work, and prelude validation runs.
-- **Phase 4.** `DocumentIndex` is extracted from the CST, and `VaultLinkIndex`
-  builds from those CST-derived indexes without ad hoc source scanning.
+- **Phase 4.** `DocumentIndex` is extracted from the CST and exposes
+  sub-token `targetRange` alongside containment `sourceRange`;
+  `VaultLinkIndex` builds from those CST-derived indexes without ad hoc
+  source scanning. Block anchors land with slice 3.
 - **Phase 5.** Lossless print walks real CST tokens; canonical print emits
   schema-ordered typed syntax for lowered document items.
 - **Phase 6.** Reparses with edits demonstrably reuse eligible subtrees.
@@ -419,29 +442,31 @@ These are no longer open design questions:
 Already shipped:
 
 - **Phase 0** (`9498111`): Cambium product dependencies, the v0.2 kind
-  taxonomy with stable raw bands, `serializationVersion` bump to 2, and
-  pinned language classification tests.
-- **Phase 1** (`c593936`): typed-overlay infrastructure
-  (`LiminalSyntaxNode`, `LiminalTokenSyntax`, the four union dispatch points,
-  shared traversal helpers, and `RootSyntax`) plus scaffold tests that pin
-  the current root shape and the empty-union dispatch.
+  taxonomy with stable raw bands, `serializationVersion` bump, and pinned
+  language classification tests.
+- **Phase 1** (`c593936`): typed-overlay infrastructure (`LiminalSyntaxNode`,
+  `LiminalTokenSyntax`, the four union dispatch points, shared traversal
+  helpers, and `RootSyntax`).
+- **Slice 1** (`d0c7fb0`): root, blank lines, paragraphs, ATX headings,
+  inline text, code spans, markdown links/images, wikilinks, and wiki
+  embeds, with typed overlays and lowering to ordered document items.
+- **Slice 2** (`ccbe1f8`): generic typed and value syntax — typed
+  constructors, typed blocks, structured embeds, scalars, records, lists,
+  references, inline/block literals, and reserved raw `MathBlock` /
+  `HtmlBlock` fences.
+- **Indexer items-walk fix** (`52756b1`): `DocumentIndex.build` walks
+  `document.items` (not just blocks) and recurses through field values so
+  wikilinks/embeds inside top-level value declarations or typed-block
+  bodies are no longer dropped.
+- **CST-based indexing migration** (`a128aa2`): `DocumentIndexBuilder`
+  walks `RootSyntax` directly; indexing no longer depends on the lowerer.
+  `DocumentReference` and `ResolvedReference` carry sub-token `targetRange`
+  alongside containment `sourceRange`. `reference(containing:)` returns
+  the innermost match. Heading anchors are top-level only. Markdown
+  destination and structured embed target indexing are explicitly deferred
+  pending external-URI policy. Most of Phase 4's scope ships here.
 
-Remaining slice 1 work, split into two PRs:
-
-1. **Slice 1 block spine.** Implement root, blank lines, paragraphs, and ATX
-   headings in `LiminalParser`. Add per-construct typed wrappers
-   (`ParagraphSyntax`, `AtxHeadingSyntax`, `BlankLineSyntax`) and extend
-   `DocumentItemSyntax` / `BlockSyntax` to dispatch to them. Lower to ordered
-   document items and a renderable block view. Drop the Phase 0/1 root
-   scaffold: the single `.rawPayloadText` token emitted under `.root` by the
-   parser, the `RootSyntax.tokens` / `tokens(kind:)` / `rawPayloadToken`
-   accessors, and the `typedRootOverlayExposesCurrentScaffoldTokens` test
-   that pins them.
-2. **Slice 1 inline and index extension.** Add inline text, code spans,
-   markdown links/images, wikilinks, and wiki embeds. Add their typed
-   wrappers and `InlineSyntax` dispatch cases, lower them, and build a
-   CST-derived `DocumentIndex`.
-
-Together these PRs complete the source -> CST -> overlay -> document items
--> index spine. Every subsequent slice repeats the same pattern with new
-constructs.
+Next: **slice 3 — block IDs.** Trailing `^block-id` on paragraphs and ATX
+headings (list items follow when slice 4 lands lists), through parser,
+typed overlay, lowerer, and `DocumentIndexBuilder`. See Phase 2 slice 3
+and Phase 4 above.
