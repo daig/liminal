@@ -133,6 +133,36 @@ struct SemanticModelTests {
         #expect(embedBlock.type.rawValue == "WikiEmbedBlock")
         #expect(embedBlock.fields.map(\.name.rawValue) == ["target", "payload"])
     }
+
+    @Test("paragraph line breaks lower to typed SoftBreak and HardBreak inline nodes")
+    func paragraphLineBreaksLowerToTypedSoftAndHardBreakInlineNodes() throws {
+        let source = "Soft\nbreak.\nHard\\\nbreak.\n"
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        #expect(document.blocks.count == 1)
+        let paragraph = try #require(document.blocks.first?.node)
+        guard case .inline(let inlines) = paragraph.content else {
+            Issue.record("expected paragraph inline content")
+            return
+        }
+
+        let breakTypes = inlines.compactMap { inline -> String? in
+            guard case .node(let node) = inline,
+                  ["SoftBreak", "HardBreak"].contains(node.type.rawValue)
+            else {
+                return nil
+            }
+            return node.type.rawValue
+        }
+
+        #expect(breakTypes == ["SoftBreak", "SoftBreak", "HardBreak"])
+
+        let textRuns = inlines.compactMap { inline -> String? in
+            guard case .text(let text) = inline else { return nil }
+            return text
+        }
+        #expect(textRuns == ["Soft", "break.", "Hard", "break."])
+    }
 }
 
 private extension LiminalBlock {

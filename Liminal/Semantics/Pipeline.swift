@@ -83,8 +83,18 @@ public struct LiminalLowerer: Sendable {
                 switch element {
                 case .token(let token) where token.kind == .inlineText:
                     result.append(.text(token.makeString()))
-                case .node(let child) where child.kind == .softBreak || child.kind == .hardBreak:
-                    result.append(.text("\n"))
+                case .node(let child) where child.kind == .softBreak:
+                    result.append(.node(LiminalNode(
+                        kind: .inline,
+                        type: "SoftBreak",
+                        source: surface("softBreak", child.makeHandle())
+                    )))
+                case .node(let child) where child.kind == .hardBreak:
+                    result.append(.node(LiminalNode(
+                        kind: .inline,
+                        type: "HardBreak",
+                        source: surface("hardBreak", child.makeHandle())
+                    )))
                 case .node(let child):
                     if let inline = lowerInlineNode(child.makeHandle()) {
                         result.append(inline)

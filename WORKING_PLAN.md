@@ -210,6 +210,7 @@ Construct lowering:
 - Markdown link -> `Link`.
 - Markdown image -> `Image`.
 - Code span -> `CodeSpan`.
+- Soft/hard break -> `SoftBreak` / `HardBreak`.
 - Wikilink -> `WikiLink`.
 - Wiki embed -> `WikiEmbedInline` or `WikiEmbedBlock`.
 - Structured embed -> `EmbedInline`, `EmbedBlock`, or `EmbedValue`.

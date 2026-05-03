@@ -284,6 +284,10 @@ private struct DocumentIndexBuilder {
 
     private func plainText(_ node: LiminalNode) -> String {
         switch node.type.rawValue {
+        case "SoftBreak":
+            return " "
+        case "HardBreak":
+            return "\n"
         case "CodeSpan":
             return fieldString(named: "text", in: node) ?? ""
         case "WikiLink":
