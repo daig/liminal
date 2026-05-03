@@ -45,8 +45,10 @@ struct DocumentIndexBuilder {
         case .blankLine:
             break
         case .paragraph(let paragraph):
+            appendBlockIDAnchor(token: paragraph.blockIdToken, sourceOffset: paragraph.range.start)
             walkInlineContent(paragraph.inlineContent)
         case .atxHeading(let heading):
+            appendBlockIDAnchor(token: heading.blockIdToken, sourceOffset: heading.range.start)
             walkInlineContent(heading.inlineContent)
         case .wikiEmbedBlock(let embed):
             appendWikiEmbedReference(
@@ -220,5 +222,16 @@ struct DocumentIndexBuilder {
             sourceRange: sourceRange,
             targetRange: targetToken.range
         ))
+    }
+
+    private mutating func appendBlockIDAnchor(
+        token: LiminalTokenSyntax?,
+        sourceOffset: TextSize
+    ) {
+        guard let token else {
+            return
+        }
+
+        blocks.append(BlockAnchor(blockID: token.text, sourceOffset: sourceOffset))
     }
 }

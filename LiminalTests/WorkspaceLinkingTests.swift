@@ -210,6 +210,32 @@ struct WorkspaceLinkingTests {
         #expect(index.references[2].alias == "raw payload")
     }
 
+    @Test("document index builds block anchors from Slice 3 suffixes")
+    func documentIndexBuildsBlockAnchorsFromSlice3Suffixes() throws {
+        let source = """
+        # Section ^heading-block
+
+        Paragraph [[Target]] ^para-block
+
+        :::Callout
+        Nested paragraph ^nested-block
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+        let paragraphOffset = try sourceRange(of: "Paragraph", in: source).start
+        let nestedParagraphOffset = try sourceRange(of: "Nested paragraph", in: source).start
+
+        #expect(index.blocks == [
+            BlockAnchor(blockID: "heading-block", sourceOffset: 0),
+            BlockAnchor(blockID: "para-block", sourceOffset: paragraphOffset),
+            BlockAnchor(blockID: "nested-block", sourceOffset: nestedParagraphOffset)
+        ])
+        #expect(index.blockOffset(for: .block("HEADING-BLOCK")) == 0)
+        #expect(index.blockOffset(for: .block("para-block")) == paragraphOffset)
+        #expect(index.references.map(\.target.rawTargetString) == ["Target"])
+    }
+
     @Test("document index stores target token ranges while preserving containment ranges")
     func documentIndexStoresTargetTokenRangesWhilePreservingContainmentRanges() throws {
         let source = "See [[Target|Alias]].\n"

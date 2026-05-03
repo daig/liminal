@@ -56,13 +56,14 @@ public struct LiminalLowerer: Sendable {
 
     private func lowerParagraph(_ paragraph: ParagraphSyntax) -> LiminalNode? {
         let inlines = lowerInlineContent(paragraph.inlineContent)
-        guard !inlines.isEmpty else {
+        guard !inlines.isEmpty || paragraph.blockIdToken != nil else {
             return nil
         }
 
         return LiminalNode(
             kind: .block,
             type: "Paragraph",
+            id: paragraph.blockIdToken.map { Anchor($0.text) },
             content: .inline(inlines),
             source: surface("paragraph", paragraph.syntax)
         )
@@ -76,6 +77,7 @@ public struct LiminalLowerer: Sendable {
         return LiminalNode(
             kind: .block,
             type: "Heading",
+            id: heading.blockIdToken.map { Anchor($0.text) },
             fields: [
                 field("level", .scalar(.integer(String(heading.level))))
             ],

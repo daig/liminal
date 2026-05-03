@@ -199,6 +199,55 @@ struct SyntaxTests {
         #expect(link.titleTextToken?.text == "Title")
     }
 
+    @Test("Slice 3 parser emits block ID suffixes for paragraphs and headings")
+    func slice3ParserEmitsBlockIDSuffixesForParagraphsAndHeadings() throws {
+        let source = "Paragraph text ^para-id\n# Heading `code` ^heading-id ###\n"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 2)
+
+        guard case .paragraph(let paragraph) = root.documentItems[0] else {
+            Issue.record("expected paragraph")
+            return
+        }
+        let paragraphBlockIDRange = try sourceRange(of: "para-id", in: source)
+        #expect(paragraph.inlineContent?.sourceText == "Paragraph text")
+        #expect(paragraph.blockIdToken?.text == "para-id")
+        #expect(paragraph.blockIdToken?.range == paragraphBlockIDRange)
+
+        guard case .atxHeading(let heading) = root.documentItems[1] else {
+            Issue.record("expected heading")
+            return
+        }
+        let headingBlockIDRange = try sourceRange(of: "heading-id", in: source)
+        #expect(heading.inlineContent?.sourceText == "Heading `code`")
+        #expect(heading.blockIdToken?.text == "heading-id")
+        #expect(heading.blockIdToken?.range == headingBlockIDRange)
+    }
+
+    @Test("invalid block ID suffix candidates remain inline text")
+    func invalidBlockIDSuffixCandidatesRemainInlineText() throws {
+        let source = "Paragraph^id\n\nParagraph ^\n\nParagraph ^id extra\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+        let paragraphs = root.documentItems.compactMap { item -> ParagraphSyntax? in
+            guard case .paragraph(let paragraph) = item else {
+                return nil
+            }
+            return paragraph
+        }
+
+        #expect(paragraphs.count == 3)
+        #expect(paragraphs.allSatisfy { $0.blockIdToken == nil })
+        #expect(paragraphs.map { $0.inlineContent?.sourceText ?? "" } == [
+            "Paragraph^id",
+            "Paragraph ^",
+            "Paragraph ^id extra"
+        ])
+    }
+
     @Test("inline content plaintext projection follows CST inline semantics")
     func inlineContentPlainTextProjectionFollowsCSTInlineSemantics() throws {
         #expect(try paragraphPlainText("Plain text\n") == "Plain text")

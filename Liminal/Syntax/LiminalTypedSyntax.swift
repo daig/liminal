@@ -381,6 +381,12 @@ public struct ParagraphSyntax: LiminalSyntaxNode {
     public var inlineContent: InlineContentSyntax? {
         firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
     }
+
+    public var blockIdToken: LiminalTokenSyntax? {
+        firstChild(kind: .blockIdSuffix)
+            .map(BlockIdSuffixSyntax.init(unchecked:))?
+            .blockIdToken
+    }
 }
 
 @CambiumSyntaxNode(LiminalKind.self, for: .atxHeading)
@@ -395,6 +401,19 @@ public struct AtxHeadingSyntax: LiminalSyntaxNode {
 
     public var inlineContent: InlineContentSyntax? {
         firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+
+    public var blockIdToken: LiminalTokenSyntax? {
+        firstChild(kind: .blockIdSuffix)
+            .map(BlockIdSuffixSyntax.init(unchecked:))?
+            .blockIdToken
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .blockIdSuffix)
+public struct BlockIdSuffixSyntax: LiminalSyntaxNode {
+    public var blockIdToken: LiminalTokenSyntax? {
+        firstToken(kind: .anchor)
     }
 }
 

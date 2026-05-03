@@ -82,15 +82,20 @@ struct LiminalCSTParser {
         line: SourceLine,
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws {
+        let blockID = splitTrailingBlockID(in: heading.bodyText)
+
         builder.startNode(.atxHeading)
         try emitWhitespace(heading.indentText, with: &builder)
         try builder.token(.hashRun, text: heading.markerText)
         try emitWhitespace(heading.markerWhitespaceText, with: &builder)
         try emitInlineContent(
-            heading.bodyText,
+            blockID?.contentText ?? heading.bodyText,
             baseByteOffset: line.byteOffset(of: heading.bodyStart),
             with: &builder
         )
+        if let blockID {
+            try emitBlockIDSuffix(blockID, with: &builder)
+        }
 
         if let closingWhitespace = heading.closingWhitespaceText,
            let closingMarker = heading.closingMarkerText
@@ -137,13 +142,18 @@ struct LiminalCSTParser {
         let firstLine = lines[startLineIndex]
         let finalLine = lines[endLineIndex - 1]
         let inlineSlice = source[firstLine.contentStart..<finalLine.contentEnd]
+        let inlineText = String(inlineSlice)
+        let blockID = splitTrailingBlockID(in: inlineText)
 
         builder.startNode(.paragraph)
         try emitInlineContent(
-            String(inlineSlice),
+            blockID?.contentText ?? inlineText,
             baseByteOffset: firstLine.startByteOffset,
             with: &builder
         )
+        if let blockID {
+            try emitBlockIDSuffix(blockID, with: &builder)
+        }
         try emitNewline(finalLine.newlineText, with: &builder)
         try builder.finishNode()
 
@@ -691,6 +701,74 @@ struct LiminalCSTParser {
         return nil
     }
 
+    private func splitTrailingBlockID(in text: String) -> BlockIDSuffixInfo? {
+        var suffixEnd = text.endIndex
+        while suffixEnd > text.startIndex {
+            let previous = text.index(before: suffixEnd)
+            guard text[previous].isHorizontalWhitespace else {
+                break
+            }
+            suffixEnd = previous
+        }
+
+        guard suffixEnd > text.startIndex else {
+            return nil
+        }
+
+        var idStart = suffixEnd
+        while idStart > text.startIndex {
+            let previous = text.index(before: idStart)
+            guard text[previous].isAnchorCharacter else {
+                break
+            }
+            idStart = previous
+        }
+
+        guard idStart < suffixEnd,
+              text[idStart].isAnchorStartCharacter,
+              idStart > text.startIndex
+        else {
+            return nil
+        }
+
+        let caretIndex = text.index(before: idStart)
+        guard text[caretIndex] == "^", caretIndex > text.startIndex else {
+            return nil
+        }
+
+        var separatorStart = caretIndex
+        while separatorStart > text.startIndex {
+            let previous = text.index(before: separatorStart)
+            guard text[previous].isHorizontalWhitespace else {
+                break
+            }
+            separatorStart = previous
+        }
+
+        guard separatorStart < caretIndex else {
+            return nil
+        }
+
+        return BlockIDSuffixInfo(
+            contentText: String(text[text.startIndex..<separatorStart]),
+            separatorText: String(text[separatorStart..<caretIndex]),
+            idText: String(text[idStart..<suffixEnd]),
+            trailingWhitespaceText: String(text[suffixEnd..<text.endIndex])
+        )
+    }
+
+    private func emitBlockIDSuffix(
+        _ blockID: BlockIDSuffixInfo,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        try emitWhitespace(blockID.separatorText, with: &builder)
+        builder.startNode(.blockIdSuffix)
+        try builder.staticToken(.caret)
+        try builder.token(.anchor, text: blockID.idText)
+        try builder.finishNode()
+        try emitWhitespace(blockID.trailingWhitespaceText, with: &builder)
+    }
+
     private func emitWhitespace(
         _ text: String,
         with builder: inout GreenTreeBuilder<LiminalLanguage>
@@ -739,6 +817,13 @@ private struct HeadingBodyParts {
     var bodyText: Substring
     var closingWhitespaceText: String?
     var closingMarkerText: String?
+    var trailingWhitespaceText: String
+}
+
+private struct BlockIDSuffixInfo {
+    var contentText: String
+    var separatorText: String
+    var idText: String
     var trailingWhitespaceText: String
 }
 
@@ -2540,6 +2625,10 @@ private extension Character {
 
     var isAnchorCharacter: Bool {
         isASCIILetter || isASCIIDigit || self == "_" || self == "-"
+    }
+
+    var isAnchorStartCharacter: Bool {
+        isASCIILetter || isASCIIDigit
     }
 
     var isScalarTerminator: Bool {

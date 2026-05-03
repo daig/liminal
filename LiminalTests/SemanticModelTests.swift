@@ -174,6 +174,31 @@ struct SemanticModelTests {
         #expect(textRuns == ["Soft", "break.", "Hard", "break."])
     }
 
+    @Test("Slice 3 lowering maps block ID suffixes to semantic node IDs")
+    func slice3LoweringMapsBlockIDSuffixesToSemanticNodeIDs() throws {
+        let source = "# Heading ^heading-id\n\nParagraph `body` ^para-id\n"
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        #expect(document.blocks.count == 2)
+
+        let heading = try #require(document.blocks.first?.node)
+        #expect(heading.id?.rawValue == "heading-id")
+        guard case .inline(let headingInlines) = heading.content else {
+            Issue.record("expected heading inline content")
+            return
+        }
+        #expect(headingInlines == [.text("Heading")])
+
+        let paragraph = try #require(document.blocks.dropFirst().first?.node)
+        #expect(paragraph.id?.rawValue == "para-id")
+        guard case .inline(let paragraphInlines) = paragraph.content else {
+            Issue.record("expected paragraph inline content")
+            return
+        }
+        #expect(paragraphInlines.contains(.text("Paragraph ")))
+        #expect(!paragraphInlines.contains(.text("^para-id")))
+    }
+
     @Test("escaped punctuation lowers without the escape backslash")
     func escapedPunctuationLowersWithoutEscapeBackslash() throws {
         let source = #"Escaped \*literal\* and \[bracket\]."#
