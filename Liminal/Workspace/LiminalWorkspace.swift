@@ -189,13 +189,10 @@ private struct DocumentIndexBuilder {
             switch inline {
             case .text, .interpolation:
                 break
-            case .embed(let embed):
-                references.append(DocumentReference(
-                    kind: .embed,
-                    target: WikiTarget.parse(embed.target),
-                    alias: embed.fallback.isEmpty ? nil : plainText(embed.fallback),
-                    sourceRange: .empty
-                ))
+            case .embed:
+                // Source-backed inline embeds lower as nodes with SurfaceForm ranges.
+                // Plain LiminalEmbed values are semantic/runtime values and are not indexable here.
+                break
             case .node(let node):
                 appendReferences(in: node)
             }
