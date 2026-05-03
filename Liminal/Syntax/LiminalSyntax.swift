@@ -332,6 +332,10 @@ public struct LiminalParseResult: Sendable {
             root.makeString()
         }
     }
+
+    public var rootSyntax: RootSyntax {
+        RootSyntax(unchecked: tree.rootHandle())
+    }
 }
 
 public struct LiminalParser {

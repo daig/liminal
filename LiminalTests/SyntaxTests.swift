@@ -117,6 +117,53 @@ struct SyntaxTests {
         }
     }
 
+    @Test("typed root overlay wraps the parsed Cambium root")
+    func typedRootOverlayWrapsParsedCambiumRoot() throws {
+        let source = "# Typed documents\n\nBody with unicode: λ\n"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+        let byteLength = try TextSize(byteCountOf: source)
+
+        #expect(RootSyntax.kind == .root)
+        #expect(root.sourceText == source)
+        #expect(root.range == TextRange(start: .zero, length: byteLength))
+        #expect(RootSyntax(result.tree.rootHandle())?.syntax == root.syntax)
+    }
+
+    @Test("typed root overlay exposes current scaffold tokens")
+    func typedRootOverlayExposesCurrentScaffoldTokens() throws {
+        let source = "plain text"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+        let byteLength = try TextSize(byteCountOf: source)
+
+        #expect(root.documentItems.isEmpty)
+        #expect(root.tokens.map(\.kind) == [.rawPayloadText])
+        #expect(root.tokens(kind: .rawPayloadText).map(\.text) == [source])
+        #expect(root.tokens(kind: .inlineText).isEmpty)
+
+        let payload = try #require(root.rawPayloadToken)
+        #expect(payload.kind == .rawPayloadText)
+        #expect(payload.text == source)
+        #expect(payload.range == TextRange(start: .zero, length: byteLength))
+
+        let payloadByteCount = try payload.withTextUTF8 { bytes in
+            bytes.count
+        }
+        #expect(payloadByteCount == source.utf8.count)
+    }
+
+    @Test("typed dispatch points reject nodes the scaffold does not emit")
+    func typedDispatchPointsRejectNodesTheScaffoldDoesNotEmit() throws {
+        let result = try LiminalParser().parse("plain text")
+        let rootHandle = result.tree.rootHandle()
+
+        #expect(DocumentItemSyntax(rootHandle) == nil)
+        #expect(BlockSyntax(rootHandle) == nil)
+        #expect(InlineSyntax(rootHandle) == nil)
+        #expect(ValueSyntax(rootHandle) == nil)
+    }
+
     @Test("parse session exposes the most recently parsed tree")
     func parseSessionKeepsCurrentTreeAcrossParses() throws {
         let session = LiminalParseSession()
