@@ -25,6 +25,26 @@ struct PipelineTests {
         #expect(LiminalPrinter().print(document, mode: .canonical) == source)
     }
 
+    @Test("Slice 2 lowerer and lossless printer preserve generic typed source")
+    func slice2LowererAndLosslessPrinterPreserveGenericTypedSource() throws {
+        let source = """
+        @Person#ada{name: "Ada", ref: &people.ada}
+
+        :::Callout{kind: warning}
+        Body
+        :::
+        !{Person}[Ada](#ada)
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let printed = LiminalPrinter().print(document)
+
+        #expect(parsed.diagnostics.isEmpty)
+        #expect(printed == source)
+        #expect(document.items.count == 3)
+        #expect(document.blocks.count == 2)
+    }
+
     @Test("editor session owns the parse session boundary")
     func editorSessionOwnsParseSessionBoundary() throws {
         let session = LiminalEditorSession(source: "hello")

@@ -70,6 +70,8 @@ public enum LiminalKind: UInt32, Sendable {
     case singleQuote = 39
     @StaticText("\"")
     case doubleQuote = 40
+    @StaticText(";")
+    case semicolon = 41
 
     case hashRun = 50
     case colonRun = 51
@@ -103,6 +105,7 @@ public enum LiminalKind: UInt32, Sendable {
     case schemaText = 79
     case templateText = 80
     case directiveText = 81
+    case errorText = 82
 
     case root = 100
     case blankLine = 101
@@ -192,7 +195,7 @@ public enum LiminalLanguage: SyntaxLanguage {
     public static let missingKind: LiminalKind = .missing
     public static let errorKind: LiminalKind = .error
     public static let serializationID = "dog.lambda.liminal.markup"
-    public static let serializationVersion: UInt32 = 2
+    public static let serializationVersion: UInt32 = 3
 
     public static func isTrivia(_ kind: LiminalKind) -> Bool {
         switch kind {
@@ -343,7 +346,7 @@ public struct LiminalParser {
 
     public func parse(_ source: String) throws -> LiminalParseResult {
         var builder = GreenTreeBuilder<LiminalLanguage>(policy: .documentLocal)
-        var parser = LiminalSlice1CSTParser(source: source)
+        var parser = LiminalCSTParser(source: source)
         try parser.parse(with: &builder)
         let build = try builder.finish()
         let tree = build.snapshot.makeSyntaxTree().intoShared()
@@ -355,7 +358,7 @@ public struct LiminalParser {
         context: consuming GreenTreeContext<LiminalLanguage>
     ) throws -> LiminalParseSessionBuildOutput {
         var builder = GreenTreeBuilder<LiminalLanguage>(context: consume context)
-        var parser = LiminalSlice1CSTParser(source: source)
+        var parser = LiminalCSTParser(source: source)
         try parser.parse(with: &builder)
         let build = try builder.finish()
         let tree = build.snapshot.makeSyntaxTree().intoShared()

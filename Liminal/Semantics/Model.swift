@@ -95,6 +95,7 @@ public indirect enum LiminalBlock: Equatable, Sendable {
 
 public enum LiminalDocumentItem: Equatable, Sendable {
     case block(LiminalBlock)
+    case value(LiminalNode)
 }
 
 public indirect enum LiminalContent: Equatable, Sendable {

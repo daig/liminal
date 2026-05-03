@@ -73,6 +73,11 @@ public enum DocumentItemSyntax: Sendable, Hashable {
     case blankLine(BlankLineSyntax)
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
+    case valueDeclaration(ValueDeclarationSyntax)
+    case typedBlock(TypedBlockSyntax)
+    case mathBlock(MathBlockSyntax)
+    case htmlBlock(HtmlBlockSyntax)
+    case structuredEmbedBlock(StructuredEmbedBlockSyntax)
     case wikiEmbedBlock(WikiEmbedBlockSyntax)
 
     public init?(_ syntax: SyntaxNodeHandle<LiminalLanguage>) {
@@ -83,6 +88,16 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             self = .paragraph(ParagraphSyntax(unchecked: syntax))
         case .atxHeading:
             self = .atxHeading(AtxHeadingSyntax(unchecked: syntax))
+        case .valueDeclaration:
+            self = .valueDeclaration(ValueDeclarationSyntax(unchecked: syntax))
+        case .typedBlock:
+            self = .typedBlock(TypedBlockSyntax(unchecked: syntax))
+        case .mathBlock:
+            self = .mathBlock(MathBlockSyntax(unchecked: syntax))
+        case .htmlBlock:
+            self = .htmlBlock(HtmlBlockSyntax(unchecked: syntax))
+        case .structuredEmbedBlock:
+            self = .structuredEmbedBlock(StructuredEmbedBlockSyntax(unchecked: syntax))
         case .wikiEmbedBlock:
             self = .wikiEmbedBlock(WikiEmbedBlockSyntax(unchecked: syntax))
         default:
@@ -98,6 +113,16 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.syntax
         case .atxHeading(let item):
             item.syntax
+        case .valueDeclaration(let item):
+            item.syntax
+        case .typedBlock(let item):
+            item.syntax
+        case .mathBlock(let item):
+            item.syntax
+        case .htmlBlock(let item):
+            item.syntax
+        case .structuredEmbedBlock(let item):
+            item.syntax
         case .wikiEmbedBlock(let item):
             item.syntax
         }
@@ -110,6 +135,16 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         case .paragraph(let item):
             item.range
         case .atxHeading(let item):
+            item.range
+        case .valueDeclaration(let item):
+            item.range
+        case .typedBlock(let item):
+            item.range
+        case .mathBlock(let item):
+            item.range
+        case .htmlBlock(let item):
+            item.range
+        case .structuredEmbedBlock(let item):
             item.range
         case .wikiEmbedBlock(let item):
             item.range
@@ -120,6 +155,10 @@ public enum DocumentItemSyntax: Sendable, Hashable {
 public enum BlockSyntax: Sendable, Hashable {
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
+    case typedBlock(TypedBlockSyntax)
+    case mathBlock(MathBlockSyntax)
+    case htmlBlock(HtmlBlockSyntax)
+    case structuredEmbedBlock(StructuredEmbedBlockSyntax)
     case wikiEmbedBlock(WikiEmbedBlockSyntax)
 
     public init?(_ syntax: SyntaxNodeHandle<LiminalLanguage>) {
@@ -128,6 +167,14 @@ public enum BlockSyntax: Sendable, Hashable {
             self = .paragraph(ParagraphSyntax(unchecked: syntax))
         case .atxHeading:
             self = .atxHeading(AtxHeadingSyntax(unchecked: syntax))
+        case .typedBlock:
+            self = .typedBlock(TypedBlockSyntax(unchecked: syntax))
+        case .mathBlock:
+            self = .mathBlock(MathBlockSyntax(unchecked: syntax))
+        case .htmlBlock:
+            self = .htmlBlock(HtmlBlockSyntax(unchecked: syntax))
+        case .structuredEmbedBlock:
+            self = .structuredEmbedBlock(StructuredEmbedBlockSyntax(unchecked: syntax))
         case .wikiEmbedBlock:
             self = .wikiEmbedBlock(WikiEmbedBlockSyntax(unchecked: syntax))
         default:
@@ -141,6 +188,14 @@ public enum BlockSyntax: Sendable, Hashable {
             block.syntax
         case .atxHeading(let block):
             block.syntax
+        case .typedBlock(let block):
+            block.syntax
+        case .mathBlock(let block):
+            block.syntax
+        case .htmlBlock(let block):
+            block.syntax
+        case .structuredEmbedBlock(let block):
+            block.syntax
         case .wikiEmbedBlock(let block):
             block.syntax
         }
@@ -152,6 +207,14 @@ public enum BlockSyntax: Sendable, Hashable {
             block.range
         case .atxHeading(let block):
             block.range
+        case .typedBlock(let block):
+            block.range
+        case .mathBlock(let block):
+            block.range
+        case .htmlBlock(let block):
+            block.range
+        case .structuredEmbedBlock(let block):
+            block.range
         case .wikiEmbedBlock(let block):
             block.range
         }
@@ -160,15 +223,20 @@ public enum BlockSyntax: Sendable, Hashable {
 
 public enum InlineSyntax: Sendable, Hashable {
     case codeSpan(CodeSpanSyntax)
+    case escapedPunctuation(EscapedPunctuationSyntax)
     case mdLink(MdLinkSyntax)
     case mdImage(MdImageSyntax)
     case wikilink(WikilinkSyntax)
     case wikiEmbed(WikiEmbedSyntax)
+    case typedInline(TypedInlineSyntax)
+    case structuredEmbed(StructuredEmbedSyntax)
 
     public init?(_ syntax: SyntaxNodeHandle<LiminalLanguage>) {
         switch LiminalLanguage.kind(for: syntax.rawKind) {
         case .codeSpan:
             self = .codeSpan(CodeSpanSyntax(unchecked: syntax))
+        case .escapedPunctuation:
+            self = .escapedPunctuation(EscapedPunctuationSyntax(unchecked: syntax))
         case .mdLink:
             self = .mdLink(MdLinkSyntax(unchecked: syntax))
         case .mdImage:
@@ -177,6 +245,10 @@ public enum InlineSyntax: Sendable, Hashable {
             self = .wikilink(WikilinkSyntax(unchecked: syntax))
         case .wikiEmbed:
             self = .wikiEmbed(WikiEmbedSyntax(unchecked: syntax))
+        case .typedInline:
+            self = .typedInline(TypedInlineSyntax(unchecked: syntax))
+        case .structuredEmbed:
+            self = .structuredEmbed(StructuredEmbedSyntax(unchecked: syntax))
         default:
             return nil
         }
@@ -186,6 +258,8 @@ public enum InlineSyntax: Sendable, Hashable {
         switch self {
         case .codeSpan(let inline):
             inline.syntax
+        case .escapedPunctuation(let inline):
+            inline.syntax
         case .mdLink(let inline):
             inline.syntax
         case .mdImage(let inline):
@@ -193,6 +267,10 @@ public enum InlineSyntax: Sendable, Hashable {
         case .wikilink(let inline):
             inline.syntax
         case .wikiEmbed(let inline):
+            inline.syntax
+        case .typedInline(let inline):
+            inline.syntax
+        case .structuredEmbed(let inline):
             inline.syntax
         }
     }
@@ -201,6 +279,8 @@ public enum InlineSyntax: Sendable, Hashable {
         switch self {
         case .codeSpan(let inline):
             inline.range
+        case .escapedPunctuation(let inline):
+            inline.range
         case .mdLink(let inline):
             inline.range
         case .mdImage(let inline):
@@ -209,22 +289,87 @@ public enum InlineSyntax: Sendable, Hashable {
             inline.range
         case .wikiEmbed(let inline):
             inline.range
+        case .typedInline(let inline):
+            inline.range
+        case .structuredEmbed(let inline):
+            inline.range
         }
     }
 }
 
 public enum ValueSyntax: Sendable, Hashable {
+    case scalar(ScalarValueSyntax)
+    case list(ListValueSyntax)
+    case record(RecordValueSyntax)
+    case typedConstructor(TypedConstructorSyntax)
+    case inlineLiteral(InlineLiteralSyntax)
+    case blockLiteral(BlockLiteralSyntax)
+    case reference(ReferenceSyntax)
+    case structuredEmbedValue(StructuredEmbedValueSyntax)
+
     public init?(_ syntax: SyntaxNodeHandle<LiminalLanguage>) {
-        _ = syntax
-        return nil
+        switch LiminalLanguage.kind(for: syntax.rawKind) {
+        case .scalarValue:
+            self = .scalar(ScalarValueSyntax(unchecked: syntax))
+        case .listValue:
+            self = .list(ListValueSyntax(unchecked: syntax))
+        case .recordValue:
+            self = .record(RecordValueSyntax(unchecked: syntax))
+        case .typedConstructor:
+            self = .typedConstructor(TypedConstructorSyntax(unchecked: syntax))
+        case .inlineLiteral:
+            self = .inlineLiteral(InlineLiteralSyntax(unchecked: syntax))
+        case .blockLiteral:
+            self = .blockLiteral(BlockLiteralSyntax(unchecked: syntax))
+        case .reference:
+            self = .reference(ReferenceSyntax(unchecked: syntax))
+        case .structuredEmbedValue:
+            self = .structuredEmbedValue(StructuredEmbedValueSyntax(unchecked: syntax))
+        default:
+            return nil
+        }
     }
 
     public var syntax: SyntaxNodeHandle<LiminalLanguage> {
-        switch self {}
+        switch self {
+        case .scalar(let value):
+            value.syntax
+        case .list(let value):
+            value.syntax
+        case .record(let value):
+            value.syntax
+        case .typedConstructor(let value):
+            value.syntax
+        case .inlineLiteral(let value):
+            value.syntax
+        case .blockLiteral(let value):
+            value.syntax
+        case .reference(let value):
+            value.syntax
+        case .structuredEmbedValue(let value):
+            value.syntax
+        }
     }
 
     public var range: TextRange {
-        switch self {}
+        switch self {
+        case .scalar(let value):
+            value.range
+        case .list(let value):
+            value.range
+        case .record(let value):
+            value.range
+        case .typedConstructor(let value):
+            value.range
+        case .inlineLiteral(let value):
+            value.range
+        case .blockLiteral(let value):
+            value.range
+        case .reference(let value):
+            value.range
+        case .structuredEmbedValue(let value):
+            value.range
+        }
     }
 }
 
@@ -264,6 +409,65 @@ public struct WikiEmbedBlockSyntax: LiminalSyntaxNode {
     }
 }
 
+@CambiumSyntaxNode(LiminalKind.self, for: .valueDeclaration)
+public struct ValueDeclarationSyntax: LiminalSyntaxNode {
+    public var constructor: TypedConstructorSyntax? {
+        firstChild(kind: .typedConstructor).map(TypedConstructorSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .typedBlock)
+public struct TypedBlockSyntax: LiminalSyntaxNode {
+    public var typeName: String {
+        firstToken(kind: .qname)?.text ?? ""
+    }
+
+    public var idText: String? {
+        firstToken(kind: .anchor)?.text
+    }
+
+    public var fields: FieldsSyntax? {
+        firstChild(kind: .fields).map(FieldsSyntax.init(unchecked:))
+    }
+
+    public var documentItems: [DocumentItemSyntax] {
+        childNodes().compactMap(DocumentItemSyntax.init)
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .mathBlock)
+public struct MathBlockSyntax: LiminalSyntaxNode {
+    public var texText: String {
+        firstToken(kind: .rawPayloadText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .htmlBlock)
+public struct HtmlBlockSyntax: LiminalSyntaxNode {
+    public var rawText: String {
+        firstToken(kind: .rawPayloadText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .structuredEmbedBlock)
+public struct StructuredEmbedBlockSyntax: LiminalSyntaxNode {
+    public var expectedType: String? {
+        firstToken(kind: .qname)?.text
+    }
+
+    public var fallbackContent: InlineContentSyntax? {
+        firstChild(kind: .linkLabel)?
+            .firstChild(kind: .inlineContent)
+            .map(InlineContentSyntax.init(unchecked:))
+    }
+
+    public var targetText: String {
+        firstChild(kind: .embedTarget)?
+            .firstToken(kind: .embedTargetText)?
+            .text ?? ""
+    }
+}
+
 @CambiumSyntaxNode(LiminalKind.self, for: .inlineContent)
 public struct InlineContentSyntax: LiminalSyntaxNode {
     public var inlineNodes: [InlineSyntax] {
@@ -275,6 +479,13 @@ public struct InlineContentSyntax: LiminalSyntaxNode {
 public struct CodeSpanSyntax: LiminalSyntaxNode {
     public var codeText: String {
         firstToken(kind: .codeText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .escapedPunctuation)
+public struct EscapedPunctuationSyntax: LiminalSyntaxNode {
+    public var escapedText: String {
+        directTokens().dropFirst().map(\.text).joined()
     }
 }
 
@@ -291,6 +502,13 @@ public struct MdLinkSyntax: LiminalSyntaxNode {
             .firstToken(kind: .linkDestinationText)?
             .text ?? ""
     }
+
+    public var titleText: String? {
+        firstChild(kind: .linkDestination)?
+            .firstChild(kind: .linkTitle)?
+            .firstToken(kind: .linkTitleText)?
+            .text
+    }
 }
 
 @CambiumSyntaxNode(LiminalKind.self, for: .mdImage)
@@ -305,6 +523,13 @@ public struct MdImageSyntax: LiminalSyntaxNode {
         firstChild(kind: .linkDestination)?
             .firstToken(kind: .linkDestinationText)?
             .text ?? ""
+    }
+
+    public var titleText: String? {
+        firstChild(kind: .linkDestination)?
+            .firstChild(kind: .linkTitle)?
+            .firstToken(kind: .linkTitleText)?
+            .text
     }
 }
 
@@ -331,6 +556,141 @@ public struct WikiEmbedSyntax: LiminalSyntaxNode {
 
     public var payloadText: String? {
         firstToken(kind: .rawPayloadText)?.text
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .typedInline)
+public struct TypedInlineSyntax: LiminalSyntaxNode {
+    public var constructor: TypedConstructorSyntax? {
+        firstChild(kind: .typedConstructor).map(TypedConstructorSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .structuredEmbed)
+public struct StructuredEmbedSyntax: LiminalSyntaxNode {
+    public var expectedType: String? {
+        firstToken(kind: .qname)?.text
+    }
+
+    public var fallbackContent: InlineContentSyntax? {
+        firstChild(kind: .linkLabel)?
+            .firstChild(kind: .inlineContent)
+            .map(InlineContentSyntax.init(unchecked:))
+    }
+
+    public var targetText: String {
+        firstChild(kind: .embedTarget)?
+            .firstToken(kind: .embedTargetText)?
+            .text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .typedConstructor)
+public struct TypedConstructorSyntax: LiminalSyntaxNode {
+    public var typeName: String {
+        firstToken(kind: .qname)?.text ?? ""
+    }
+
+    public var idText: String? {
+        firstToken(kind: .anchor)?.text
+    }
+
+    public var fields: FieldsSyntax? {
+        firstChild(kind: .fields).map(FieldsSyntax.init(unchecked:))
+    }
+
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .fields)
+public struct FieldsSyntax: LiminalSyntaxNode {
+    public var fields: [FieldSyntax] {
+        childNodes(kind: .field).map(FieldSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .field)
+public struct FieldSyntax: LiminalSyntaxNode {
+    public var name: String {
+        firstToken(kind: .fieldName)?.text ?? ""
+    }
+
+    public var value: ValueNodeSyntax? {
+        firstChild(kind: .value).map(ValueNodeSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .value)
+public struct ValueNodeSyntax: LiminalSyntaxNode {
+    public var payload: ValueSyntax? {
+        childNodes().compactMap(ValueSyntax.init).first
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .scalarValue)
+public struct ScalarValueSyntax: LiminalSyntaxNode {
+    public var token: LiminalTokenSyntax? {
+        directTokens().first
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .listValue)
+public struct ListValueSyntax: LiminalSyntaxNode {
+    public var values: [ValueNodeSyntax] {
+        childNodes(kind: .value).map(ValueNodeSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .recordValue)
+public struct RecordValueSyntax: LiminalSyntaxNode {
+    public var fields: FieldsSyntax? {
+        firstChild(kind: .fields).map(FieldsSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .inlineLiteral)
+public struct InlineLiteralSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .blockLiteral)
+public struct BlockLiteralSyntax: LiminalSyntaxNode {
+    public var documentItems: [DocumentItemSyntax] {
+        childNodes().compactMap(DocumentItemSyntax.init)
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .reference)
+public struct ReferenceSyntax: LiminalSyntaxNode {
+    public var qnameText: String? {
+        firstToken(kind: .qname)?.text
+    }
+
+    public var externalTargetText: String? {
+        firstToken(kind: .externalReferenceText)?.text
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .structuredEmbedValue)
+public struct StructuredEmbedValueSyntax: LiminalSyntaxNode {
+    public var expectedType: String? {
+        firstToken(kind: .qname)?.text
+    }
+
+    public var fallbackContent: InlineContentSyntax? {
+        firstChild(kind: .linkLabel)?
+            .firstChild(kind: .inlineContent)
+            .map(InlineContentSyntax.init(unchecked:))
+    }
+
+    public var targetText: String {
+        firstChild(kind: .embedTarget)?
+            .firstToken(kind: .embedTargetText)?
+            .text ?? ""
     }
 }
 

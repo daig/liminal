@@ -21,6 +21,34 @@ public struct LiminalLowerer: Sendable {
             lowerParagraph(paragraph).map { .block(.node($0)) }
         case .atxHeading(let heading):
             lowerHeading(heading).map { .block(.node($0)) }
+        case .valueDeclaration(let declaration):
+            // Syntactic classification only. Phase 3 schema resolution can
+            // reclassify generic constructors once their type kind is known.
+            declaration.constructor.map { .value(lowerTypedConstructor($0, kind: .value)) }
+        case .typedBlock(let block):
+            // Syntactic classification only; schema validation owns final type
+            // resolution and context checks.
+            .block(.node(lowerTypedBlock(block)))
+        case .mathBlock(let block):
+            .block(.node(LiminalNode(
+                kind: .block,
+                type: "MathBlock",
+                fields: [
+                    field("tex", .scalar(.string(block.texText)))
+                ],
+                source: surface("mathBlock", block.syntax)
+            )))
+        case .htmlBlock(let block):
+            .block(.node(LiminalNode(
+                kind: .block,
+                type: "HtmlBlock",
+                fields: [
+                    field("raw", .scalar(.string(block.rawText)))
+                ],
+                source: surface("htmlBlock", block.syntax)
+            )))
+        case .structuredEmbedBlock(let embed):
+            .block(.node(lowerStructuredEmbedBlock(embed)))
         case .wikiEmbedBlock(let embed):
             .block(.node(lowerWikiEmbedBlock(embed)))
         }
@@ -118,6 +146,8 @@ public struct LiminalLowerer: Sendable {
                 ],
                 source: surface("codeSpan", codeSpan.syntax)
             ))
+        case .escapedPunctuation(let punctuation):
+            .text(punctuation.escapedText)
         case .mdLink(let link):
             lowerMarkdownLink(link)
         case .mdImage(let image):
@@ -126,17 +156,22 @@ public struct LiminalLowerer: Sendable {
             lowerWikilink(wikilink)
         case .wikiEmbed(let embed):
             lowerWikiEmbed(embed)
+        case .typedInline(let typedInline):
+            typedInline.constructor.map { constructor in
+                .node(lowerTypedConstructor(constructor, kind: .inline))
+            }
+        case .structuredEmbed(let embed):
+            lowerStructuredEmbedInline(embed)
         case nil:
             nil
         }
     }
 
     private func lowerMarkdownLink(_ link: MdLinkSyntax) -> LiminalInline {
-        let destination = parseLinkDestination(link.destinationText)
         var fields = [
-            field("href", .scalar(.bare(destination.target)))
+            field("href", .scalar(.bare(link.destinationText)))
         ]
-        if let title = destination.title {
+        if let title = link.titleText {
             fields.append(field("title", .scalar(.string(title))))
         }
 
@@ -150,12 +185,11 @@ public struct LiminalLowerer: Sendable {
     }
 
     private func lowerMarkdownImage(_ image: MdImageSyntax) -> LiminalInline {
-        let destination = parseLinkDestination(image.destinationText)
         var fields = [
-            field("src", .scalar(.bare(destination.target))),
+            field("src", .scalar(.bare(image.destinationText))),
             field("alt", .inlineLiteral(lowerInlineContent(image.altContent)))
         ]
-        if let title = destination.title {
+        if let title = image.titleText {
             fields.append(field("title", .scalar(.string(title))))
         }
 
@@ -196,26 +230,193 @@ public struct LiminalLowerer: Sendable {
         ))
     }
 
-    private func parseLinkDestination(_ raw: String) -> (target: String, title: String?) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let quote = trimmed.last, quote == "\"" || quote == "'" else {
-            return (trimmed, nil)
+    private func lowerTypedBlock(_ block: TypedBlockSyntax) -> LiminalNode {
+        LiminalNode(
+            kind: .block,
+            type: QualifiedName(block.typeName),
+            id: block.idText.map { Anchor($0) },
+            fields: lowerFields(block.fields),
+            content: .blocks(lowerDocumentItemsToBlocks(block.documentItems)),
+            source: surface("typedBlock", block.syntax)
+        )
+    }
+
+    private func lowerTypedConstructor(
+        _ constructor: TypedConstructorSyntax,
+        kind: NodeKind
+    ) -> LiminalNode {
+        LiminalNode(
+            kind: kind,
+            type: QualifiedName(constructor.typeName),
+            id: constructor.idText.map { Anchor($0) },
+            fields: lowerFields(constructor.fields),
+            content: constructor.inlineContent.map { .inline(lowerInlineContent($0)) },
+            source: surface("typedConstructor", constructor.syntax)
+        )
+    }
+
+    private func lowerStructuredEmbedBlock(_ embed: StructuredEmbedBlockSyntax) -> LiminalNode {
+        LiminalNode(
+            kind: .block,
+            type: "EmbedBlock",
+            fields: structuredEmbedFields(
+                expectedType: embed.expectedType,
+                fallbackContent: embed.fallbackContent,
+                targetText: embed.targetText
+            ),
+            source: surface("structuredEmbedBlock", embed.syntax)
+        )
+    }
+
+    private func lowerStructuredEmbedInline(_ embed: StructuredEmbedSyntax) -> LiminalInline {
+        .node(LiminalNode(
+            kind: .inline,
+            type: "EmbedInline",
+            fields: structuredEmbedFields(
+                expectedType: embed.expectedType,
+                fallbackContent: embed.fallbackContent,
+                targetText: embed.targetText
+            ),
+            source: surface("structuredEmbed", embed.syntax)
+        ))
+    }
+
+    private func lowerStructuredEmbedValue(_ embed: StructuredEmbedValueSyntax) -> LiminalValue {
+        .embed(LiminalEmbed(
+            expectedType: embed.expectedType.map { QualifiedName($0) },
+            fallback: lowerInlineContent(embed.fallbackContent),
+            target: embed.targetText
+        ))
+    }
+
+    private func structuredEmbedFields(
+        expectedType: String?,
+        fallbackContent: InlineContentSyntax?,
+        targetText: String
+    ) -> [LiminalField] {
+        var result: [LiminalField] = []
+        if let expectedType {
+            result.append(field("expected", .scalar(.bare(expectedType))))
+        }
+        if let fallbackContent {
+            result.append(field("fallback", .inlineLiteral(lowerInlineContent(fallbackContent))))
+        }
+        result.append(field("target", .scalar(.string(targetText))))
+        return result
+    }
+
+    private func lowerFields(_ fields: FieldsSyntax?) -> [LiminalField] {
+        fields?.fields.map { fieldSyntax in
+            field(
+                FieldName(fieldSyntax.name),
+                fieldSyntax.value.map(lowerValue) ?? .scalar(.null)
+            )
+        } ?? []
+    }
+
+    private func lowerValue(_ value: ValueNodeSyntax) -> LiminalValue {
+        guard let payload = value.payload else {
+            return .scalar(.null)
         }
 
-        var cursor = trimmed.index(before: trimmed.endIndex)
-        while cursor > trimmed.startIndex {
-            cursor = trimmed.index(before: cursor)
-            if trimmed[cursor] == quote {
-                let titleStart = trimmed.index(after: cursor)
-                let beforeTitle = String(trimmed[..<cursor]).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !beforeTitle.isEmpty else {
-                    break
-                }
-                return (beforeTitle, String(trimmed[titleStart..<trimmed.index(before: trimmed.endIndex)]))
+        switch payload {
+        case .scalar(let scalar):
+            return lowerScalarValue(scalar)
+        case .list(let list):
+            return .list(list.values.map(lowerValue))
+        case .record(let record):
+            return .record(lowerFields(record.fields))
+        case .typedConstructor(let constructor):
+            return .node(lowerTypedConstructor(constructor, kind: .value))
+        case .inlineLiteral(let literal):
+            return .inlineLiteral(lowerInlineContent(literal.inlineContent))
+        case .blockLiteral(let literal):
+            return .blockLiteral(lowerDocumentItemsToBlocks(literal.documentItems))
+        case .reference(let reference):
+            return .reference(lowerReference(reference))
+        case .structuredEmbedValue(let embed):
+            return lowerStructuredEmbedValue(embed)
+        }
+    }
+
+    private func lowerScalarValue(_ scalar: ScalarValueSyntax) -> LiminalValue {
+        guard let token = scalar.token else {
+            return .scalar(.null)
+        }
+
+        switch token.kind {
+        case .quotedStringLiteral:
+            return .scalar(.string(decodeQuotedString(token.text)))
+        case .integerLiteral:
+            return .scalar(.integer(token.text))
+        case .numberLiteral:
+            return .scalar(.number(token.text))
+        case .booleanLiteral:
+            return .scalar(.boolean(token.text == "true"))
+        case .nullLiteral:
+            return .scalar(.null)
+        default:
+            return .scalar(.bare(token.text))
+        }
+    }
+
+    private func lowerReference(_ reference: ReferenceSyntax) -> LiminalReference {
+        if let externalTargetText = reference.externalTargetText {
+            return .external(externalTargetText)
+        }
+
+        let qname = QualifiedName(reference.qnameText ?? "")
+        guard qname.parts.count > 1 else {
+            return .local(Anchor(qname.rawValue))
+        }
+
+        let namespace = QualifiedName(parts: Array(qname.parts.dropLast()))
+        return .qualified(namespace: namespace, id: Anchor(qname.parts.last ?? ""))
+    }
+
+    private func lowerDocumentItemsToBlocks(_ items: [DocumentItemSyntax]) -> [LiminalBlock] {
+        items.compactMap { item in
+            switch lowerDocumentItem(item) {
+            case .block(let block)?:
+                block
+            case .value?, nil:
+                nil
             }
         }
+    }
 
-        return (trimmed, nil)
+    private func decodeQuotedString(_ text: String) -> String {
+        guard text.count >= 2, text.first == "\"", text.last == "\"" else {
+            return text.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        }
+
+        var result = ""
+        var cursor = text.index(after: text.startIndex)
+        let end = text.index(before: text.endIndex)
+        while cursor < end {
+            let character = text[cursor]
+            if character == "\\", text.index(after: cursor) < end {
+                cursor = text.index(after: cursor)
+                switch text[cursor] {
+                case "\"":
+                    result.append("\"")
+                case "\\":
+                    result.append("\\")
+                case "n":
+                    result.append("\n")
+                case "r":
+                    result.append("\r")
+                case "t":
+                    result.append("\t")
+                default:
+                    result.append(text[cursor])
+                }
+            } else {
+                result.append(character)
+            }
+            cursor = text.index(after: cursor)
+        }
+        return result
     }
 
     private func field(_ name: FieldName, _ value: LiminalValue) -> LiminalField {
@@ -228,10 +429,7 @@ public struct LiminalLowerer: Sendable {
     ) -> SurfaceForm {
         SurfaceForm(
             name: name,
-            range: syntax.textRange,
-            rawSource: syntax.withCursor { node in
-                node.makeString()
-            }
+            range: syntax.textRange
         )
     }
 }

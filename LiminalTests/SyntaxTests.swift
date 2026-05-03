@@ -6,13 +6,15 @@ import Testing
 struct SyntaxTests {
     @Test("syntax kinds use stable Phase 0 raw bands")
     func syntaxKindRawBandsAreStable() {
-        #expect(LiminalLanguage.serializationVersion == 2)
+        #expect(LiminalLanguage.serializationVersion == 3)
 
         #expect(LiminalKind.whitespace.rawValue == 1)
         #expect(LiminalKind.newline.rawValue == 2)
 
         #expect(LiminalKind.atSign.rawValue == 10)
+        #expect(LiminalKind.semicolon.rawValue == 41)
         #expect(LiminalKind.rawPayloadText.rawValue == 72)
+        #expect(LiminalKind.errorText.rawValue == 82)
 
         #expect(LiminalKind.root.rawValue == 100)
         #expect(LiminalKind.atxHeading.rawValue == 106)
@@ -45,11 +47,13 @@ struct SyntaxTests {
         #expect(LiminalLanguage.isNode(.error))
 
         #expect(LiminalLanguage.isToken(.rawPayloadText))
+        #expect(LiminalLanguage.isToken(.errorText))
         #expect(LiminalLanguage.isToken(.qname))
         #expect(LiminalLanguage.isToken(.commentText))
         #expect(!LiminalLanguage.isToken(.root))
 
         #expect(LiminalLanguage.name(for: .rawPayloadText) == "rawPayloadText")
+        #expect(LiminalLanguage.name(for: .errorText) == "errorText")
         #expect(LiminalLanguage.kind(for: RawSyntaxKind(100)) == .root)
         #expect(LiminalLanguage.kind(for: RawSyntaxKind(900)) == .missing)
     }
@@ -61,10 +65,12 @@ struct SyntaxTests {
         #expect(string(for: LiminalLanguage.staticText(for: .rightParen)) == ")")
         #expect(string(for: LiminalLanguage.staticText(for: .backslash)) == "\\")
         #expect(string(for: LiminalLanguage.staticText(for: .doubleQuote)) == "\"")
+        #expect(string(for: LiminalLanguage.staticText(for: .semicolon)) == ";")
 
         #expect(LiminalLanguage.staticText(for: .whitespace) == nil)
         #expect(LiminalLanguage.staticText(for: .qname) == nil)
         #expect(LiminalLanguage.staticText(for: .rawPayloadText) == nil)
+        #expect(LiminalLanguage.staticText(for: .errorText) == nil)
         #expect(LiminalLanguage.staticText(for: .commentText) == nil)
     }
 
@@ -148,6 +154,130 @@ struct SyntaxTests {
         #expect(embed.payloadText == "payload")
     }
 
+    @Test("markdown links and images expose CST title tokens")
+    func markdownLinksAndImagesExposeCSTTitleTokens() throws {
+        let source = #"See [site]( https://example.org "Title" ) and ![Alt](image.png 'Caption')."#
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes,
+              inlineNodes.count == 2,
+              case .mdLink(let link) = inlineNodes[0],
+              case .mdImage(let image) = inlineNodes[1]
+        else {
+            Issue.record("expected markdown link and image nodes")
+            return
+        }
+
+        #expect(link.destinationText == "https://example.org")
+        #expect(link.titleText == "Title")
+        #expect(image.destinationText == "image.png")
+        #expect(image.titleText == "Caption")
+    }
+
+    @Test("escaped punctuation is represented by explicit CST nodes")
+    func escapedPunctuationIsRepresentedByExplicitCSTNodes() throws {
+        let source = #"Escaped \*literal\* and \[bracket\]."#
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes
+        else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let escapedText = inlineNodes.compactMap { inline -> String? in
+            guard case .escapedPunctuation(let punctuation) = inline else {
+                return nil
+            }
+            return punctuation.escapedText
+        }
+        #expect(escapedText == ["*", "*", "[", "]"])
+    }
+
+    @Test("Slice 2 parser emits generic typed and value document items losslessly")
+    func slice2ParserEmitsGenericTypedAndValueDocumentItemsLosslessly() throws {
+        let source = """
+        @Person#ada{name: "Ada", born: 1815-12-10}[Ada]
+
+        :::Callout#warning{kind: warning}
+        Body [[Note]]
+        :::
+
+        !{Person}[Ada](#ada)
+
+        :::MathBlock
+        E = mc^2
+        :::
+        :::HtmlBlock
+        <div>raw</div>
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+
+        result.tree.withRoot { root in
+            var childKinds: [LiminalKind] = []
+            root.forEachChild { child in
+                childKinds.append(child.kind)
+            }
+
+            #expect(childKinds == [
+                .valueDeclaration,
+                .blankLine,
+                .typedBlock,
+                .blankLine,
+                .structuredEmbedBlock,
+                .blankLine,
+                .mathBlock,
+                .htmlBlock
+            ])
+        }
+    }
+
+    @Test("typed root overlay exposes Slice 2 constructs")
+    func typedRootOverlayExposesSlice2Constructs() throws {
+        let source = """
+        @Person#ada{name: "Ada"}[Ada]
+        :::Callout#warning{kind: warning}
+        Body
+        :::
+        !{Person}[Ada](#ada)
+        """
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .valueDeclaration(let declaration) = root.documentItems[0],
+              let constructor = declaration.constructor
+        else {
+            Issue.record("expected value declaration")
+            return
+        }
+        #expect(constructor.typeName == "Person")
+        #expect(constructor.idText == "ada")
+        #expect(constructor.fields?.fields.map(\.name) == ["name"])
+        #expect(constructor.inlineContent?.sourceText == "Ada")
+
+        guard case .typedBlock(let block) = root.documentItems[1] else {
+            Issue.record("expected typed block")
+            return
+        }
+        #expect(block.typeName == "Callout")
+        #expect(block.idText == "warning")
+        #expect(block.fields?.fields.map(\.name) == ["kind"])
+        #expect(block.documentItems.count == 1)
+
+        guard case .structuredEmbedBlock(let embed) = root.documentItems[2] else {
+            Issue.record("expected structured embed block")
+            return
+        }
+        #expect(embed.expectedType == "Person")
+        #expect(embed.fallbackContent?.sourceText == "Ada")
+        #expect(embed.targetText == "#ada")
+    }
+
     @Test("typed dispatch points accept emitted Slice 1 nodes and reject root")
     func typedDispatchPointsAcceptEmittedSlice1NodesAndRejectRoot() throws {
         let result = try LiminalParser().parse("# Heading\n\nBody with [link](target)\n")
@@ -186,6 +316,28 @@ struct SyntaxTests {
             "missing closing wikilink",
             "missing closing code span delimiter"
         ])
+    }
+
+    @Test("Slice 2 parser recovers inside incomplete typed value syntax")
+    func slice2ParserRecoversInsideIncompleteTypedValueSyntax() throws {
+        let source = "@Person{name \"Ada\""
+        let result = try LiminalParser().parse(source)
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.map(\.severity).allSatisfy { $0 == .error })
+        #expect(result.diagnostics.map(\.message).contains("missing field colon"))
+        #expect(result.diagnostics.map(\.message).contains("missing closing fields delimiter"))
+    }
+
+    @Test("structured syntax errors use error text instead of raw payload text")
+    func structuredSyntaxErrorsUseErrorTextInsteadOfRawPayloadText() throws {
+        let source = "@Person{=bad}"
+        let result = try LiminalParser().parse(source)
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.map(\.message).contains("expected field"))
+        #expect(result.rootSyntax.firstDescendantToken(kind: .errorText)?.text == "=bad")
+        #expect(result.rootSyntax.firstDescendantToken(kind: .rawPayloadText) == nil)
     }
 
     @Test("parse session exposes the most recently parsed tree")
