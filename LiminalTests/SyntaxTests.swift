@@ -175,6 +175,41 @@ struct SyntaxTests {
         #expect(image.titleText == "Caption")
     }
 
+    @Test("reference target accessors expose direct CST tokens and ranges")
+    func referenceTargetAccessorsExposeDirectCSTTokensAndRanges() throws {
+        let source = #"See [[Target|Alias]] and [site](https://example.org "Title")."#
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes,
+              inlineNodes.count == 2,
+              case .wikilink(let wikilink) = inlineNodes[0],
+              case .mdLink(let link) = inlineNodes[1]
+        else {
+            Issue.record("expected wikilink and markdown link nodes")
+            return
+        }
+
+        #expect(wikilink.targetTextToken?.text == "Target")
+        let wikilinkTargetRange = try sourceRange(of: "Target", in: source)
+        #expect(wikilink.targetTextToken?.range == wikilinkTargetRange)
+        #expect(link.destinationTextToken?.text == "https://example.org")
+        let linkDestinationRange = try sourceRange(of: "https://example.org", in: source)
+        #expect(link.destinationTextToken?.range == linkDestinationRange)
+        #expect(link.titleTextToken?.text == "Title")
+    }
+
+    @Test("inline content plaintext projection follows CST inline semantics")
+    func inlineContentPlainTextProjectionFollowsCSTInlineSemantics() throws {
+        #expect(try paragraphPlainText("Plain text\n") == "Plain text")
+        #expect(try paragraphPlainText("Use `code`\n") == "Use code")
+        #expect(try paragraphPlainText("a\nb\\\nc\n") == "a b\nc")
+        #expect(try paragraphPlainText("[[Target|Alias]] and [[Solo]]\n") == "Alias and Solo")
+        #expect(try paragraphPlainText("![Alt](image.png)\n") == "Alt")
+        #expect(try paragraphPlainText("See @Badge[Label]\n") == "See Label")
+        #expect(try paragraphPlainText("[[Target|See `code`]]\n") == "See code")
+    }
+
     @Test("escaped punctuation is represented by explicit CST nodes")
     func escapedPunctuationIsRepresentedByExplicitCSTNodes() throws {
         let source = #"Escaped \*literal\* and \[bracket\]."#
@@ -357,6 +392,26 @@ private func string(for text: StaticString?) -> String? {
     text?.withUTF8Buffer { bytes in
         String(decoding: bytes, as: UTF8.self)
     }
+}
+
+private func paragraphPlainText(_ source: String) throws -> String {
+    let root = try LiminalParser().parse(source).rootSyntax
+    guard case .paragraph(let paragraph) = root.documentItems.first,
+          let inlineContent = paragraph.inlineContent
+    else {
+        Issue.record("expected paragraph")
+        return ""
+    }
+    return inlineContent.plainText
+}
+
+private func sourceRange(of needle: String, in source: String) throws -> TextRange {
+    let range = try #require(source.range(of: needle))
+    let start = source[..<range.lowerBound].utf8.count
+    return TextRange(
+        start: TextSize(UInt32(start)),
+        length: TextSize(UInt32(needle.utf8.count))
+    )
 }
 
 struct ParseExpectation: CustomTestStringConvertible, Sendable {

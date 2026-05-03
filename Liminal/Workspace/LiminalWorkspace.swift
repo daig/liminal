@@ -73,17 +73,20 @@ public struct DocumentReference: Equatable, Hashable, Sendable {
     public let target: WikiTarget
     public let alias: String?
     public let sourceRange: LiminalSourceRange
+    public let targetRange: LiminalSourceRange?
 
     public init(
         kind: ReferenceKind,
         target: WikiTarget,
         alias: String? = nil,
-        sourceRange: LiminalSourceRange
+        sourceRange: LiminalSourceRange,
+        targetRange: LiminalSourceRange? = nil
     ) {
         self.kind = kind
         self.target = target
         self.alias = alias
         self.sourceRange = sourceRange
+        self.targetRange = targetRange
     }
 }
 
@@ -109,11 +112,11 @@ public struct DocumentIndex: Equatable, Sendable {
 
     public static func build(from parseResult: LiminalParseResult) -> DocumentIndex {
         var builder = DocumentIndexBuilder()
-        return builder.build(document: LiminalLowerer().lower(parseResult))
+        return builder.build(root: parseResult.rootSyntax)
     }
 
     public func reference(containing offset: TextSize) -> DocumentReference? {
-        references.first { $0.sourceRange.contains(offset) }
+        innermostReference(in: references, containing: offset) { $0.sourceRange }
     }
 
     public func blockOffset(for anchor: LinkNavigationAnchor) -> TextSize? {
@@ -130,248 +133,28 @@ public struct DocumentIndex: Equatable, Sendable {
     }
 }
 
-private struct DocumentIndexBuilder {
-    private var blockOffsets: [TextSize] = []
-    private var headings: [HeadingAnchor] = []
-    private var blocks: [BlockAnchor] = []
-    private var references: [DocumentReference] = []
+private func innermostReference<Reference>(
+    in references: [Reference],
+    containing offset: TextSize,
+    sourceRange: (Reference) -> LiminalSourceRange
+) -> Reference? {
+    var best: Reference?
+    var bestLength: UInt32?
 
-    mutating func build(document: LiminalDocument) -> DocumentIndex {
-        for item in document.items {
-            switch item {
-            case .block(.node(let node)), .value(let node):
-                append(node)
-            }
+    for reference in references {
+        let range = sourceRange(reference)
+        guard range.contains(offset) else {
+            continue
         }
 
-        return DocumentIndex(
-            blockOffsets: blockOffsets,
-            headings: headings,
-            blocks: blocks,
-            references: references
-        )
-    }
-
-    private mutating func append(_ node: LiminalNode) {
-        guard let range = node.source?.range else {
-            return
-        }
-
-        blockOffsets.append(range.start)
-
-        switch node.type.rawValue {
-        case "Heading":
-            let title = plainText(node.content)
-            if !WikiLinkNormalizer.headingLookupKey(title).isEmpty {
-                headings.append(HeadingAnchor(title: title, sourceOffset: range.start))
-            }
-            appendReferences(in: node.content)
-
-        case "Paragraph":
-            appendReferences(in: node.content)
-
-        case "WikiEmbedBlock":
-            appendWikiEmbedReference(node, kind: .embed)
-
-        default:
-            appendReferences(in: node)
+        let length = range.length.rawValue
+        if best == nil || length < (bestLength ?? UInt32.max) {
+            best = reference
+            bestLength = length
         }
     }
 
-    private mutating func appendReferences(in content: LiminalContent?) {
-        switch content {
-        case .inline(let inlines):
-            appendReferences(in: inlines)
-        case .blocks(let blocks):
-            for block in blocks {
-                if case .node(let node) = block {
-                    appendReferences(in: node)
-                }
-            }
-        case nil:
-            break
-        }
-    }
-
-    private mutating func appendReferences(in inlines: [LiminalInline]) {
-        for inline in inlines {
-            switch inline {
-            case .text, .interpolation:
-                break
-            case .embed:
-                // Source-backed inline embeds lower as nodes with SurfaceForm ranges.
-                // Plain LiminalEmbed values are semantic/runtime values and are not indexable here.
-                break
-            case .node(let node):
-                appendReferences(in: node)
-            }
-        }
-    }
-
-    private mutating func appendReferences(in node: LiminalNode) {
-        switch node.type.rawValue {
-        case "WikiLink":
-            appendWikiReference(node, kind: .link)
-        case "WikiEmbedInline", "WikiEmbedBlock":
-            appendWikiEmbedReference(node, kind: .embed)
-        case "Link":
-            appendReferences(in: node.content)
-        case "Image":
-            if let alt = fieldValue(named: "alt", in: node),
-               case .inlineLiteral(let inlines) = alt
-            {
-                appendReferences(in: inlines)
-            }
-        default:
-            appendReferences(in: node.content)
-            appendReferences(in: node.fields)
-        }
-    }
-
-    private mutating func appendReferences(in fields: [LiminalField]) {
-        for field in fields {
-            appendReferences(in: field.value)
-        }
-    }
-
-    private mutating func appendReferences(in value: LiminalValue) {
-        switch value {
-        case .scalar, .reference, .embed:
-            // .embed loses its source range during lowering today; slice 3
-            // unifies EmbedValue with the node-shaped embed surfaces.
-            break
-        case .list(let values):
-            for nested in values {
-                appendReferences(in: nested)
-            }
-        case .record(let fields):
-            appendReferences(in: fields)
-        case .node(let node):
-            appendReferences(in: node)
-        case .inlineLiteral(let inlines):
-            appendReferences(in: inlines)
-        case .blockLiteral(let blocks):
-            for block in blocks {
-                if case .node(let node) = block {
-                    appendReferences(in: node)
-                }
-            }
-        }
-    }
-
-    private mutating func appendWikiReference(_ node: LiminalNode, kind: ReferenceKind) {
-        guard let target = fieldString(named: "target", in: node),
-              let range = node.source?.range
-        else {
-            return
-        }
-
-        let alias: String?
-        if case .inline(let inlines) = node.content {
-            alias = plainText(inlines)
-        } else {
-            alias = nil
-        }
-
-        references.append(DocumentReference(
-            kind: kind,
-            target: WikiTarget.parse(target),
-            alias: alias,
-            sourceRange: range
-        ))
-    }
-
-    private mutating func appendWikiEmbedReference(_ node: LiminalNode, kind: ReferenceKind) {
-        guard let target = fieldString(named: "target", in: node),
-              let range = node.source?.range
-        else {
-            return
-        }
-
-        references.append(DocumentReference(
-            kind: kind,
-            target: WikiTarget.parse(target),
-            alias: fieldString(named: "payload", in: node),
-            sourceRange: range
-        ))
-    }
-
-    private func plainText(_ content: LiminalContent?) -> String {
-        guard case .inline(let inlines) = content else {
-            return ""
-        }
-        return plainText(inlines)
-    }
-
-    private func plainText(_ inlines: [LiminalInline]) -> String {
-        inlines.map(plainText).joined()
-    }
-
-    private func plainText(_ inline: LiminalInline) -> String {
-        switch inline {
-        case .text(let text):
-            text
-        case .interpolation(let expression):
-            expression.rawValue
-        case .embed(let embed):
-            embed.fallback.isEmpty ? embed.target : plainText(embed.fallback)
-        case .node(let node):
-            plainText(node)
-        }
-    }
-
-    private func plainText(_ node: LiminalNode) -> String {
-        switch node.type.rawValue {
-        case "SoftBreak":
-            return " "
-        case "HardBreak":
-            return "\n"
-        case "CodeSpan":
-            return fieldString(named: "text", in: node) ?? ""
-        case "WikiLink":
-            if case .inline(let inlines) = node.content {
-                return plainText(inlines)
-            }
-            return fieldString(named: "target", in: node) ?? ""
-        case "WikiEmbedInline":
-            return fieldString(named: "payload", in: node)
-                ?? fieldString(named: "target", in: node)
-                ?? ""
-        case "Image":
-            if let alt = fieldValue(named: "alt", in: node),
-               case .inlineLiteral(let inlines) = alt
-            {
-                return plainText(inlines)
-            }
-            return ""
-        default:
-            return plainText(node.content)
-        }
-    }
-
-    private func fieldString(named name: FieldName, in node: LiminalNode) -> String? {
-        guard let value = fieldValue(named: name, in: node) else {
-            return nil
-        }
-
-        switch value {
-        case .scalar(.string(let value)),
-             .scalar(.integer(let value)),
-             .scalar(.number(let value)),
-             .scalar(.bare(let value)):
-            return value
-        case .scalar(.boolean(let value)):
-            return String(value)
-        case .scalar(.null):
-            return nil
-        default:
-            return nil
-        }
-    }
-
-    private func fieldValue(named name: FieldName, in node: LiminalNode) -> LiminalValue? {
-        node.fields.first { $0.name == name }?.value
-    }
+    return best
 }
 
 public struct WikiTarget: Equatable, Hashable, Sendable {
@@ -489,6 +272,7 @@ public struct ResolvedReference: Identifiable, Equatable, Hashable, Sendable {
     public let target: WikiTarget
     public let alias: String?
     public let sourceRange: LiminalSourceRange
+    public let targetRange: LiminalSourceRange?
     public let sourceSnippet: String
     public let resolution: ReferenceResolution
 
@@ -508,6 +292,7 @@ public struct ResolvedReference: Identifiable, Equatable, Hashable, Sendable {
         target: WikiTarget,
         alias: String?,
         sourceRange: LiminalSourceRange,
+        targetRange: LiminalSourceRange? = nil,
         sourceSnippet: String,
         resolution: ReferenceResolution
     ) {
@@ -516,6 +301,7 @@ public struct ResolvedReference: Identifiable, Equatable, Hashable, Sendable {
         self.target = target
         self.alias = alias
         self.sourceRange = sourceRange
+        self.targetRange = targetRange
         self.sourceSnippet = sourceSnippet
         self.resolution = resolution
     }
@@ -673,6 +459,7 @@ public struct VaultLinkIndex: Equatable, Sendable {
                     target: reference.target,
                     alias: reference.alias,
                     sourceRange: reference.sourceRange,
+                    targetRange: reference.targetRange,
                     sourceSnippet: snippet(in: note.content, around: reference.sourceRange),
                     resolution: resolver.resolve(target: reference.target, from: note.id)
                 )
@@ -722,7 +509,7 @@ public struct VaultLinkIndex: Equatable, Sendable {
 
     public func reference(in noteID: URL?, at offset: TextSize) -> ResolvedReference? {
         guard let noteID else { return nil }
-        return outgoingByNote[noteID]?.first { $0.sourceRange.contains(offset) }
+        return innermostReference(in: outgoingByNote[noteID] ?? [], containing: offset) { $0.sourceRange }
     }
 
     public func resolve(target: WikiTarget, from sourceNoteID: URL) -> ReferenceResolution {

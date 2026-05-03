@@ -1,3 +1,4 @@
+import CambiumCore
 import Foundation
 import Testing
 @testable import Liminal
@@ -152,6 +153,37 @@ struct WorkspaceLinkingTests {
         #expect(index.blockOffset(for: .block("block-id")) == 35)
     }
 
+    @Test("document index returns innermost containing reference")
+    func documentIndexReturnsInnermostContainingReference() throws {
+        let parent = DocumentReference(
+            kind: .link,
+            target: WikiTarget.parse("Parent"),
+            sourceRange: LiminalSourceRange(start: 0, length: 20)
+        )
+        let child = DocumentReference(
+            kind: .link,
+            target: WikiTarget.parse("Child"),
+            sourceRange: LiminalSourceRange(start: 5, length: 4)
+        )
+        let nestedIndex = DocumentIndex(references: [parent, child])
+
+        #expect(nestedIndex.reference(containing: 6) == child)
+
+        let firstTie = DocumentReference(
+            kind: .link,
+            target: WikiTarget.parse("First"),
+            sourceRange: LiminalSourceRange(start: 30, length: 5)
+        )
+        let secondTie = DocumentReference(
+            kind: .link,
+            target: WikiTarget.parse("Second"),
+            sourceRange: LiminalSourceRange(start: 30, length: 5)
+        )
+        let tieIndex = DocumentIndex(references: [firstTie, secondTie])
+
+        #expect(tieIndex.reference(containing: 32) == firstTie)
+    }
+
     @Test("document index builds headings and wiki references from Slice 1 CST")
     func documentIndexBuildsHeadingsAndWikiReferencesFromSlice1CST() throws {
         let source = "# Section Title\n\nParagraph [[Target#Heading|Alias]] and ![[Embed#^block|payload]].\n![[BlockEmbed|raw payload]]\n"
@@ -178,6 +210,44 @@ struct WorkspaceLinkingTests {
         #expect(index.references[2].alias == "raw payload")
     }
 
+    @Test("document index stores target token ranges while preserving containment ranges")
+    func documentIndexStoresTargetTokenRangesWhilePreservingContainmentRanges() throws {
+        let source = "See [[Target|Alias]].\n"
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+        let reference = try #require(index.references.first)
+
+        #expect(reference.target.rawTargetString == "Target")
+        #expect(reference.alias == "Alias")
+        let targetRange = try sourceRange(of: "Target", in: source)
+        let constructRange = try sourceRange(of: "[[Target|Alias]]", in: source)
+        #expect(reference.targetRange == targetRange)
+        #expect(reference.sourceRange == constructRange)
+
+        for marker in ["[[", "Target", "|", "Alias", "]]"] {
+            let offset = try sourceRange(of: marker, in: source).start
+            #expect(index.reference(containing: offset) == reference)
+        }
+        #expect(index.reference(containing: reference.sourceRange.end) == nil)
+    }
+
+    @Test("target ranges propagate through vault link indexes")
+    func targetRangesPropagateThroughVaultLinkIndexes() throws {
+        let sourceNote = makeNote(relativePath: "Source.md", content: "See [[Target]].\n")
+        let targetNote = makeNote(relativePath: "Target.md")
+        let sourceIndex = try DocumentIndex.build(from: LiminalParser().parse(sourceNote.content))
+
+        let index = VaultLinkIndex.build(
+            notes: [sourceNote, targetNote],
+            documentIndexes: [sourceNote.id: sourceIndex]
+        )
+        let reference = try #require(index.outgoing(for: sourceNote.id).first)
+
+        #expect(reference.target.rawTargetString == "Target")
+        let targetRange = try sourceRange(of: "Target", in: sourceNote.content)
+        #expect(reference.targetRange == targetRange)
+    }
+
     @Test("document index walks references in value declarations and typed-block bodies")
     func documentIndexWalksReferencesInValueDeclarationsAndTypedBlockBodies() throws {
         let source = """
@@ -197,6 +267,49 @@ struct WorkspaceLinkingTests {
         // Both top-level items contribute to block offsets: the value
         // declaration and the typed block.
         #expect(index.blockOffsets.count == 2)
+    }
+
+    @Test("only top-level headings populate the heading anchor space")
+    func onlyTopLevelHeadingsPopulateTheHeadingAnchorSpace() throws {
+        let source = """
+        # Top-Level Heading
+
+        :::Callout
+        # Heading Inside Typed Block
+        Body text.
+        :::
+
+        @Card{
+          body: @{
+            # Heading Inside Block Literal
+            Inner paragraph.
+          }
+        }
+        """
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        #expect(index.headings.map(\.title) == ["Top-Level Heading"])
+        // Top-level items still contribute block offsets: heading,
+        // typed block, value declaration.
+        #expect(index.blockOffsets.count == 3)
+    }
+
+    @Test("structured embeds are not indexed but fallback references are")
+    func structuredEmbedsAreNotIndexedButFallbackReferencesAre() throws {
+        #expect(try indexedTargets(in: "Paragraph !{Image}[Cover](cover.png)\n") == [])
+        #expect(
+            try indexedTargets(in: "Paragraph !{Image}[See [[Other]] for context](cover.png)\n") == [
+                "Other"
+            ]
+        )
+
+        #expect(try indexedTargets(in: "!{Image}[Cover](cover.png)\n") == [])
+        #expect(
+            try indexedTargets(in: "!{Image}[See [[Other]] for context](cover.png)\n") == [
+                "Other"
+            ]
+        )
     }
 
     @Test("vault link index resolves anchors and backlinks from explicit indexes")
@@ -377,6 +490,20 @@ struct WorkspaceLinkingTests {
             resolution: resolution
         )
     }
+
+    private func indexedTargets(in source: String) throws -> [String] {
+        let index = try DocumentIndex.build(from: LiminalParser().parse(source))
+        return index.references.map(\.target.rawTargetString)
+    }
+}
+
+private func sourceRange(of needle: String, in source: String) throws -> LiminalSourceRange {
+    let range = try #require(source.range(of: needle))
+    let start = source[..<range.lowerBound].utf8.count
+    return LiminalSourceRange(
+        start: TextSize(UInt32(start)),
+        length: TextSize(UInt32(needle.utf8.count))
+    )
 }
 
 struct WikiTargetExpectation: CustomTestStringConvertible, Sendable {

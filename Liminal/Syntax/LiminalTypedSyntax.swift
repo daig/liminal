@@ -400,12 +400,21 @@ public struct AtxHeadingSyntax: LiminalSyntaxNode {
 
 @CambiumSyntaxNode(LiminalKind.self, for: .wikiEmbedBlock)
 public struct WikiEmbedBlockSyntax: LiminalSyntaxNode {
+    public var targetTextToken: LiminalTokenSyntax? {
+        firstChild(kind: .wikiTarget)?
+            .firstToken(kind: .wikiTargetText)
+    }
+
     public var targetText: String {
-        firstDescendantToken(kind: .wikiTargetText)?.text ?? ""
+        targetTextToken?.text ?? ""
+    }
+
+    public var payloadToken: LiminalTokenSyntax? {
+        firstToken(kind: .rawPayloadText)
     }
 
     public var payloadText: String? {
-        firstToken(kind: .rawPayloadText)?.text
+        payloadToken?.text
     }
 }
 
@@ -462,9 +471,12 @@ public struct StructuredEmbedBlockSyntax: LiminalSyntaxNode {
     }
 
     public var targetText: String {
+        targetTextToken?.text ?? ""
+    }
+
+    public var targetTextToken: LiminalTokenSyntax? {
         firstChild(kind: .embedTarget)?
-            .firstToken(kind: .embedTargetText)?
-            .text ?? ""
+            .firstToken(kind: .embedTargetText)
     }
 }
 
@@ -498,16 +510,22 @@ public struct MdLinkSyntax: LiminalSyntaxNode {
     }
 
     public var destinationText: String {
+        destinationTextToken?.text ?? ""
+    }
+
+    public var destinationTextToken: LiminalTokenSyntax? {
         firstChild(kind: .linkDestination)?
-            .firstToken(kind: .linkDestinationText)?
-            .text ?? ""
+            .firstToken(kind: .linkDestinationText)
     }
 
     public var titleText: String? {
+        titleTextToken?.text
+    }
+
+    public var titleTextToken: LiminalTokenSyntax? {
         firstChild(kind: .linkDestination)?
             .firstChild(kind: .linkTitle)?
-            .firstToken(kind: .linkTitleText)?
-            .text
+            .firstToken(kind: .linkTitleText)
     }
 }
 
@@ -520,25 +538,34 @@ public struct MdImageSyntax: LiminalSyntaxNode {
     }
 
     public var destinationText: String {
+        destinationTextToken?.text ?? ""
+    }
+
+    public var destinationTextToken: LiminalTokenSyntax? {
         firstChild(kind: .linkDestination)?
-            .firstToken(kind: .linkDestinationText)?
-            .text ?? ""
+            .firstToken(kind: .linkDestinationText)
     }
 
     public var titleText: String? {
+        titleTextToken?.text
+    }
+
+    public var titleTextToken: LiminalTokenSyntax? {
         firstChild(kind: .linkDestination)?
             .firstChild(kind: .linkTitle)?
-            .firstToken(kind: .linkTitleText)?
-            .text
+            .firstToken(kind: .linkTitleText)
     }
 }
 
 @CambiumSyntaxNode(LiminalKind.self, for: .wikilink)
 public struct WikilinkSyntax: LiminalSyntaxNode {
-    public var targetText: String {
+    public var targetTextToken: LiminalTokenSyntax? {
         firstChild(kind: .wikiTarget)?
-            .firstToken(kind: .wikiTargetText)?
-            .text ?? ""
+            .firstToken(kind: .wikiTargetText)
+    }
+
+    public var targetText: String {
+        targetTextToken?.text ?? ""
     }
 
     public var aliasContent: InlineContentSyntax? {
@@ -548,14 +575,21 @@ public struct WikilinkSyntax: LiminalSyntaxNode {
 
 @CambiumSyntaxNode(LiminalKind.self, for: .wikiEmbed)
 public struct WikiEmbedSyntax: LiminalSyntaxNode {
-    public var targetText: String {
+    public var targetTextToken: LiminalTokenSyntax? {
         firstChild(kind: .wikiTarget)?
-            .firstToken(kind: .wikiTargetText)?
-            .text ?? ""
+            .firstToken(kind: .wikiTargetText)
+    }
+
+    public var targetText: String {
+        targetTextToken?.text ?? ""
+    }
+
+    public var payloadToken: LiminalTokenSyntax? {
+        firstToken(kind: .rawPayloadText)
     }
 
     public var payloadText: String? {
-        firstToken(kind: .rawPayloadText)?.text
+        payloadToken?.text
     }
 }
 
@@ -579,9 +613,12 @@ public struct StructuredEmbedSyntax: LiminalSyntaxNode {
     }
 
     public var targetText: String {
+        targetTextToken?.text ?? ""
+    }
+
+    public var targetTextToken: LiminalTokenSyntax? {
         firstChild(kind: .embedTarget)?
-            .firstToken(kind: .embedTargetText)?
-            .text ?? ""
+            .firstToken(kind: .embedTargetText)
     }
 }
 
@@ -688,9 +725,12 @@ public struct StructuredEmbedValueSyntax: LiminalSyntaxNode {
     }
 
     public var targetText: String {
+        targetTextToken?.text ?? ""
+    }
+
+    public var targetTextToken: LiminalTokenSyntax? {
         firstChild(kind: .embedTarget)?
-            .firstToken(kind: .embedTargetText)?
-            .text ?? ""
+            .firstToken(kind: .embedTargetText)
     }
 }
 
@@ -710,6 +750,52 @@ public struct RootSyntax: LiminalSyntaxNode {
 
     public var rawPayloadToken: LiminalTokenSyntax? {
         firstToken(kind: .rawPayloadText)
+    }
+}
+
+public extension InlineContentSyntax {
+    var plainText: String {
+        syntax.withCursor { node in
+            var result = ""
+            node.forEachChildOrToken { element in
+                switch element {
+                case .token(let token) where token.kind == .inlineText:
+                    result += token.makeString()
+                case .node(let child) where child.kind == .softBreak:
+                    result += " "
+                case .node(let child) where child.kind == .hardBreak:
+                    result += "\n"
+                case .node(let child):
+                    result += InlineSyntax(child.makeHandle())?.plainText ?? ""
+                default:
+                    break
+                }
+            }
+            return result
+        }
+    }
+}
+
+private extension InlineSyntax {
+    var plainText: String {
+        switch self {
+        case .codeSpan(let codeSpan):
+            codeSpan.codeText
+        case .escapedPunctuation(let punctuation):
+            punctuation.escapedText
+        case .mdLink(let link):
+            link.labelContent?.plainText ?? ""
+        case .mdImage(let image):
+            image.altContent?.plainText ?? ""
+        case .wikilink(let wikilink):
+            wikilink.aliasContent?.plainText ?? wikilink.targetText
+        case .wikiEmbed(let embed):
+            embed.payloadText ?? embed.targetText
+        case .typedInline(let typedInline):
+            typedInline.constructor?.inlineContent?.plainText ?? ""
+        case .structuredEmbed(let embed):
+            embed.fallbackContent?.plainText ?? embed.targetText
+        }
     }
 }
 
