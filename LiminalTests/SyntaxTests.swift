@@ -4,13 +4,68 @@ import Testing
 
 @Suite("Syntax")
 struct SyntaxTests {
+    @Test("syntax kinds use stable Phase 0 raw bands")
+    func syntaxKindRawBandsAreStable() {
+        #expect(LiminalLanguage.serializationVersion == 2)
+
+        #expect(LiminalKind.whitespace.rawValue == 1)
+        #expect(LiminalKind.newline.rawValue == 2)
+
+        #expect(LiminalKind.atSign.rawValue == 10)
+        #expect(LiminalKind.rawPayloadText.rawValue == 72)
+
+        #expect(LiminalKind.root.rawValue == 100)
+        #expect(LiminalKind.atxHeading.rawValue == 106)
+        #expect(LiminalKind.typedBlock.rawValue == 115)
+
+        #expect(LiminalKind.inlineContent.rawValue == 200)
+        #expect(LiminalKind.mdLink.rawValue == 209)
+        #expect(LiminalKind.wikiEmbed.rawValue == 213)
+
+        #expect(LiminalKind.value.rawValue == 300)
+        #expect(LiminalKind.schemaBlock.rawValue == 312)
+        #expect(LiminalKind.templateBlock.rawValue == 319)
+
+        #expect(LiminalKind.missing.rawValue == 900)
+        #expect(LiminalKind.error.rawValue == 901)
+    }
+
     @Test("syntax kinds satisfy Cambium language classification")
     func kindClassificationUsesCambiumLanguageContract() {
+        #expect(LiminalLanguage.isTrivia(.whitespace))
+        #expect(LiminalLanguage.isTrivia(.newline))
+        #expect(!LiminalLanguage.isTrivia(.commentBlock))
+        #expect(!LiminalLanguage.isTrivia(.commentText))
+
         #expect(LiminalLanguage.isNode(.root))
-        #expect(LiminalLanguage.isToken(.sourceText))
-        #expect(!LiminalLanguage.isTrivia(.sourceText))
-        #expect(LiminalLanguage.name(for: .sourceText) == "sourceText")
+        #expect(LiminalLanguage.isNode(.paragraph))
+        #expect(LiminalLanguage.isNode(.mdLink))
+        #expect(LiminalLanguage.isNode(.schemaBlock))
+        #expect(LiminalLanguage.isNode(.missing))
+        #expect(LiminalLanguage.isNode(.error))
+
+        #expect(LiminalLanguage.isToken(.rawPayloadText))
+        #expect(LiminalLanguage.isToken(.qname))
+        #expect(LiminalLanguage.isToken(.commentText))
+        #expect(!LiminalLanguage.isToken(.root))
+
+        #expect(LiminalLanguage.name(for: .rawPayloadText) == "rawPayloadText")
         #expect(LiminalLanguage.kind(for: RawSyntaxKind(100)) == .root)
+        #expect(LiminalLanguage.kind(for: RawSyntaxKind(900)) == .missing)
+    }
+
+    @Test("static punctuation and dynamic text token contracts are pinned")
+    func staticAndDynamicTokenContractsArePinned() {
+        #expect(string(for: LiminalLanguage.staticText(for: .atSign)) == "@")
+        #expect(string(for: LiminalLanguage.staticText(for: .leftBracket)) == "[")
+        #expect(string(for: LiminalLanguage.staticText(for: .rightParen)) == ")")
+        #expect(string(for: LiminalLanguage.staticText(for: .backslash)) == "\\")
+        #expect(string(for: LiminalLanguage.staticText(for: .doubleQuote)) == "\"")
+
+        #expect(LiminalLanguage.staticText(for: .whitespace) == nil)
+        #expect(LiminalLanguage.staticText(for: .qname) == nil)
+        #expect(LiminalLanguage.staticText(for: .rawPayloadText) == nil)
+        #expect(LiminalLanguage.staticText(for: .commentText) == nil)
     }
 
     @Test(
@@ -42,6 +97,23 @@ struct SyntaxTests {
         result.tree.withRoot { root in
             #expect(root.kind == .root)
             #expect(root.textLength == byteLength)
+
+            var tokenKinds: [LiminalKind] = []
+            var tokenTexts: [String] = []
+            root.tokens { token in
+                tokenKinds.append(token.kind)
+                tokenTexts.append(token.makeString())
+            }
+
+            if expectation.source.isEmpty {
+                #expect(root.childOrTokenCount == 0)
+                #expect(tokenKinds.isEmpty)
+                #expect(tokenTexts.isEmpty)
+            } else {
+                #expect(root.childOrTokenCount == 1)
+                #expect(tokenKinds == [.rawPayloadText])
+                #expect(tokenTexts == [expectation.source])
+            }
         }
     }
 
@@ -55,6 +127,12 @@ struct SyntaxTests {
         #expect(first.sourceText == "one")
         #expect(second.sourceText == "two")
         #expect(session.currentTree?.treeID == second.tree.treeID)
+    }
+}
+
+private func string(for text: StaticString?) -> String? {
+    text?.withUTF8Buffer { bytes in
+        String(decoding: bytes, as: UTF8.self)
     }
 }
 

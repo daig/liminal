@@ -11,6 +11,8 @@
 		CA2000000000000000000002 /* CambiumBuilder in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000002 /* CambiumBuilder */; };
 		CA2000000000000000000003 /* CambiumIncremental in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000003 /* CambiumIncremental */; };
 		CA2000000000000000000004 /* CambiumCore in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000001 /* CambiumCore */; };
+		CA2000000000000000000005 /* CambiumASTSupport in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000004 /* CambiumASTSupport */; };
+		CA2000000000000000000006 /* CambiumSyntaxMacros in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000005 /* CambiumSyntaxMacros */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -49,6 +51,8 @@
 				CA2000000000000000000001 /* CambiumCore in Frameworks */,
 				CA2000000000000000000002 /* CambiumBuilder in Frameworks */,
 				CA2000000000000000000003 /* CambiumIncremental in Frameworks */,
+				CA2000000000000000000005 /* CambiumASTSupport in Frameworks */,
+				CA2000000000000000000006 /* CambiumSyntaxMacros in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -104,6 +108,8 @@
 				CA1000000000000000000001 /* CambiumCore */,
 				CA1000000000000000000002 /* CambiumBuilder */,
 				CA1000000000000000000003 /* CambiumIncremental */,
+				CA1000000000000000000004 /* CambiumASTSupport */,
+				CA1000000000000000000005 /* CambiumSyntaxMacros */,
 			);
 			productName = Liminal;
 			productReference = 2313497F2FA67AAF00958BAB /* Liminal.app */;
@@ -503,6 +509,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
 			productName = CambiumIncremental;
+		};
+		CA1000000000000000000004 /* CambiumASTSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
+			productName = CambiumASTSupport;
+		};
+		CA1000000000000000000005 /* CambiumSyntaxMacros */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
+			productName = CambiumSyntaxMacros;
 		};
 /* End XCSwiftPackageProductDependency section */
 		};
