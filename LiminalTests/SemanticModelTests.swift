@@ -94,7 +94,52 @@ struct SemanticModelTests {
         let document = LiminalLowerer().lower(parseResult)
 
         #expect(document.sourceText == source)
-        #expect(document.blocks.isEmpty)
+        #expect(document.items.count == 1)
+        #expect(document.blocks.count == 1)
         #expect(document.diagnostics.isEmpty)
+    }
+
+    @Test("Slice 1 lowering maps surface forms to typed semantic nodes")
+    func slice1LoweringMapsSurfaceFormsToTypedSemanticNodes() throws {
+        let source = "# Heading with `code`\n\nSee [[Note#Heading|Alias]] and [site](https://example.org \"Title\") plus ![Alt](image.png).\n![[Embed#^block|payload]]\n"
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        #expect(document.blocks.count == 3)
+
+        let heading = try #require(document.blocks.first?.node)
+        #expect(heading.type.rawValue == "Heading")
+        #expect(heading.fields.first?.value == .scalar(.integer("1")))
+
+        let paragraph = try #require(document.blocks.dropFirst().first?.node)
+        guard case .inline(let inlines) = paragraph.content else {
+            Issue.record("expected paragraph inline content")
+            return
+        }
+
+        #expect(inlines.contains { inline in
+            guard case .node(let node) = inline else { return false }
+            return node.type.rawValue == "WikiLink"
+        })
+        #expect(inlines.contains { inline in
+            guard case .node(let node) = inline else { return false }
+            return node.type.rawValue == "Link"
+        })
+        #expect(inlines.contains { inline in
+            guard case .node(let node) = inline else { return false }
+            return node.type.rawValue == "Image"
+        })
+
+        let embedBlock = try #require(document.blocks.last?.node)
+        #expect(embedBlock.type.rawValue == "WikiEmbedBlock")
+        #expect(embedBlock.fields.map(\.name.rawValue) == ["target", "payload"])
+    }
+}
+
+private extension LiminalBlock {
+    var node: LiminalNode? {
+        guard case .node(let node) = self else {
+            return nil
+        }
+        return node
     }
 }

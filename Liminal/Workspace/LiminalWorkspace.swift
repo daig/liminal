@@ -107,6 +107,11 @@ public struct DocumentIndex: Equatable, Sendable {
         self.references = references
     }
 
+    public static func build(from parseResult: LiminalParseResult) -> DocumentIndex {
+        var builder = DocumentIndexBuilder()
+        return builder.build(document: LiminalLowerer().lower(parseResult))
+    }
+
     public func reference(containing offset: TextSize) -> DocumentReference? {
         references.first { $0.sourceRange.contains(offset) }
     }
@@ -122,6 +127,208 @@ public struct DocumentIndex: Equatable, Sendable {
         case .sourceOffset(let sourceOffset):
             return blockOffsets.last { $0 <= sourceOffset }
         }
+    }
+}
+
+private struct DocumentIndexBuilder {
+    private var blockOffsets: [TextSize] = []
+    private var headings: [HeadingAnchor] = []
+    private var blocks: [BlockAnchor] = []
+    private var references: [DocumentReference] = []
+
+    mutating func build(document: LiminalDocument) -> DocumentIndex {
+        for block in document.blocks {
+            append(block)
+        }
+
+        return DocumentIndex(
+            blockOffsets: blockOffsets,
+            headings: headings,
+            blocks: blocks,
+            references: references
+        )
+    }
+
+    private mutating func append(_ block: LiminalBlock) {
+        guard case .node(let node) = block,
+              let range = node.source?.range
+        else {
+            return
+        }
+
+        blockOffsets.append(range.start)
+
+        switch node.type.rawValue {
+        case "Heading":
+            let title = plainText(node.content)
+            if !WikiLinkNormalizer.headingLookupKey(title).isEmpty {
+                headings.append(HeadingAnchor(title: title, sourceOffset: range.start))
+            }
+            appendReferences(in: node.content)
+
+        case "Paragraph":
+            appendReferences(in: node.content)
+
+        case "WikiEmbedBlock":
+            appendWikiEmbedReference(node, kind: .embed)
+
+        default:
+            appendReferences(in: node.content)
+        }
+    }
+
+    private mutating func appendReferences(in content: LiminalContent?) {
+        guard case .inline(let inlines) = content else {
+            return
+        }
+        appendReferences(in: inlines)
+    }
+
+    private mutating func appendReferences(in inlines: [LiminalInline]) {
+        for inline in inlines {
+            switch inline {
+            case .text, .interpolation:
+                break
+            case .embed(let embed):
+                references.append(DocumentReference(
+                    kind: .embed,
+                    target: WikiTarget.parse(embed.target),
+                    alias: embed.fallback.isEmpty ? nil : plainText(embed.fallback),
+                    sourceRange: .empty
+                ))
+            case .node(let node):
+                appendReferences(in: node)
+            }
+        }
+    }
+
+    private mutating func appendReferences(in node: LiminalNode) {
+        switch node.type.rawValue {
+        case "WikiLink":
+            appendWikiReference(node, kind: .link)
+        case "WikiEmbedInline":
+            appendWikiEmbedReference(node, kind: .embed)
+        case "Link":
+            appendReferences(in: node.content)
+        case "Image":
+            if let alt = fieldValue(named: "alt", in: node),
+               case .inlineLiteral(let inlines) = alt
+            {
+                appendReferences(in: inlines)
+            }
+        default:
+            appendReferences(in: node.content)
+        }
+    }
+
+    private mutating func appendWikiReference(_ node: LiminalNode, kind: ReferenceKind) {
+        guard let target = fieldString(named: "target", in: node),
+              let range = node.source?.range
+        else {
+            return
+        }
+
+        let alias: String?
+        if case .inline(let inlines) = node.content {
+            alias = plainText(inlines)
+        } else {
+            alias = nil
+        }
+
+        references.append(DocumentReference(
+            kind: kind,
+            target: WikiTarget.parse(target),
+            alias: alias,
+            sourceRange: range
+        ))
+    }
+
+    private mutating func appendWikiEmbedReference(_ node: LiminalNode, kind: ReferenceKind) {
+        guard let target = fieldString(named: "target", in: node),
+              let range = node.source?.range
+        else {
+            return
+        }
+
+        references.append(DocumentReference(
+            kind: kind,
+            target: WikiTarget.parse(target),
+            alias: fieldString(named: "payload", in: node),
+            sourceRange: range
+        ))
+    }
+
+    private func plainText(_ content: LiminalContent?) -> String {
+        guard case .inline(let inlines) = content else {
+            return ""
+        }
+        return plainText(inlines)
+    }
+
+    private func plainText(_ inlines: [LiminalInline]) -> String {
+        inlines.map(plainText).joined()
+    }
+
+    private func plainText(_ inline: LiminalInline) -> String {
+        switch inline {
+        case .text(let text):
+            text
+        case .interpolation(let expression):
+            expression.rawValue
+        case .embed(let embed):
+            embed.fallback.isEmpty ? embed.target : plainText(embed.fallback)
+        case .node(let node):
+            plainText(node)
+        }
+    }
+
+    private func plainText(_ node: LiminalNode) -> String {
+        switch node.type.rawValue {
+        case "CodeSpan":
+            return fieldString(named: "text", in: node) ?? ""
+        case "WikiLink":
+            if case .inline(let inlines) = node.content {
+                return plainText(inlines)
+            }
+            return fieldString(named: "target", in: node) ?? ""
+        case "WikiEmbedInline":
+            return fieldString(named: "payload", in: node)
+                ?? fieldString(named: "target", in: node)
+                ?? ""
+        case "Image":
+            if let alt = fieldValue(named: "alt", in: node),
+               case .inlineLiteral(let inlines) = alt
+            {
+                return plainText(inlines)
+            }
+            return ""
+        default:
+            return plainText(node.content)
+        }
+    }
+
+    private func fieldString(named name: FieldName, in node: LiminalNode) -> String? {
+        guard let value = fieldValue(named: name, in: node) else {
+            return nil
+        }
+
+        switch value {
+        case .scalar(.string(let value)),
+             .scalar(.integer(let value)),
+             .scalar(.number(let value)),
+             .scalar(.bare(let value)):
+            return value
+        case .scalar(.boolean(let value)):
+            return String(value)
+        case .scalar(.null):
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    private func fieldValue(named name: FieldName, in node: LiminalNode) -> LiminalValue? {
+        node.fields.first { $0.name == name }?.value
     }
 }
 

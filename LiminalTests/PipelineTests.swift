@@ -3,8 +3,8 @@ import Testing
 
 @Suite("Pipeline")
 struct PipelineTests {
-    @Test("scaffold lowerer and lossless printer preserve source through the Cambium tree")
-    func scaffoldLowererAndLosslessPrinterPreserveSourceThroughCambiumTree() throws {
+    @Test("Slice 1 lowerer and lossless printer preserve source through the Cambium tree")
+    func slice1LowererAndLosslessPrinterPreserveSourceThroughCambiumTree() throws {
         let source = "# Typed documents\n"
         let parsed = try LiminalParser().parse(source)
         let document = LiminalLowerer().lower(parsed)
@@ -12,10 +12,12 @@ struct PipelineTests {
 
         #expect(printed == source)
         #expect(parsed.diagnostics.isEmpty)
+        #expect(document.items.count == 1)
+        #expect(document.blocks.count == 1)
     }
 
-    @Test("scaffold canonical printer currently mirrors lossless source")
-    func scaffoldCanonicalPrinterCurrentlyMirrorsLosslessSource() throws {
+    @Test("canonical printer currently mirrors lossless source")
+    func canonicalPrinterCurrentlyMirrorsLosslessSource() throws {
         let source = "# Typed documents\n\nBody\n"
         let parsed = try LiminalParser().parse(source)
         let document = LiminalLowerer().lower(parsed)
@@ -40,6 +42,6 @@ struct PipelineTests {
         let renderDocument = RenderDocument(document: document)
 
         #expect(renderDocument.sourceText == "preview")
-        #expect(renderDocument.blocks.isEmpty)
+        #expect(renderDocument.blocks.count == 1)
     }
 }

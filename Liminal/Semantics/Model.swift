@@ -93,6 +93,10 @@ public indirect enum LiminalBlock: Equatable, Sendable {
     case node(LiminalNode)
 }
 
+public enum LiminalDocumentItem: Equatable, Sendable {
+    case block(LiminalBlock)
+}
+
 public indirect enum LiminalContent: Equatable, Sendable {
     case inline([LiminalInline])
     case blocks([LiminalBlock])
@@ -175,23 +179,26 @@ public struct SurfaceForm: Equatable, Sendable {
 
 public struct LiminalDocument: Sendable {
     public var syntaxTree: SharedSyntaxTree<LiminalLanguage>?
-    public var blocks: [LiminalBlock]
+    public var items: [LiminalDocumentItem]
     public var diagnostics: [LiminalDiagnostic]
+
+    public var blocks: [LiminalBlock] {
+        items.compactMap { item in
+            guard case .block(let block) = item else {
+                return nil
+            }
+            return block
+        }
+    }
 
     public init(
         syntaxTree: SharedSyntaxTree<LiminalLanguage>? = nil,
-        blocks: [LiminalBlock] = [],
+        items: [LiminalDocumentItem] = [],
         diagnostics: [LiminalDiagnostic] = []
     ) {
         self.syntaxTree = syntaxTree
-        self.blocks = blocks
+        self.items = items
         self.diagnostics = diagnostics
-    }
-
-    public init(parseResult: LiminalParseResult, blocks: [LiminalBlock] = []) {
-        self.syntaxTree = parseResult.tree
-        self.blocks = blocks
-        self.diagnostics = parseResult.diagnostics
     }
 
     public var sourceText: String? {

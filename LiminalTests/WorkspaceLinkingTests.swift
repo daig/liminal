@@ -152,6 +152,32 @@ struct WorkspaceLinkingTests {
         #expect(index.blockOffset(for: .block("block-id")) == 35)
     }
 
+    @Test("document index builds headings and wiki references from Slice 1 CST")
+    func documentIndexBuildsHeadingsAndWikiReferencesFromSlice1CST() throws {
+        let source = "# Section Title\n\nParagraph [[Target#Heading|Alias]] and ![[Embed#^block|payload]].\n![[BlockEmbed|raw payload]]\n"
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        #expect(index.blockOffsets == [0, 17, 83])
+        #expect(index.headings == [
+            HeadingAnchor(title: "Section Title", sourceOffset: 0)
+        ])
+        #expect(index.references.count == 3)
+
+        #expect(index.references[0].kind == .link)
+        #expect(index.references[0].target.rawTargetString == "Target#Heading")
+        #expect(index.references[0].alias == "Alias")
+        #expect(index.references[0].sourceRange == LiminalSourceRange(start: 27, length: 24))
+
+        #expect(index.references[1].kind == .embed)
+        #expect(index.references[1].target.rawTargetString == "Embed#^block")
+        #expect(index.references[1].alias == "payload")
+
+        #expect(index.references[2].kind == .embed)
+        #expect(index.references[2].target.rawTargetString == "BlockEmbed")
+        #expect(index.references[2].alias == "raw payload")
+    }
+
     @Test("vault link index resolves anchors and backlinks from explicit indexes")
     func vaultLinkIndexResolvesAnchorsAndBacklinksFromExplicitIndexes() {
         let sourceNote = makeNote(

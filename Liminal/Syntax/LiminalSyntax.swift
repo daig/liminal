@@ -343,10 +343,11 @@ public struct LiminalParser {
 
     public func parse(_ source: String) throws -> LiminalParseResult {
         var builder = GreenTreeBuilder<LiminalLanguage>(policy: .documentLocal)
-        try buildRoot(source, with: &builder)
+        var parser = LiminalSlice1CSTParser(source: source)
+        try parser.parse(with: &builder)
         let build = try builder.finish()
         let tree = build.snapshot.makeSyntaxTree().intoShared()
-        return LiminalParseResult(tree: tree)
+        return LiminalParseResult(tree: tree, diagnostics: parser.diagnostics)
     }
 
     fileprivate func parse(
@@ -354,25 +355,15 @@ public struct LiminalParser {
         context: consuming GreenTreeContext<LiminalLanguage>
     ) throws -> LiminalParseSessionBuildOutput {
         var builder = GreenTreeBuilder<LiminalLanguage>(context: consume context)
-        try buildRoot(source, with: &builder)
+        var parser = LiminalSlice1CSTParser(source: source)
+        try parser.parse(with: &builder)
         let build = try builder.finish()
         let tree = build.snapshot.makeSyntaxTree().intoShared()
         let nextContext = build.intoContext()
         return LiminalParseSessionBuildOutput(
-            result: LiminalParseResult(tree: tree),
+            result: LiminalParseResult(tree: tree, diagnostics: parser.diagnostics),
             context: consume nextContext
         )
-    }
-
-    private func buildRoot(
-        _ source: String,
-        with builder: inout GreenTreeBuilder<LiminalLanguage>
-    ) throws {
-        builder.startNode(.root)
-        if !source.isEmpty {
-            try builder.largeToken(.rawPayloadText, text: source)
-        }
-        try builder.finishNode()
     }
 }
 
