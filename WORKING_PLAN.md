@@ -149,8 +149,14 @@ Rules:
 
 Exit criteria:
 
-- Slice 1 overlays compile.
-- Focused overlay tests are ready for the slice 1 parser.
+- Typed-overlay infrastructure compiles: `LiminalSyntaxNode`,
+  `LiminalTokenSyntax`, the `DocumentItemSyntax` / `BlockSyntax` /
+  `InlineSyntax` / `ValueSyntax` union dispatch points, shared traversal
+  helpers, and `RootSyntax`.
+- Scaffold tests pin the current root shape and the empty-union dispatch.
+- Per-construct typed wrappers (`ParagraphSyntax`, `AtxHeadingSyntax`,
+  `MdLinkSyntax`, etc.) add cases to the union dispatch points incrementally
+  as their parser slices land; they are not pre-built in this phase.
 
 ### Phase 2 - Parser Slices
 
@@ -275,9 +281,6 @@ Lossless mode:
 - Walk the CST and concatenate token text.
 - Preserve original trivia, delimiters, source forms, field order, and raw
   payloads.
-- The scaffold printer currently works by returning `tree.makeString()` from
-  the single source-text token. Once real tokens exist, lossless printing should
-  keep the same observable contract by walking those tokens.
 
 Canonical mode:
 
@@ -407,20 +410,32 @@ These are no longer open design questions:
 
 ## The Next Concrete Step
 
-Split the first implementation into small PRs instead of trying to land the
-entire slice 1 spine at once:
+Already shipped:
 
-1. **Project dependencies and kind taxonomy.** Add the needed Cambium products
-   for macros / typed overlays, expand `LiminalKind` for the slice 1 surface
-   vocabulary plus v0.2 category slots, bump `serializationVersion`, and pin
-   language classification tests.
-2. **Slice 1 block spine.** Implement root, blank lines, paragraphs, ATX
-   headings, typed overlays, lowering to document items, and the renderable
-   block view.
-3. **Slice 1 inline and index extension.** Add inline text, code spans,
-   markdown links/images, wikilinks, wiki embeds, their lowering, and a
+- **Phase 0** (`9498111`): Cambium product dependencies, the v0.2 kind
+  taxonomy with stable raw bands, `serializationVersion` bump to 2, and
+  pinned language classification tests.
+- **Phase 1** (`c593936`): typed-overlay infrastructure
+  (`LiminalSyntaxNode`, `LiminalTokenSyntax`, the four union dispatch points,
+  shared traversal helpers, and `RootSyntax`) plus scaffold tests that pin
+  the current root shape and the empty-union dispatch.
+
+Remaining slice 1 work, split into two PRs:
+
+1. **Slice 1 block spine.** Implement root, blank lines, paragraphs, and ATX
+   headings in `LiminalParser`. Add per-construct typed wrappers
+   (`ParagraphSyntax`, `AtxHeadingSyntax`, `BlankLineSyntax`) and extend
+   `DocumentItemSyntax` / `BlockSyntax` to dispatch to them. Lower to ordered
+   document items and a renderable block view. Drop the Phase 0/1 root
+   scaffold: the single `.rawPayloadText` token emitted under `.root` by the
+   parser, the `RootSyntax.tokens` / `tokens(kind:)` / `rawPayloadToken`
+   accessors, and the `typedRootOverlayExposesCurrentScaffoldTokens` test
+   that pins them.
+2. **Slice 1 inline and index extension.** Add inline text, code spans,
+   markdown links/images, wikilinks, and wiki embeds. Add their typed
+   wrappers and `InlineSyntax` dispatch cases, lower them, and build a
    CST-derived `DocumentIndex`.
 
-Together these PRs establish the source -> CST -> overlay -> document items ->
-index spine. Every subsequent slice repeats the same pattern with new
+Together these PRs complete the source -> CST -> overlay -> document items
+-> index spine. Every subsequent slice repeats the same pattern with new
 constructs.
