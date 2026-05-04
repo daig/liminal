@@ -66,6 +66,8 @@ struct DocumentIndexBuilder {
             for item in quote.documentItems {
                 walkItemForReferences(item)
             }
+        case .pipeTable(let table):
+            walkPipeTable(table)
         case .valueDeclaration(let declaration):
             if let constructor = declaration.constructor {
                 walkSyntaxChildren(of: constructor.syntax)
@@ -74,6 +76,17 @@ struct DocumentIndexBuilder {
             walkSyntaxChildren(of: block.syntax)
         case .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock:
             break
+        }
+    }
+
+    private mutating func walkPipeTable(_ table: PipeTableSyntax) {
+        for cell in table.headerCells {
+            walkInlineContent(cell.inlineContent)
+        }
+        for row in table.bodyRows {
+            for cell in row {
+                walkInlineContent(cell.inlineContent)
+            }
         }
     }
 

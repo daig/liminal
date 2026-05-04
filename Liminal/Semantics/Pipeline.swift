@@ -72,6 +72,8 @@ public struct LiminalLowerer: Sendable {
             .block(.node(lowerList(list)))
         case .blockQuote(let quote):
             .block(.node(lowerBlockQuote(quote)))
+        case .pipeTable(let table):
+            .block(.node(lowerPipeTable(table)))
         case .structuredEmbedBlock(let embed):
             .block(.node(lowerStructuredEmbedBlock(embed)))
         case .wikiEmbedBlock(let embed):
@@ -191,6 +193,47 @@ public struct LiminalLowerer: Sendable {
             type: "BlockQuote",
             content: .blocks(lowerDocumentItemsToBlocks(quote.documentItems)),
             source: surface("blockQuote", quote.syntax)
+        )
+    }
+
+    private func lowerPipeTable(_ table: PipeTableSyntax) -> LiminalNode {
+        let alignments = table.alignments
+        let columns = table.headerCells.enumerated().map { index, cell in
+            var fields = [
+                field("label", .inlineLiteral(lowerInlineContent(cell.inlineContent)))
+            ]
+            if index < alignments.count, let alignment = alignments[index] {
+                fields.append(field("align", .scalar(.bare(alignment.rawValue))))
+            }
+            return LiminalValue.node(LiminalNode(
+                kind: .value,
+                type: "Column",
+                fields: fields,
+                source: surface("pipeTableCell", cell.syntax)
+            ))
+        }
+
+        let rows = table.rows.map { row in
+            LiminalValue.node(LiminalNode(
+                kind: .value,
+                type: "Row",
+                fields: [
+                    field("cells", .list(row.cells.map { cell in
+                        .inlineLiteral(lowerInlineContent(cell.inlineContent))
+                    }))
+                ],
+                source: surface("pipeTableRow", row.syntax)
+            ))
+        }
+
+        return LiminalNode(
+            kind: .block,
+            type: "Table",
+            fields: [
+                field("columns", .list(columns)),
+                field("rows", .list(rows))
+            ],
+            source: surface("pipeTable", table.syntax)
         )
     }
 

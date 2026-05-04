@@ -97,6 +97,7 @@ public enum DocumentItemSyntax: Sendable, Hashable {
     case commentBlock(CommentBlockSyntax)
     case list(ListSyntax)
     case blockQuote(BlockQuoteSyntax)
+    case pipeTable(PipeTableSyntax)
     case structuredEmbedBlock(StructuredEmbedBlockSyntax)
     case wikiEmbedBlock(WikiEmbedBlockSyntax)
 
@@ -126,6 +127,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             self = .list(ListSyntax(unchecked: syntax))
         case .blockQuote:
             self = .blockQuote(BlockQuoteSyntax(unchecked: syntax))
+        case .pipeTable:
+            self = .pipeTable(PipeTableSyntax(unchecked: syntax))
         case .structuredEmbedBlock:
             self = .structuredEmbedBlock(StructuredEmbedBlockSyntax(unchecked: syntax))
         case .wikiEmbedBlock:
@@ -160,6 +163,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         case .list(let item):
             item.syntax
         case .blockQuote(let item):
+            item.syntax
+        case .pipeTable(let item):
             item.syntax
         case .structuredEmbedBlock(let item):
             item.syntax
@@ -194,6 +199,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.range
         case .blockQuote(let item):
             item.range
+        case .pipeTable(let item):
+            item.range
         case .structuredEmbedBlock(let item):
             item.range
         case .wikiEmbedBlock(let item):
@@ -212,6 +219,7 @@ public enum BlockSyntax: Sendable, Hashable {
     case commentBlock(CommentBlockSyntax)
     case list(ListSyntax)
     case blockQuote(BlockQuoteSyntax)
+    case pipeTable(PipeTableSyntax)
     case structuredEmbedBlock(StructuredEmbedBlockSyntax)
     case wikiEmbedBlock(WikiEmbedBlockSyntax)
 
@@ -235,6 +243,8 @@ public enum BlockSyntax: Sendable, Hashable {
             self = .list(ListSyntax(unchecked: syntax))
         case .blockQuote:
             self = .blockQuote(BlockQuoteSyntax(unchecked: syntax))
+        case .pipeTable:
+            self = .pipeTable(PipeTableSyntax(unchecked: syntax))
         case .structuredEmbedBlock:
             self = .structuredEmbedBlock(StructuredEmbedBlockSyntax(unchecked: syntax))
         case .wikiEmbedBlock:
@@ -263,6 +273,8 @@ public enum BlockSyntax: Sendable, Hashable {
         case .list(let block):
             block.syntax
         case .blockQuote(let block):
+            block.syntax
+        case .pipeTable(let block):
             block.syntax
         case .structuredEmbedBlock(let block):
             block.syntax
@@ -290,6 +302,8 @@ public enum BlockSyntax: Sendable, Hashable {
         case .list(let block):
             block.range
         case .blockQuote(let block):
+            block.range
+        case .pipeTable(let block):
             block.range
         case .structuredEmbedBlock(let block):
             block.range
@@ -625,7 +639,9 @@ public struct MathBlockSyntax: LiminalSyntaxNode {
 @CambiumSyntaxNode(LiminalKind.self, for: .htmlBlock)
 public struct HtmlBlockSyntax: LiminalSyntaxNode {
     public var rawText: String {
-        firstToken(kind: .rawPayloadText)?.text ?? ""
+        firstToken(kind: .htmlText)?.text
+            ?? firstToken(kind: .rawPayloadText)?.text
+            ?? ""
     }
 }
 
@@ -710,6 +726,87 @@ public struct ListItemSyntax: LiminalSyntaxNode {
 public struct BlockQuoteSyntax: LiminalSyntaxNode {
     public var documentItems: [DocumentItemSyntax] {
         childNodes().compactMap(DocumentItemSyntax.init)
+    }
+}
+
+public enum PipeTableAlignment: String, Sendable, Hashable {
+    case left
+    case center
+    case right
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .pipeTable)
+public struct PipeTableSyntax: LiminalSyntaxNode {
+    public var header: PipeTableHeaderSyntax? {
+        firstChild(kind: .pipeTableHeader).map(PipeTableHeaderSyntax.init(unchecked:))
+    }
+
+    public var delimiter: PipeTableDelimiterSyntax? {
+        firstChild(kind: .pipeTableDelimiter).map(PipeTableDelimiterSyntax.init(unchecked:))
+    }
+
+    public var rows: [PipeTableRowSyntax] {
+        childNodes(kind: .pipeTableRow).map(PipeTableRowSyntax.init(unchecked:))
+    }
+
+    public var headerCells: [PipeTableCellSyntax] {
+        header?.cells ?? []
+    }
+
+    public var alignments: [PipeTableAlignment?] {
+        delimiter?.alignments ?? []
+    }
+
+    public var bodyRows: [[PipeTableCellSyntax]] {
+        rows.map(\.cells)
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .pipeTableHeader)
+public struct PipeTableHeaderSyntax: LiminalSyntaxNode {
+    public var cells: [PipeTableCellSyntax] {
+        childNodes(kind: .pipeTableCell).map(PipeTableCellSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .pipeTableDelimiter)
+public struct PipeTableDelimiterSyntax: LiminalSyntaxNode {
+    public var cells: [PipeTableCellSyntax] {
+        childNodes(kind: .pipeTableCell).map(PipeTableCellSyntax.init(unchecked:))
+    }
+
+    public var alignments: [PipeTableAlignment?] {
+        cells.map(\.delimiterAlignment)
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .pipeTableRow)
+public struct PipeTableRowSyntax: LiminalSyntaxNode {
+    public var cells: [PipeTableCellSyntax] {
+        childNodes(kind: .pipeTableCell).map(PipeTableCellSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .pipeTableCell)
+public struct PipeTableCellSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+
+    public var delimiterAlignment: PipeTableAlignment? {
+        let trimmed = sourceText.trimmingHorizontalWhitespace
+        let left = trimmed.hasPrefix(":")
+        let right = trimmed.hasSuffix(":")
+        switch (left, right) {
+        case (true, true):
+            return .center
+        case (true, false):
+            return .left
+        case (false, true):
+            return .right
+        case (false, false):
+            return nil
+        }
     }
 }
 

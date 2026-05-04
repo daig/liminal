@@ -569,6 +569,59 @@ struct SemanticModelTests {
         #expect(code.fields[1].value == .scalar(.string("swift   ")))
         #expect(code.fields[2].value == .scalar(.string("body\n")))
     }
+
+    @Test("Slice 6 lowering maps pipe tables to Table nodes")
+    func slice6LoweringMapsPipeTablesToTableNodes() throws {
+        let source = """
+        | Name | Born |
+        | :--- | ---: |
+        | [[Ada]] | 1815 |
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        let table = try #require(document.blocks.first?.node)
+        #expect(table.type.rawValue == "Table")
+        #expect(table.fields.map(\.name.rawValue) == ["columns", "rows"])
+
+        guard case .list(let columns) = table.fields[0].value,
+              columns.count == 2,
+              case .node(let nameColumn) = columns[0],
+              case .node(let bornColumn) = columns[1]
+        else {
+            Issue.record("expected table columns")
+            return
+        }
+
+        #expect(nameColumn.type.rawValue == "Column")
+        #expect(nameColumn.fields.map(\.name.rawValue) == ["label", "align"])
+        #expect(nameColumn.fields[1].value == .scalar(.bare("left")))
+        guard case .inlineLiteral(let nameLabel) = nameColumn.fields[0].value else {
+            Issue.record("expected name label inline literal")
+            return
+        }
+        #expect(nameLabel == [.text("Name")])
+
+        #expect(bornColumn.fields.map(\.name.rawValue) == ["label", "align"])
+        #expect(bornColumn.fields[1].value == .scalar(.bare("right")))
+
+        guard case .list(let rows) = table.fields[1].value,
+              case .node(let row) = rows.first,
+              case .list(let cells) = row.fields.first?.value,
+              cells.count == 2,
+              case .inlineLiteral(let firstCell) = cells[0],
+              case .inlineLiteral(let secondCell) = cells[1]
+        else {
+            Issue.record("expected table row cells")
+            return
+        }
+
+        #expect(row.type.rawValue == "Row")
+        #expect(firstCell.contains { inline in
+            guard case .node(let node) = inline else { return false }
+            return node.type.rawValue == "WikiLink"
+        })
+        #expect(secondCell == [.text("1815")])
+    }
 }
 
 private extension LiminalBlock {

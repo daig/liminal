@@ -374,6 +374,26 @@ struct WorkspaceLinkingTests {
         ])
     }
 
+    @Test("document index walks Slice 6 table cells but skips raw HTML payloads")
+    func documentIndexWalksSlice6TableCellsButSkipsRawHTMLPayloads() throws {
+        let source = """
+        | [[Head]] | Embed |
+        | --- | --- |
+        | [[Cell]] | ![[Embed]] |
+        :::HtmlBlock
+        [[Ignored HTML]]
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        #expect(index.references.map(\.target.rawTargetString).sorted() == [
+            "Cell",
+            "Embed",
+            "Head"
+        ])
+    }
+
     @Test("vault link index resolves anchors and backlinks from explicit indexes")
     func vaultLinkIndexResolvesAnchorsAndBacklinksFromExplicitIndexes() {
         let sourceNote = makeNote(

@@ -7,7 +7,7 @@ import CambiumCore
 //   paragraph, atxHeading, frontmatter, fencedCodeBlock, mathBlock,
 //   commentBlock, codeSpan, mdLink, mdImage, wikilink, wikiEmbed,
 //   typedInline, structuredEmbed, wikiEmbedBlock, structuredEmbedBlock,
-//   valueDeclaration, typedBlock, and htmlBlock.
+//   valueDeclaration, typedBlock, htmlBlock, and pipeTable.
 //
 // Not reusable: inlineContent — the same kind is emitted under headings,
 // paragraphs, link labels, and wikilink aliases with diverging stop rules,
@@ -75,6 +75,8 @@ struct LiminalCSTParser {
                 try emitBlockQuote(with: &builder)
             } else if let listItem = listItemInfo(for: line) {
                 try emitList(startingWith: listItem, with: &builder)
+            } else if let table = pipeTableInfo(startingAt: currentLineIndex) {
+                try emitPipeTable(table, with: &builder)
             } else {
                 try emitParagraph(with: &builder)
             }
@@ -315,7 +317,7 @@ struct LiminalCSTParser {
             guard endLineIndex < lines.count else {
                 break
             }
-        } while !startsDocumentItem(lines[endLineIndex])
+        } while !startsDocumentItem(at: endLineIndex)
 
         let firstLine = lines[startLineIndex]
         let finalLine = lines[endLineIndex - 1]
@@ -349,7 +351,7 @@ struct LiminalCSTParser {
             guard endLineIndex < lines.count else {
                 break
             }
-        } while !startsDocumentItem(lines[endLineIndex])
+        } while !startsDocumentItem(at: endLineIndex)
 
         builder.startNode(.paragraph)
         try emitInlineContentForContainerParagraph(
@@ -504,7 +506,7 @@ struct LiminalCSTParser {
             let closeLine = lines[closeLineIndex]
             let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
             if !payload.isEmpty {
-                try builder.largeToken(block.kind == .mathBlock ? .mathText : .rawPayloadText, text: payload)
+                try builder.largeToken(block.rawPayloadKind, text: payload)
             }
             try emitTypedBlockClosingFence(
                 closeLine,
@@ -515,7 +517,7 @@ struct LiminalCSTParser {
         } else {
             let payload = String(source[openerLine.newlineEnd..<source.endIndex])
             if !payload.isEmpty {
-                try builder.largeToken(block.kind == .mathBlock ? .mathText : .rawPayloadText, text: payload)
+                try builder.largeToken(block.rawPayloadKind, text: payload)
             }
             try builder.missingNode(.missing)
             appendDiagnostic(
@@ -628,6 +630,141 @@ struct LiminalCSTParser {
         {
             try emitListItem(item, listMarkerFamily: markerFamily, with: &builder)
         }
+        try builder.finishNode()
+    }
+
+    private mutating func emitPipeTable(
+        _ table: PipeTableInfo,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.pipeTable)
+
+        let header = table.header
+        let delimiter = table.delimiter
+        try emitPipeTableInlineRow(
+            header,
+            nodeKind: .pipeTableHeader,
+            with: &builder
+        )
+        try emitPipeTableDelimiterRow(delimiter, with: &builder)
+
+        let headerColumnCount = header.cellCount
+        let delimiterColumnCount = delimiter.cellCount
+        if headerColumnCount != delimiterColumnCount {
+            appendDiagnostic(
+                "pipe table header and delimiter column counts differ",
+                at: lines[table.delimiterLineIndex].contentStart,
+                length: max(1, lines[table.delimiterLineIndex].contentText.utf8.count)
+            )
+        }
+
+        for rowLineIndex in table.bodyLineIndices {
+            guard let row = tableRowInfo(for: lines[rowLineIndex]) else {
+                continue
+            }
+            try emitPipeTableInlineRow(
+                row,
+                nodeKind: .pipeTableRow,
+                with: &builder
+            )
+            if row.cellCount != headerColumnCount {
+                appendDiagnostic(
+                    "pipe table body row column count differs from header",
+                    at: lines[rowLineIndex].contentStart,
+                    length: max(1, lines[rowLineIndex].contentText.utf8.count)
+                )
+            }
+        }
+
+        try builder.finishNode()
+        currentLineIndex = table.endLineIndex
+    }
+
+    private mutating func emitPipeTableInlineRow(
+        _ row: TableRowInfo,
+        nodeKind: LiminalKind,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(nodeKind)
+        try emitWhitespace(row.indentText, with: &builder)
+        for segmentIndex in 0..<row.segments.count {
+            let segment = row.segments[segmentIndex]
+            if row.isCellSegment(segmentIndex) {
+                try emitPipeTableInlineCell(segment, with: &builder)
+            } else {
+                try emitWhitespace(String(source[segment.range]), with: &builder)
+            }
+
+            if segmentIndex < row.pipeIndexes.count {
+                try builder.staticToken(.pipe)
+            }
+        }
+        try emitNewline(row.line.newlineText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitPipeTableDelimiterRow(
+        _ row: TableRowInfo,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.pipeTableDelimiter)
+        try emitWhitespace(row.indentText, with: &builder)
+        for segmentIndex in 0..<row.segments.count {
+            let segment = row.segments[segmentIndex]
+            if row.isCellSegment(segmentIndex) {
+                try emitPipeTableDelimiterCell(segment, with: &builder)
+            } else {
+                try emitWhitespace(String(source[segment.range]), with: &builder)
+            }
+
+            if segmentIndex < row.pipeIndexes.count {
+                try builder.staticToken(.pipe)
+            }
+        }
+        try emitNewline(row.line.newlineText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitPipeTableInlineCell(
+        _ cell: TableCellSegment,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let trimmed = horizontalTrimmedRange(cell.range)
+        builder.startNode(.pipeTableCell)
+        try emitWhitespace(String(source[cell.range.lowerBound..<trimmed.lowerBound]), with: &builder)
+        if trimmed.lowerBound < trimmed.upperBound {
+            try emitInlineContent(
+                String(source[trimmed]),
+                baseByteOffset: cell.line.byteOffset(of: trimmed.lowerBound),
+                with: &builder
+            )
+        }
+        try emitWhitespace(String(source[trimmed.upperBound..<cell.range.upperBound]), with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitPipeTableDelimiterCell(
+        _ cell: TableCellSegment,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let trimmed = horizontalTrimmedRange(cell.range)
+        builder.startNode(.pipeTableCell)
+        try emitWhitespace(String(source[cell.range.lowerBound..<trimmed.lowerBound]), with: &builder)
+
+        var cursor = trimmed.lowerBound
+        while cursor < trimmed.upperBound {
+            switch source[cursor] {
+            case ":":
+                try builder.staticToken(.colon)
+            case "-":
+                try builder.staticToken(.dash)
+            default:
+                try builder.token(.errorText, text: String(source[cursor]))
+            }
+            cursor = source.index(after: cursor)
+        }
+
+        try emitWhitespace(String(source[trimmed.upperBound..<cell.range.upperBound]), with: &builder)
         try builder.finishNode()
     }
 
@@ -931,6 +1068,11 @@ struct LiminalCSTParser {
         }
         try emitNewline(finalLine.newlineText, with: &builder)
         try builder.finishNode()
+    }
+
+    private func startsDocumentItem(at lineIndex: Int) -> Bool {
+        startsDocumentItem(lines[lineIndex])
+            || pipeTableInfo(startingAt: lineIndex) != nil
     }
 
     private func startsDocumentItem(_ line: SourceLine) -> Bool {
@@ -1254,6 +1396,145 @@ struct LiminalCSTParser {
         default:
             return nil
         }
+    }
+
+    private func pipeTableInfo(startingAt lineIndex: Int) -> PipeTableInfo? {
+        guard lineIndex + 1 < lines.count,
+              let header = tableRowInfo(for: lines[lineIndex]),
+              let delimiter = tableDelimiterRowInfo(for: lines[lineIndex + 1])
+        else {
+            return nil
+        }
+
+        var bodyLineIndices: [Int] = []
+        var cursor = lineIndex + 2
+        while cursor < lines.count {
+            guard !lines[cursor].isBlank,
+                  tableRowInfo(for: lines[cursor]) != nil
+            else {
+                break
+            }
+            bodyLineIndices.append(cursor)
+            cursor += 1
+        }
+
+        return PipeTableInfo(
+            headerLineIndex: lineIndex,
+            delimiterLineIndex: lineIndex + 1,
+            bodyLineIndices: bodyLineIndices,
+            endLineIndex: cursor,
+            header: header,
+            delimiter: delimiter
+        )
+    }
+
+    private func tableDelimiterRowInfo(for line: SourceLine) -> TableRowInfo? {
+        guard let row = tableRowInfo(for: line) else {
+            return nil
+        }
+        guard row.cellSegments.allSatisfy({ isTableDelimiterCell($0.range) }) else {
+            return nil
+        }
+        return row
+    }
+
+    private func tableRowInfo(for line: SourceLine) -> TableRowInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              indentEnd < content.endIndex
+        else {
+            return nil
+        }
+
+        let pipeIndexes = unescapedPipeIndexes(in: indentEnd..<content.endIndex)
+        guard !pipeIndexes.isEmpty else {
+            return nil
+        }
+
+        let leadingOuterPipe = pipeIndexes.first == indentEnd
+        let trailingOuterPipe = pipeIndexes.last.map { pipeIndex in
+            let afterPipe = content.index(after: pipeIndex)
+            return source[afterPipe..<content.endIndex].allSatisfy(\.isHorizontalWhitespace)
+        } ?? false
+
+        var segments: [TableCellSegment] = []
+        var segmentStart = indentEnd
+        for pipeIndex in pipeIndexes {
+            segments.append(TableCellSegment(line: line, range: segmentStart..<pipeIndex))
+            segmentStart = content.index(after: pipeIndex)
+        }
+        segments.append(TableCellSegment(line: line, range: segmentStart..<content.endIndex))
+
+        let row = TableRowInfo(
+            line: line,
+            indentText: String(content[content.startIndex..<indentEnd]),
+            segments: segments,
+            pipeIndexes: pipeIndexes,
+            leadingOuterPipe: leadingOuterPipe,
+            trailingOuterPipe: trailingOuterPipe
+        )
+
+        guard row.cellCount > 0 else {
+            return nil
+        }
+        return row
+    }
+
+    private func unescapedPipeIndexes(in range: Range<String.Index>) -> [String.Index] {
+        var result: [String.Index] = []
+        var cursor = range.lowerBound
+        while cursor < range.upperBound {
+            if source[cursor] == "|", !source.isEscaped(cursor) {
+                result.append(cursor)
+            }
+            cursor = source.index(after: cursor)
+        }
+        return result
+    }
+
+    private func isTableDelimiterCell(_ range: Range<String.Index>) -> Bool {
+        let trimmed = horizontalTrimmedRange(range)
+        guard trimmed.lowerBound < trimmed.upperBound else {
+            return false
+        }
+
+        var cursor = trimmed.lowerBound
+        if source[cursor] == ":" {
+            cursor = source.index(after: cursor)
+        }
+
+        var dashCount = 0
+        while cursor < trimmed.upperBound, source[cursor] == "-" {
+            dashCount += 1
+            cursor = source.index(after: cursor)
+        }
+        guard dashCount >= 3 else {
+            return false
+        }
+
+        if cursor < trimmed.upperBound, source[cursor] == ":" {
+            cursor = source.index(after: cursor)
+        }
+        return cursor == trimmed.upperBound
+    }
+
+    private func horizontalTrimmedRange(
+        _ range: Range<String.Index>
+    ) -> Range<String.Index> {
+        var start = range.lowerBound
+        while start < range.upperBound, source[start].isHorizontalWhitespace {
+            start = source.index(after: start)
+        }
+
+        var end = range.upperBound
+        while end > start {
+            let previous = source.index(before: end)
+            guard source[previous].isHorizontalWhitespace else {
+                break
+            }
+            end = previous
+        }
+        return start..<end
     }
 
     private func typedBlockInfo(for line: SourceLine) -> TypedBlockInfo? {
@@ -2049,6 +2330,60 @@ private struct TypedBlockInfo {
 private struct RawReservedBlockInfo {
     var kind: LiminalKind
     var header: TypedBlockInfo
+
+    var rawPayloadKind: LiminalKind {
+        switch kind {
+        case .mathBlock:
+            .mathText
+        case .htmlBlock:
+            .htmlText
+        default:
+            .rawPayloadText
+        }
+    }
+}
+
+private struct PipeTableInfo {
+    var headerLineIndex: Int
+    var delimiterLineIndex: Int
+    var bodyLineIndices: [Int]
+    var endLineIndex: Int
+    var header: TableRowInfo
+    var delimiter: TableRowInfo
+}
+
+private struct TableRowInfo {
+    var line: SourceLine
+    var indentText: String
+    var segments: [TableCellSegment]
+    var pipeIndexes: [String.Index]
+    var leadingOuterPipe: Bool
+    var trailingOuterPipe: Bool
+
+    var cellSegments: [TableCellSegment] {
+        segments.indices.compactMap { index in
+            isCellSegment(index) ? segments[index] : nil
+        }
+    }
+
+    var cellCount: Int {
+        cellSegments.count
+    }
+
+    func isCellSegment(_ index: Int) -> Bool {
+        if index == segments.startIndex, leadingOuterPipe {
+            return false
+        }
+        if index == segments.index(before: segments.endIndex), trailingOuterPipe {
+            return false
+        }
+        return true
+    }
+}
+
+private struct TableCellSegment {
+    var line: SourceLine
+    var range: Range<String.Index>
 }
 
 private struct ListItemInfo {

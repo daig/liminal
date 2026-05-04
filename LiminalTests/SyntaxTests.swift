@@ -482,6 +482,130 @@ struct SyntaxTests {
         #expect(commentRoot.sourceText == commentSource)
     }
 
+    @Test("Slice 6 parser emits pipe table CST losslessly")
+    func slice6ParserEmitsPipeTableCSTLosslessly() throws {
+        let source = """
+        | Name | Born | Note |
+        | :--- | ---: | :---: |
+        | Ada \\| Countess | 1815 | [[Ada]] |
+
+        Plain | Header
+        --- | ---:
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 3)
+
+        guard case .pipeTable(let table) = root.documentItems[0],
+              case .blankLine = root.documentItems[1],
+              case .pipeTable(let noOuterPipeTable) = root.documentItems[2]
+        else {
+            Issue.record("expected two pipe tables separated by a blank line")
+            return
+        }
+
+        #expect(table.headerCells.map { $0.inlineContent?.plainText ?? "" } == [
+            "Name",
+            "Born",
+            "Note"
+        ])
+        #expect(table.alignments == [.left, .right, .center])
+        #expect(table.bodyRows.count == 1)
+        #expect(table.bodyRows[0].map { $0.inlineContent?.plainText ?? "" } == [
+            "Ada | Countess",
+            "1815",
+            "Ada"
+        ])
+
+        #expect(noOuterPipeTable.headerCells.map { $0.inlineContent?.plainText ?? "" } == [
+            "Plain",
+            "Header"
+        ])
+        #expect(noOuterPipeTable.alignments == [nil, .right])
+    }
+
+    @Test("Slice 6 parser keeps mismatched table rows in the CST with diagnostics")
+    func slice6ParserKeepsMismatchedTableRowsInCSTWithDiagnostics() throws {
+        let source = """
+        | A | B |
+        | --- |
+        | one |
+        | two | three | extra |
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.map(\.message) == [
+            "pipe table header and delimiter column counts differ",
+            "pipe table body row column count differs from header",
+            "pipe table body row column count differs from header"
+        ])
+
+        guard case .pipeTable(let table) = root.documentItems.first else {
+            Issue.record("expected pipe table")
+            return
+        }
+        #expect(table.headerCells.count == 2)
+        #expect(table.alignments.count == 1)
+        #expect(table.bodyRows.map(\.count) == [1, 3])
+    }
+
+    @Test("Slice 6 invalid table delimiters remain paragraph text")
+    func slice6InvalidTableDelimitersRemainParagraphText() throws {
+        let source = """
+        A | B
+        -- | ---
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 1)
+        guard case .paragraph(let paragraph) = root.documentItems.first else {
+            Issue.record("expected paragraph")
+            return
+        }
+        #expect(paragraph.inlineContent?.plainText == "A | B -- | ---")
+    }
+
+    @Test("Slice 6 parses only explicit HtmlBlock fences as HTML blocks")
+    func slice6ParsesOnlyExplicitHtmlBlockFencesAsHTMLBlocks() throws {
+        let source = """
+        <div>paragraph</div>
+        :::HtmlBlock
+        <div>raw</div>
+        :::
+        :::HtmlBlock
+        unterminated
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.map(\.message) == [
+            "missing closing HtmlBlock fence"
+        ])
+        #expect(root.documentItems.count == 3)
+
+        guard case .paragraph(let paragraph) = root.documentItems[0],
+              case .htmlBlock(let htmlBlock) = root.documentItems[1],
+              case .htmlBlock(let incompleteHtmlBlock) = root.documentItems[2]
+        else {
+            Issue.record("expected paragraph followed by explicit HTML blocks")
+            return
+        }
+
+        #expect(paragraph.inlineContent?.plainText == "<div>paragraph</div>")
+        #expect(htmlBlock.rawText == "<div>raw</div>\n")
+        #expect(incompleteHtmlBlock.rawText == "unterminated")
+        #expect(root.firstDescendantToken(kind: .htmlText)?.text == "<div>raw</div>\n")
+    }
+
     @Test("inline content plaintext projection follows CST inline semantics")
     func inlineContentPlainTextProjectionFollowsCSTInlineSemantics() throws {
         #expect(try paragraphPlainText("Plain text\n") == "Plain text")
