@@ -45,6 +45,29 @@ struct PipelineTests {
         #expect(document.blocks.count == 2)
     }
 
+    @Test("Slice 7 lowerer and lossless printer preserve language-level source")
+    func slice7LowererAndLosslessPrinterPreserveLanguageLevelSource() throws {
+        let source = """
+        ::use type "./schema.lim" as schema
+        :::schema prelude
+        type Person : value = {
+          name: str
+        }
+        :::
+        :::template Card(person: Person) -> blocks
+        Hello ${person.name}
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let printed = LiminalPrinter().print(document)
+
+        #expect(parsed.diagnostics.isEmpty)
+        #expect(printed == source)
+        #expect(document.items.count == 3)
+        #expect(document.blocks.isEmpty)
+    }
+
     @Test("editor session owns the parse session boundary")
     func editorSessionOwnsParseSessionBoundary() throws {
         let session = LiminalEditorSession(source: "hello")

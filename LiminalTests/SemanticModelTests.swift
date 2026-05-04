@@ -628,6 +628,70 @@ struct SemanticModelTests {
         #expect(secondCell == [.text("1815")])
         #expect(thirdCell == [.text("first")])
     }
+
+    @Test("Slice 7 lowering maps language-level document items")
+    func slice7LoweringMapsLanguageLevelDocumentItems() throws {
+        let source = """
+        ::use type "./schema.lim" as schema
+        :::schema prelude
+        type Person : value = {
+          name: str
+        }
+        :::
+        :::template PersonCard(person: Person) -> blocks
+        Hello ${person.name}
+        :::
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        #expect(document.items.count == 3)
+        #expect(document.blocks.isEmpty)
+
+        guard case .directive(let directive) = document.items[0],
+              case .schema(let schema) = document.items[1],
+              case .template(let template) = document.items[2]
+        else {
+            Issue.record("expected directive, schema, and template items")
+            return
+        }
+
+        #expect(directive.name == "use")
+        #expect(directive.rawText == #"type "./schema.lim" as schema"#)
+        #expect(schema.name == "prelude")
+        #expect(schema.rawText.contains("type Person : value"))
+        #expect(template.signature == "PersonCard(person: Person) -> blocks")
+        #expect(template.rawBodyText == "Hello ${person.name}\n")
+        #expect(template.items.count == 1)
+
+        guard case .block(let block) = template.items[0],
+              case .node(let paragraph) = block,
+              case .inline(let inlines) = paragraph.content
+        else {
+            Issue.record("expected lowered template body paragraph")
+            return
+        }
+
+        #expect(paragraph.type.rawValue == "Paragraph")
+        #expect(inlines.contains(.text("Hello ")))
+        #expect(inlines.contains(.interpolation("person.name")))
+    }
+
+    @Test("Slice 7 lowering maps external references in values")
+    func slice7LoweringMapsExternalReferencesInValues() throws {
+        let source = "@Refs{local: &ada, qualified: &people.ada, external: &<./people.lim#ada>}\n"
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        guard case .value(let refs) = document.items.first else {
+            Issue.record("expected value declaration")
+            return
+        }
+
+        #expect(refs.fields.map(\.value) == [
+            .reference(.local("ada")),
+            .reference(.qualified(namespace: "people", id: "ada")),
+            .reference(.external("./people.lim#ada"))
+        ])
+    }
 }
 
 private extension LiminalBlock {

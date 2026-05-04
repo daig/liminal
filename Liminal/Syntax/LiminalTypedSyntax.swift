@@ -87,6 +87,9 @@ public struct LiminalTokenSyntax: Sendable, Hashable {
 public enum DocumentItemSyntax: Sendable, Hashable {
     case blankLine(BlankLineSyntax)
     case frontmatter(FrontmatterSyntax)
+    case directive(DirectiveSyntax)
+    case schemaBlock(SchemaBlockSyntax)
+    case templateBlock(TemplateBlockSyntax)
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
     case valueDeclaration(ValueDeclarationSyntax)
@@ -107,6 +110,12 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             self = .blankLine(BlankLineSyntax(unchecked: syntax))
         case .frontmatter:
             self = .frontmatter(FrontmatterSyntax(unchecked: syntax))
+        case .directive:
+            self = .directive(DirectiveSyntax(unchecked: syntax))
+        case .schemaBlock:
+            self = .schemaBlock(SchemaBlockSyntax(unchecked: syntax))
+        case .templateBlock:
+            self = .templateBlock(TemplateBlockSyntax(unchecked: syntax))
         case .paragraph:
             self = .paragraph(ParagraphSyntax(unchecked: syntax))
         case .atxHeading:
@@ -144,6 +153,12 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.syntax
         case .frontmatter(let item):
             item.syntax
+        case .directive(let item):
+            item.syntax
+        case .schemaBlock(let item):
+            item.syntax
+        case .templateBlock(let item):
+            item.syntax
         case .paragraph(let item):
             item.syntax
         case .atxHeading(let item):
@@ -178,6 +193,12 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         case .blankLine(let item):
             item.range
         case .frontmatter(let item):
+            item.range
+        case .directive(let item):
+            item.range
+        case .schemaBlock(let item):
+            item.range
+        case .templateBlock(let item):
             item.range
         case .paragraph(let item):
             item.range
@@ -325,6 +346,7 @@ public enum InlineSyntax: Sendable, Hashable {
     case typedInline(TypedInlineSyntax)
     case structuredEmbed(StructuredEmbedSyntax)
     case mathInline(MathInlineSyntax)
+    case interpolation(InterpolationSyntax)
     case inlineComment(InlineCommentSyntax)
     case footnoteInline(FootnoteInlineSyntax)
 
@@ -352,6 +374,8 @@ public enum InlineSyntax: Sendable, Hashable {
             self = .structuredEmbed(StructuredEmbedSyntax(unchecked: syntax))
         case .mathInline:
             self = .mathInline(MathInlineSyntax(unchecked: syntax))
+        case .interpolation:
+            self = .interpolation(InterpolationSyntax(unchecked: syntax))
         case .inlineComment:
             self = .inlineComment(InlineCommentSyntax(unchecked: syntax))
         case .footnoteInline:
@@ -385,6 +409,8 @@ public enum InlineSyntax: Sendable, Hashable {
             inline.syntax
         case .mathInline(let inline):
             inline.syntax
+        case .interpolation(let inline):
+            inline.syntax
         case .inlineComment(let inline):
             inline.syntax
         case .footnoteInline(let inline):
@@ -415,6 +441,8 @@ public enum InlineSyntax: Sendable, Hashable {
         case .structuredEmbed(let inline):
             inline.range
         case .mathInline(let inline):
+            inline.range
+        case .interpolation(let inline):
             inline.range
         case .inlineComment(let inline):
             inline.range
@@ -507,6 +535,99 @@ public struct BlankLineSyntax: LiminalSyntaxNode {}
 public struct FrontmatterSyntax: LiminalSyntaxNode {
     public var rawYamlText: String {
         directTokens(kind: .frontmatterText).map(\.text).joined()
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .directive)
+public struct DirectiveSyntax: LiminalSyntaxNode {
+    public var useDirective: UseDirectiveSyntax? {
+        firstChild(kind: .useDirective).map(UseDirectiveSyntax.init(unchecked:))
+    }
+
+    public var keywordText: String {
+        useDirective?.keywordText ?? ""
+    }
+
+    public var bodyText: String {
+        useDirective?.bodyText ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .useDirective)
+public struct UseDirectiveSyntax: LiminalSyntaxNode {
+    public var keywordText: String {
+        firstToken(kind: .identifier)?.text ?? ""
+    }
+
+    public var bodyText: String {
+        firstToken(kind: .directiveText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaBlock)
+public struct SchemaBlockSyntax: LiminalSyntaxNode {
+    public var header: SchemaHeaderSyntax? {
+        firstChild(kind: .schemaHeader).map(SchemaHeaderSyntax.init(unchecked:))
+    }
+
+    public var nameText: String? {
+        header?.nameText
+    }
+
+    public var rawText: String {
+        directTokens(kind: .schemaText).map(\.text).joined()
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaHeader)
+public struct SchemaHeaderSyntax: LiminalSyntaxNode {
+    public var keywordText: String {
+        directTokens(kind: .identifier).first?.text ?? ""
+    }
+
+    public var nameText: String? {
+        let identifiers = directTokens(kind: .identifier)
+        guard identifiers.count > 1 else {
+            return nil
+        }
+        return identifiers[1].text
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .templateBlock)
+public struct TemplateBlockSyntax: LiminalSyntaxNode {
+    public var signature: TemplateSignatureSyntax? {
+        firstChild(kind: .templateSignature).map(TemplateSignatureSyntax.init(unchecked:))
+    }
+
+    public var body: TemplateBodySyntax? {
+        firstChild(kind: .templateBody).map(TemplateBodySyntax.init(unchecked:))
+    }
+
+    public var signatureText: String {
+        signature?.rawText ?? ""
+    }
+
+    public var rawBodyText: String {
+        body?.sourceText ?? ""
+    }
+
+    public var documentItems: [DocumentItemSyntax] {
+        body?.documentItems ?? []
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .templateSignature)
+public struct TemplateSignatureSyntax: LiminalSyntaxNode {
+    public var rawText: String {
+        firstToken(kind: .templateText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .templateBody)
+public struct TemplateBodySyntax: LiminalSyntaxNode {
+    public var documentItems: [DocumentItemSyntax] {
+        childNodes().compactMap(DocumentItemSyntax.init)
     }
 }
 
@@ -995,6 +1116,13 @@ public struct MathInlineSyntax: LiminalSyntaxNode {
     }
 }
 
+@CambiumSyntaxNode(LiminalKind.self, for: .interpolation)
+public struct InterpolationSyntax: LiminalSyntaxNode {
+    public var expressionText: String {
+        firstToken(kind: .interpolationText)?.text ?? ""
+    }
+}
+
 @CambiumSyntaxNode(LiminalKind.self, for: .inlineComment)
 public struct InlineCommentSyntax: LiminalSyntaxNode {
     public var rawText: String {
@@ -1188,6 +1316,8 @@ private extension InlineSyntax {
             embed.fallbackContent?.plainText ?? embed.targetText
         case .mathInline(let math):
             math.texText
+        case .interpolation(let interpolation):
+            interpolation.expressionText
         case .inlineComment:
             ""
         case .footnoteInline(let footnote):

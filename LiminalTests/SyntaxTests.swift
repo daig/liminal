@@ -6,7 +6,7 @@ import Testing
 struct SyntaxTests {
     @Test("syntax kinds use stable Phase 0 raw bands")
     func syntaxKindRawBandsAreStable() {
-        #expect(LiminalLanguage.serializationVersion == 3)
+        #expect(LiminalLanguage.serializationVersion == 4)
 
         #expect(LiminalKind.whitespace.rawValue == 1)
         #expect(LiminalKind.newline.rawValue == 2)
@@ -604,6 +604,107 @@ struct SyntaxTests {
         #expect(htmlBlock.rawText == "<div>raw</div>\n")
         #expect(incompleteHtmlBlock.rawText == "unterminated")
         #expect(root.firstDescendantToken(kind: .htmlText)?.text == "<div>raw</div>\n")
+    }
+
+    @Test("Slice 7 parser emits language-level item CST losslessly")
+    func slice7ParserEmitsLanguageLevelItemCSTLosslessly() throws {
+        let source = """
+        ::use type "./schema.lim" as schema
+        :::schema prelude
+        type Person : value = {
+          name: str
+        }
+        :::
+        :::template PersonCard(person: Person) -> blocks
+        :::if{test: person.bio}
+        Bio ${person.bio} [[Target]]
+        :::
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 3)
+
+        guard case .directive(let directive) = root.documentItems[0],
+              case .schemaBlock(let schema) = root.documentItems[1],
+              case .templateBlock(let template) = root.documentItems[2]
+        else {
+            Issue.record("expected directive, schema, and template document items")
+            return
+        }
+
+        #expect(directive.keywordText == "use")
+        #expect(directive.bodyText == #"type "./schema.lim" as schema"#)
+        #expect(schema.nameText == "prelude")
+        #expect(schema.rawText.contains("type Person : value"))
+        #expect(template.signatureText == "PersonCard(person: Person) -> blocks")
+        #expect(template.documentItems.count == 1)
+
+        guard case .typedBlock(let control) = template.documentItems[0],
+              let paragraph = control.documentItems.first,
+              case .paragraph(let bodyParagraph) = paragraph,
+              let inlineNodes = bodyParagraph.inlineContent?.inlineNodes,
+              inlineNodes.count == 2,
+              case .interpolation(let interpolation) = inlineNodes[0],
+              case .wikilink(let wikilink) = inlineNodes[1]
+        else {
+            Issue.record("expected template control body with interpolation and wikilink")
+            return
+        }
+
+        #expect(control.typeName == "if")
+        #expect(interpolation.expressionText == "person.bio")
+        #expect(wikilink.targetText == "Target")
+    }
+
+    @Test("Slice 7 parser recovers incomplete language-level syntax")
+    func slice7ParserRecoversIncompleteLanguageLevelSyntax() throws {
+        let directiveResult = try LiminalParser().parse("::use\n")
+        #expect(directiveResult.sourceText == "::use\n")
+        #expect(directiveResult.diagnostics.map(\.message) == [
+            "missing use directive body"
+        ])
+
+        let schemaSource = ":::schema prelude\nbody\n"
+        let schemaResult = try LiminalParser().parse(schemaSource)
+        #expect(schemaResult.sourceText == schemaSource)
+        #expect(schemaResult.diagnostics.map(\.message) == [
+            "missing closing schema fence"
+        ])
+
+        let templateSource = ":::template Card() -> blocks\n${person.name\n"
+        let templateResult = try LiminalParser().parse(templateSource)
+        #expect(templateResult.sourceText == templateSource)
+        #expect(templateResult.diagnostics.map(\.message).contains("missing closing interpolation delimiter"))
+        #expect(templateResult.diagnostics.map(\.message).contains("missing closing template fence"))
+    }
+
+    @Test("Slice 7 external references preserve target text without recovery")
+    func slice7ExternalReferencesPreserveTargetTextWithoutRecovery() throws {
+        let source = "@Refs{local: &ada, qualified: &people.ada, external: &<./people.lim#ada>}\n"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+
+        guard case .valueDeclaration(let declaration) = root.documentItems.first,
+              let fields = declaration.constructor?.fields?.fields
+        else {
+            Issue.record("expected value declaration with reference fields")
+            return
+        }
+
+        let referenceTexts = fields.compactMap { field -> String? in
+            guard case .reference(let reference) = field.value?.payload else {
+                return nil
+            }
+            return reference.externalTargetText ?? reference.qnameText
+        }
+        #expect(referenceTexts == ["ada", "people.ada", "./people.lim#ada"])
     }
 
     @Test("inline content plaintext projection follows CST inline semantics")

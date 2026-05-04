@@ -93,9 +93,63 @@ public indirect enum LiminalBlock: Equatable, Sendable {
     case node(LiminalNode)
 }
 
-public enum LiminalDocumentItem: Equatable, Sendable {
+public indirect enum LiminalDocumentItem: Equatable, Sendable {
     case block(LiminalBlock)
     case value(LiminalNode)
+    case schema(LiminalSchemaBlock)
+    case template(LiminalTemplateBlock)
+    case directive(LiminalDirective)
+}
+
+public struct LiminalDirective: Equatable, Sendable {
+    public var name: String
+    public var rawText: String
+    public var source: SurfaceForm?
+
+    public init(
+        name: String,
+        rawText: String,
+        source: SurfaceForm? = nil
+    ) {
+        self.name = name
+        self.rawText = rawText
+        self.source = source
+    }
+}
+
+public struct LiminalSchemaBlock: Equatable, Sendable {
+    public var name: String?
+    public var rawText: String
+    public var source: SurfaceForm?
+
+    public init(
+        name: String? = nil,
+        rawText: String,
+        source: SurfaceForm? = nil
+    ) {
+        self.name = name
+        self.rawText = rawText
+        self.source = source
+    }
+}
+
+public struct LiminalTemplateBlock: Equatable, Sendable {
+    public var signature: String
+    public var rawBodyText: String
+    public var items: [LiminalDocumentItem]
+    public var source: SurfaceForm?
+
+    public init(
+        signature: String,
+        rawBodyText: String,
+        items: [LiminalDocumentItem] = [],
+        source: SurfaceForm? = nil
+    ) {
+        self.signature = signature
+        self.rawBodyText = rawBodyText
+        self.items = items
+        self.source = source
+    }
 }
 
 public indirect enum LiminalContent: Equatable, Sendable {

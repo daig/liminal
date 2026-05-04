@@ -7,7 +7,8 @@ import CambiumCore
 //   paragraph, atxHeading, frontmatter, fencedCodeBlock, mathBlock,
 //   commentBlock, codeSpan, mdLink, mdImage, wikilink, wikiEmbed,
 //   typedInline, structuredEmbed, wikiEmbedBlock, structuredEmbedBlock,
-//   valueDeclaration, typedBlock, htmlBlock, and pipeTable.
+//   valueDeclaration, typedBlock, htmlBlock, pipeTable, directive,
+//   schemaBlock, templateBlock, and interpolation.
 //
 // Not reusable: inlineContent — the same kind is emitted under headings,
 // paragraphs, link labels, and wikilink aliases with diverging stop rules,
@@ -60,6 +61,13 @@ struct LiminalCSTParser {
             } else if let heading = headingInfo(for: line) {
                 try emitHeading(heading, line: line, with: &builder)
                 currentLineIndex += 1
+            } else if let directive = directiveInfo(for: line) {
+                try emitDirective(directive, line: line, with: &builder)
+                currentLineIndex += 1
+            } else if let schemaBlock = schemaBlockInfo(for: line) {
+                try emitSchemaBlock(schemaBlock, openerLine: line, with: &builder)
+            } else if let templateBlock = templateBlockInfo(for: line) {
+                try emitTemplateBlock(templateBlock, openerLine: line, with: &builder)
             } else if let rawBlock = rawReservedBlockInfo(for: line) {
                 try emitRawReservedBlock(rawBlock, openerLine: line, with: &builder)
             } else if let typedBlock = typedBlockInfo(for: line) {
@@ -281,6 +289,146 @@ struct LiminalCSTParser {
         try emitWhitespace(heading.trailingWhitespaceText, with: &builder)
         try emitNewline(line.newlineText, with: &builder)
         try builder.finishNode()
+    }
+
+    private mutating func emitDirective(
+        _ directive: DirectiveInfo,
+        line: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.directive)
+        try emitWhitespace(directive.indentText, with: &builder)
+        try builder.token(.colonRun, text: directive.colonRunText)
+        builder.startNode(.useDirective)
+        try builder.token(.identifier, text: directive.keywordText)
+        try emitHeaderPayload(
+            directive.bodyText,
+            tokenKind: .directiveText,
+            missingMessage: "missing use directive body",
+            diagnosticIndex: line.contentEnd,
+            with: &builder
+        )
+        try builder.finishNode()
+        try emitNewline(line.newlineText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitSchemaBlock(
+        _ block: TypedBlockInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.schemaBlock)
+        try emitSchemaHeader(block, with: &builder)
+        try emitNewline(openerLine.newlineText, with: &builder)
+
+        if let closeLineIndex = block.closeLineIndex {
+            let closeLine = lines[closeLineIndex]
+            let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
+            if !payload.isEmpty {
+                try builder.largeToken(.schemaText, text: payload)
+            }
+            try emitTypedBlockClosingFence(
+                closeLine,
+                colonRunText: block.colonRunText,
+                with: &builder
+            )
+            currentLineIndex = closeLineIndex + 1
+        } else {
+            let payload = String(source[openerLine.newlineEnd..<source.endIndex])
+            if !payload.isEmpty {
+                try builder.largeToken(.schemaText, text: payload)
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic(
+                "missing closing schema fence",
+                at: openerLine.contentStart,
+                length: block.colonRunText.utf8.count
+            )
+            currentLineIndex = lines.count
+        }
+
+        try builder.finishNode()
+    }
+
+    private func emitSchemaHeader(
+        _ block: TypedBlockInfo,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.schemaHeader)
+        try emitWhitespace(block.indentText, with: &builder)
+        try builder.token(.colonRun, text: block.colonRunText)
+        try builder.token(.identifier, text: block.qnameText)
+        try emitSchemaHeaderSuffix(block.suffixText, with: &builder)
+        try emitWhitespace(block.trailingWhitespaceText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitTemplateBlock(
+        _ block: TypedBlockInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.templateBlock)
+        try emitTemplateHeader(block, openerLine: openerLine, with: &builder)
+        try emitNewline(openerLine.newlineText, with: &builder)
+
+        builder.startNode(.templateBody)
+        let bodyBaseByteOffset = openerLine.startByteOffset
+            + source[openerLine.contentStart..<openerLine.newlineEnd].utf8.count
+        if let closeLineIndex = block.closeLineIndex {
+            let closeLine = lines[closeLineIndex]
+            let bodyText = String(source[openerLine.newlineEnd..<closeLine.contentStart])
+            try emitNestedDocumentItems(
+                bodyText,
+                baseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            try builder.finishNode()
+            try emitTypedBlockClosingFence(
+                closeLine,
+                colonRunText: block.colonRunText,
+                with: &builder
+            )
+            currentLineIndex = closeLineIndex + 1
+        } else {
+            let bodyText = String(source[openerLine.newlineEnd..<source.endIndex])
+            try emitNestedDocumentItems(
+                bodyText,
+                baseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            try builder.finishNode()
+            try builder.missingNode(.missing)
+            appendDiagnostic(
+                "missing closing template fence",
+                at: openerLine.contentStart,
+                length: block.colonRunText.utf8.count
+            )
+            currentLineIndex = lines.count
+        }
+
+        try builder.finishNode()
+    }
+
+    private mutating func emitTemplateHeader(
+        _ block: TypedBlockInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        try emitWhitespace(block.indentText, with: &builder)
+        try builder.token(.colonRun, text: block.colonRunText)
+        try builder.token(.identifier, text: block.qnameText)
+        builder.startNode(.templateSignature)
+        try emitHeaderPayload(
+            block.suffixText,
+            tokenKind: .templateText,
+            missingMessage: "missing template signature",
+            diagnosticIndex: openerLine.contentEnd,
+            with: &builder
+        )
+        try builder.finishNode()
+        try emitWhitespace(block.trailingWhitespaceText, with: &builder)
     }
 
     private mutating func emitWikiEmbedBlock(
@@ -1087,6 +1235,7 @@ struct LiminalCSTParser {
             || mathShorthandBlockInfo(for: line) != nil
             || commentBlockInfo(for: line) != nil
             || headingInfo(for: line) != nil
+            || directiveInfo(for: line) != nil
             || rawReservedBlockInfo(for: line) != nil
             || typedBlockInfo(for: line) != nil
             || structuredEmbedBlockInfo(for: line) != nil
@@ -1232,6 +1381,59 @@ struct LiminalCSTParser {
             closingMarkerText: bodyAndClosing.closingMarkerText,
             trailingWhitespaceText: bodyAndClosing.trailingWhitespaceText
         )
+    }
+
+    private func directiveInfo(for line: SourceLine) -> DirectiveInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              content[indentEnd..<content.endIndex].hasPrefix("::")
+        else {
+            return nil
+        }
+
+        let colonEnd = content.index(indentEnd, offsetBy: 2)
+        guard colonEnd == content.endIndex || content[colonEnd] != ":" else {
+            return nil
+        }
+        guard content[colonEnd..<content.endIndex].hasPrefix("use") else {
+            return nil
+        }
+
+        let keywordEnd = content.index(colonEnd, offsetBy: 3)
+        guard keywordEnd == content.endIndex
+                || content[keywordEnd].isHorizontalWhitespace
+        else {
+            return nil
+        }
+
+        return DirectiveInfo(
+            indentText: String(content[content.startIndex..<indentEnd]),
+            colonRunText: String(content[indentEnd..<colonEnd]),
+            keywordText: String(content[colonEnd..<keywordEnd]),
+            bodyText: String(content[keywordEnd..<content.endIndex])
+        )
+    }
+
+    private func schemaBlockInfo(for line: SourceLine) -> TypedBlockInfo? {
+        guard let block = typedBlockInfo(for: line),
+              block.qnameText == "schema"
+        else {
+            return nil
+        }
+        return block
+    }
+
+    private func templateBlockInfo(for line: SourceLine) -> TypedBlockInfo? {
+        guard var block = typedBlockInfo(for: line),
+              block.qnameText == "template"
+        else {
+            return nil
+        }
+        block.closeLineIndex = templateClosingFenceLineIndex(
+            after: currentLineIndex,
+            colonRunText: block.colonRunText
+        )
+        return block
     }
 
     private func splitHeadingClosingMarker(
@@ -1785,6 +1987,9 @@ struct LiminalCSTParser {
         {
             return true
         }
+        if startsDirective(in: content, at: start) {
+            return true
+        }
         if content[start..<content.endIndex].hasPrefix("![[")
             || content[start..<content.endIndex].hasPrefix("!{")
             || content[start] == "@"
@@ -1792,6 +1997,21 @@ struct LiminalCSTParser {
             return true
         }
         return startsTypedBlock(in: content, at: start)
+    }
+
+    private func startsDirective(in content: Substring, at start: String.Index) -> Bool {
+        guard content[start..<content.endIndex].hasPrefix("::") else {
+            return false
+        }
+        let colonEnd = content.index(start, offsetBy: 2)
+        guard colonEnd == content.endIndex || content[colonEnd] != ":" else {
+            return false
+        }
+        guard content[colonEnd..<content.endIndex].hasPrefix("use") else {
+            return false
+        }
+        let keywordEnd = content.index(colonEnd, offsetBy: 3)
+        return keywordEnd == content.endIndex || content[keywordEnd].isHorizontalWhitespace
     }
 
     private func startsHeading(in content: Substring, at start: String.Index) -> Bool {
@@ -1978,6 +2198,37 @@ struct LiminalCSTParser {
                     return lineIndex
                 }
             }
+            lineIndex += 1
+        }
+        return nil
+    }
+
+    private func templateClosingFenceLineIndex(
+        after openerLineIndex: Int,
+        colonRunText: String
+    ) -> Int? {
+        var lineIndex = openerLineIndex + 1
+        var nestedDepth = 0
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
+            let content = line.content
+            guard let indentEnd = indentationEnd(in: content),
+                  content[indentEnd..<content.endIndex].hasPrefix(colonRunText)
+            else {
+                lineIndex += 1
+                continue
+            }
+
+            let colonEnd = content.index(indentEnd, offsetBy: colonRunText.count)
+            if content[colonEnd..<content.endIndex].allSatisfy(\.isHorizontalWhitespace) {
+                if nestedDepth == 0 {
+                    return lineIndex
+                }
+                nestedDepth -= 1
+            } else if LiminalStructuredScanner(source: source).qnameEnd(from: colonEnd) != nil {
+                nestedDepth += 1
+            }
+
             lineIndex += 1
         }
         return nil
@@ -2189,6 +2440,72 @@ struct LiminalCSTParser {
         try emitWhitespace(blockID.trailingWhitespaceText, with: &builder)
     }
 
+    private mutating func emitHeaderPayload(
+        _ text: String,
+        tokenKind: LiminalKind,
+        missingMessage: String,
+        diagnosticIndex: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let split = splitLeadingHorizontalWhitespace(in: text)
+        try emitWhitespace(split.leadingWhitespace, with: &builder)
+        if split.payload.isEmpty {
+            try builder.missingNode(.missing)
+            appendDiagnostic(missingMessage, at: diagnosticIndex, length: 0)
+        } else {
+            try builder.largeToken(tokenKind, text: split.payload)
+        }
+    }
+
+    private func emitSchemaHeaderSuffix(
+        _ text: String,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let split = splitLeadingHorizontalWhitespace(in: text)
+        try emitWhitespace(split.leadingWhitespace, with: &builder)
+        guard !split.payload.isEmpty else {
+            return
+        }
+
+        let payload = split.payload
+        if let end = identifierEnd(in: payload, from: payload.startIndex) {
+            try builder.token(.identifier, text: String(payload[payload.startIndex..<end]))
+            if end < payload.endIndex {
+                try builder.largeToken(.schemaText, text: String(payload[end..<payload.endIndex]))
+            }
+        } else {
+            try builder.largeToken(.schemaText, text: payload)
+        }
+    }
+
+    private func splitLeadingHorizontalWhitespace(
+        in text: String
+    ) -> (leadingWhitespace: String, payload: String) {
+        var cursor = text.startIndex
+        while cursor < text.endIndex, text[cursor].isHorizontalWhitespace {
+            cursor = text.index(after: cursor)
+        }
+        return (
+            String(text[text.startIndex..<cursor]),
+            String(text[cursor..<text.endIndex])
+        )
+    }
+
+    private func identifierEnd(
+        in text: String,
+        from start: String.Index
+    ) -> String.Index? {
+        guard start < text.endIndex, text[start].isIdentifierStart else {
+            return nil
+        }
+
+        var cursor = text.index(after: start)
+        while cursor < text.endIndex, text[cursor].isIdentifierContinue {
+            cursor = text.index(after: cursor)
+        }
+        return cursor
+    }
+
     private func emitWhitespace(
         _ text: String,
         with builder: inout GreenTreeBuilder<LiminalLanguage>
@@ -2230,6 +2547,13 @@ private struct HeadingInfo {
     var closingWhitespaceText: String?
     var closingMarkerText: String?
     var trailingWhitespaceText: String
+}
+
+private struct DirectiveInfo {
+    var indentText: String
+    var colonRunText: String
+    var keywordText: String
+    var bodyText: String
 }
 
 private struct FrontmatterInfo {
@@ -2943,6 +3267,7 @@ private struct LiminalStructuredCSTParser {
                 if targetStart < close {
                     try builder.token(.externalReferenceText, text: String(source[targetStart..<close]))
                 }
+                index = close
                 try emitStatic(.greaterThan, expected: ">", with: &builder)
             } else {
                 if targetStart < source.endIndex {
@@ -3393,6 +3718,9 @@ private struct LiminalInlineCSTParser {
             } else if source[index..<source.endIndex].hasPrefix("\\(") {
                 try flushText(upTo: index, with: &builder)
                 try emitMathInline(with: &builder)
+            } else if source[index..<source.endIndex].hasPrefix("${") {
+                try flushText(upTo: index, with: &builder)
+                try emitInterpolation(with: &builder)
             } else if source[index] == "\\", canParseEscapedPunctuation() {
                 try flushText(upTo: index, with: &builder)
                 try emitEscapedPunctuation(with: &builder)
@@ -3580,6 +3908,37 @@ private struct LiminalInlineCSTParser {
             try builder.missingNode(.missing)
             appendDiagnostic("missing closing inline math delimiter", at: openerStart, length: 2)
             index = source.endIndex
+        }
+
+        try builder.finishNode()
+        textStart = index
+    }
+
+    private mutating func emitInterpolation(
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let openerStart = index
+        builder.startNode(.interpolation)
+        try builder.staticToken(.dollar)
+        try builder.staticToken(.leftBrace)
+        index = source.index(index, offsetBy: 2)
+        let contentStart = index
+
+        if let close = findInterpolationClose(from: contentStart) {
+            if contentStart < close {
+                try builder.largeToken(.interpolationText, text: String(source[contentStart..<close]))
+            }
+            index = close
+            try builder.staticToken(.rightBrace)
+            index = source.index(after: index)
+        } else {
+            let boundary = inlineBoundary(from: contentStart)
+            if contentStart < boundary {
+                try builder.largeToken(.interpolationText, text: String(source[contentStart..<boundary]))
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic("missing closing interpolation delimiter", at: openerStart, length: 2)
+            index = boundary
         }
 
         try builder.finishNode()
@@ -4107,6 +4466,31 @@ private struct LiminalInlineCSTParser {
             if source[cursor..<source.endIndex].hasPrefix(delimiter),
                !honoringEscape || !source.isEscaped(cursor)
             {
+                return cursor
+            }
+            cursor = source.index(after: cursor)
+        }
+        return nil
+    }
+
+    private func findInterpolationClose(from start: String.Index) -> String.Index? {
+        var cursor = start
+        var inString = false
+        while cursor < source.endIndex {
+            if source[cursor].isNewlineStart {
+                return nil
+            }
+            if inString {
+                if source[cursor] == "\\", source.index(after: cursor) < source.endIndex {
+                    cursor = source.index(after: source.index(after: cursor))
+                    continue
+                }
+                if source[cursor] == "\"" {
+                    inString = false
+                }
+            } else if source[cursor] == "\"" {
+                inString = true
+            } else if source[cursor] == "}" {
                 return cursor
             }
             cursor = source.index(after: cursor)

@@ -195,7 +195,7 @@ public enum LiminalLanguage: SyntaxLanguage {
     public static let missingKind: LiminalKind = .missing
     public static let errorKind: LiminalKind = .error
     public static let serializationID = "dog.lambda.liminal.markup"
-    public static let serializationVersion: UInt32 = 3
+    public static let serializationVersion: UInt32 = 4
 
     public static func isTrivia(_ kind: LiminalKind) -> Bool {
         switch kind {

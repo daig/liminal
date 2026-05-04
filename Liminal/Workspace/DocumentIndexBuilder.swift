@@ -42,8 +42,12 @@ struct DocumentIndexBuilder {
 
     private mutating func walkItemForReferences(_ item: DocumentItemSyntax) {
         switch item {
-        case .blankLine, .frontmatter:
+        case .blankLine, .frontmatter, .directive, .schemaBlock:
             break
+        case .templateBlock(let template):
+            for item in template.documentItems {
+                walkItemForReferences(item)
+            }
         case .paragraph(let paragraph):
             appendBlockIDAnchor(token: paragraph.blockIdToken, sourceOffset: paragraph.range.start)
             walkInlineContent(paragraph.inlineContent)
@@ -137,7 +141,7 @@ struct DocumentIndexBuilder {
             walkInlineContent(link.labelContent)
         case .mdImage(let image):
             walkInlineContent(image.altContent)
-        case .codeSpan, .escapedPunctuation, .mathInline, .inlineComment:
+        case .codeSpan, .escapedPunctuation, .mathInline, .interpolation, .inlineComment:
             break
         }
     }

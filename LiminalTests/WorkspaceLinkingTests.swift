@@ -318,6 +318,29 @@ struct WorkspaceLinkingTests {
         #expect(index.blockOffsets.count == 2)
     }
 
+    @Test("document index walks references in template bodies but not schema text")
+    func documentIndexWalksReferencesInTemplateBodiesButNotSchemaText() throws {
+        let source = """
+        :::schema prelude
+        type Hidden : value = { target: [[Ignored]] }
+        :::
+        :::template Card(person: Person) -> blocks
+        See [[Template Target]]
+        :::if{test: person.bio}
+        Bio [[Nested Target]]
+        :::
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        #expect(index.references.map(\.target.rawTargetString).sorted() == [
+            "Nested Target",
+            "Template Target"
+        ])
+        #expect(index.blockOffsets.count == 2)
+    }
+
     @Test("only top-level headings populate the heading anchor space")
     func onlyTopLevelHeadingsPopulateTheHeadingAnchorSpace() throws {
         let source = """

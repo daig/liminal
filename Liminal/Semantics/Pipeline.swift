@@ -27,6 +27,25 @@ public struct LiminalLowerer: Sendable {
                 ],
                 source: surface("frontmatter", frontmatter.syntax)
             ))
+        case .directive(let directive):
+            .directive(LiminalDirective(
+                name: directive.keywordText,
+                rawText: directive.bodyText,
+                source: surface("directive", directive.syntax)
+            ))
+        case .schemaBlock(let schema):
+            .schema(LiminalSchemaBlock(
+                name: schema.nameText,
+                rawText: schema.rawText,
+                source: surface("schemaBlock", schema.syntax)
+            ))
+        case .templateBlock(let template):
+            .template(LiminalTemplateBlock(
+                signature: template.signatureText,
+                rawBodyText: template.rawBodyText,
+                items: template.documentItems.compactMap(lowerDocumentItem),
+                source: surface("templateBlock", template.syntax)
+            ))
         case .paragraph(let paragraph):
             lowerParagraph(paragraph).map { .block(.node($0)) }
         case .atxHeading(let heading):
@@ -343,6 +362,8 @@ public struct LiminalLowerer: Sendable {
                 ],
                 source: surface("mathInline", math.syntax)
             ))
+        case .interpolation(let interpolation):
+            .interpolation(LiminalTemplateExpression(interpolation.expressionText))
         case .inlineComment(let comment):
             .node(LiminalNode(
                 kind: .inline,
@@ -578,7 +599,7 @@ public struct LiminalLowerer: Sendable {
             switch lowerDocumentItem(item) {
             case .block(let block)?:
                 block
-            case .value?, nil:
+            case .value?, .schema?, .template?, .directive?, nil:
                 nil
             }
         }
