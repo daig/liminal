@@ -199,6 +199,131 @@ struct SemanticModelTests {
         #expect(!paragraphInlines.contains(.text("^para-id")))
     }
 
+    @Test("Slice 4 lowering maps lists, tasks, and list item IDs")
+    func slice4LoweringMapsListsTasksAndListItemIDs() throws {
+        let source = """
+        - [x] Done [[Target]]
+              continuation ^done-id
+        2. Ordered
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        #expect(document.blocks.count == 2)
+
+        let unordered = try #require(document.blocks.first?.node)
+        #expect(unordered.type.rawValue == "List")
+        #expect(unordered.fields.map(\.name.rawValue) == ["ordered", "marker", "items"])
+        #expect(unordered.fields[0].value == .scalar(.boolean(false)))
+        #expect(unordered.fields[1].value == .scalar(.bare("dash")))
+
+        guard case .list(let itemValues) = unordered.fields[2].value,
+              case .node(let item) = itemValues.first
+        else {
+            Issue.record("expected list item value")
+            return
+        }
+
+        #expect(item.type.rawValue == "ListItem")
+        #expect(item.id?.rawValue == "done-id")
+        #expect(item.fields.map(\.name.rawValue) == ["task"])
+        #expect(item.fields[0].value == .scalar(.bare("checked")))
+        guard case .blocks(let itemBlocks) = item.content,
+              case .node(let openingParagraph) = itemBlocks.first,
+              case .inline(let inlines) = openingParagraph.content
+        else {
+            Issue.record("expected list item block body")
+            return
+        }
+        #expect(itemBlocks.count == 1)
+        #expect(inlines.contains(.text("Done ")))
+        #expect(inlines.contains(.text("continuation")))
+        #expect(inlines.contains { inline in
+            guard case .node(let node) = inline else { return false }
+            return node.type.rawValue == "SoftBreak"
+        })
+        #expect(!inlines.contains(.text("^done-id")))
+
+        let ordered = try #require(document.blocks.dropFirst().first?.node)
+        #expect(ordered.fields.map(\.name.rawValue) == ["ordered", "marker", "start", "items"])
+        #expect(ordered.fields[0].value == .scalar(.boolean(true)))
+        #expect(ordered.fields[1].value == .scalar(.bare("decimal_dot")))
+        #expect(ordered.fields[2].value == .scalar(.integer("2")))
+    }
+
+    @Test("Slice 4 lowering maps unordered list marker families explicitly")
+    func slice4LoweringMapsUnorderedListMarkerFamiliesExplicitly() throws {
+        let document = LiminalLowerer().lower(try LiminalParser().parse("""
+        - Dash
+        * Star
+        + Plus
+        """))
+
+        let markers = document.blocks.compactMap(\.node).compactMap { list in
+            list.fields.first { $0.name.rawValue == "marker" }?.value
+        }
+
+        #expect(markers == [
+            .scalar(.bare("dash")),
+            .scalar(.bare("asterisk")),
+            .scalar(.bare("plus"))
+        ])
+    }
+
+    @Test("Slice 4 ordered list marker overflow stays lossless and omits start")
+    func slice4OrderedListMarkerOverflowStaysLosslessAndOmitsStart() throws {
+        let source = "12345678901234567890. Huge\n"
+        let parsed = try LiminalParser().parse(source)
+
+        #expect(parsed.sourceText == source)
+        #expect(parsed.diagnostics.map(\.message) == [
+            "ordered list marker start number is too large"
+        ])
+
+        guard case .list(let list) = parsed.rootSyntax.documentItems.first else {
+            Issue.record("expected ordered list")
+            return
+        }
+        #expect(list.isOrdered)
+        #expect(list.startNumber == nil)
+
+        let document = LiminalLowerer().lower(parsed)
+        let loweredList = try #require(document.blocks.first?.node)
+        #expect(loweredList.fields.map(\.name.rawValue) == ["ordered", "marker", "items"])
+        #expect(loweredList.fields[0].value == .scalar(.boolean(true)))
+        #expect(loweredList.fields[1].value == .scalar(.bare("decimal_dot")))
+    }
+
+    @Test("Slice 4 lowering maps blockquotes to block content")
+    func slice4LoweringMapsBlockquotesToBlockContent() throws {
+        let source = """
+        > Foo
+        > Bar
+        > - Item
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        let quote = try #require(document.blocks.first?.node)
+        #expect(quote.type.rawValue == "BlockQuote")
+        guard case .blocks(let blocks) = quote.content else {
+            Issue.record("expected blockquote block content")
+            return
+        }
+        #expect(blocks.count == 2)
+        #expect(blocks.compactMap(\.node).map(\.type.rawValue) == ["Paragraph", "List"])
+
+        let paragraph = try #require(blocks.first?.node)
+        guard case .inline(let inlines) = paragraph.content else {
+            Issue.record("expected quoted paragraph inline content")
+            return
+        }
+        #expect(inlines.contains(.text("Foo")))
+        #expect(inlines.contains(.text("Bar")))
+        #expect(inlines.contains { inline in
+            guard case .node(let node) = inline else { return false }
+            return node.type.rawValue == "SoftBreak"
+        })
+    }
+
     @Test("escaped punctuation lowers without the escape backslash")
     func escapedPunctuationLowersWithoutEscapeBackslash() throws {
         let source = #"Escaped \*literal\* and \[bracket\]."#

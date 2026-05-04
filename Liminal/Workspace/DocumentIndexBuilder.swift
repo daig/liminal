@@ -58,6 +58,14 @@ struct DocumentIndexBuilder {
             )
         case .structuredEmbedBlock(let embed):
             walkInlineContent(embed.fallbackContent)
+        case .list(let list):
+            for item in list.items {
+                walkListItem(item)
+            }
+        case .blockQuote(let quote):
+            for item in quote.documentItems {
+                walkItemForReferences(item)
+            }
         case .valueDeclaration(let declaration):
             if let constructor = declaration.constructor {
                 walkSyntaxChildren(of: constructor.syntax)
@@ -66,6 +74,13 @@ struct DocumentIndexBuilder {
             walkSyntaxChildren(of: block.syntax)
         case .mathBlock, .htmlBlock:
             break
+        }
+    }
+
+    private mutating func walkListItem(_ item: ListItemSyntax) {
+        appendBlockIDAnchor(token: item.blockIdToken, sourceOffset: item.range.start)
+        for child in item.documentItems {
+            walkItemForReferences(child)
         }
     }
 
@@ -175,6 +190,8 @@ struct DocumentIndexBuilder {
         }
 
         switch LiminalLanguage.kind(for: syntax.rawKind) {
+        case .listItem:
+            walkListItem(ListItemSyntax(unchecked: syntax))
         case .inlineContent:
             walkInlineContent(InlineContentSyntax(unchecked: syntax))
         case .fields:

@@ -47,6 +47,10 @@ public struct LiminalLowerer: Sendable {
                 ],
                 source: surface("htmlBlock", block.syntax)
             )))
+        case .list(let list):
+            .block(.node(lowerList(list)))
+        case .blockQuote(let quote):
+            .block(.node(lowerBlockQuote(quote)))
         case .structuredEmbedBlock(let embed):
             .block(.node(lowerStructuredEmbedBlock(embed)))
         case .wikiEmbedBlock(let embed):
@@ -100,6 +104,69 @@ public struct LiminalLowerer: Sendable {
             fields: fields,
             source: surface("wikiEmbedBlock", embed.syntax)
         )
+    }
+
+    private func lowerList(_ list: ListSyntax) -> LiminalNode {
+        var fields = [
+            field("ordered", .scalar(.boolean(list.isOrdered))),
+            field("marker", .scalar(.bare(listMarkerName(for: list)))),
+            field("items", .list(list.items.map { .node(lowerListItem($0)) }))
+        ]
+        if let startNumber = list.startNumber {
+            fields.insert(
+                field("start", .scalar(.integer(String(startNumber)))),
+                at: 2
+            )
+        }
+
+        return LiminalNode(
+            kind: .block,
+            type: "List",
+            fields: fields,
+            source: surface("list", list.syntax)
+        )
+    }
+
+    private func lowerListItem(_ item: ListItemSyntax) -> LiminalNode {
+        var fields: [LiminalField] = []
+        if let taskState = item.taskState {
+            fields.append(field("task", .scalar(.bare(taskState == .checked ? "checked" : "unchecked"))))
+        }
+
+        return LiminalNode(
+            kind: .value,
+            type: "ListItem",
+            id: item.blockIdToken.map { Anchor($0.text) },
+            fields: fields,
+            content: .blocks(lowerDocumentItemsToBlocks(item.documentItems)),
+            source: surface("listItem", item.syntax)
+        )
+    }
+
+    private func lowerBlockQuote(_ quote: BlockQuoteSyntax) -> LiminalNode {
+        LiminalNode(
+            kind: .block,
+            type: "BlockQuote",
+            content: .blocks(lowerDocumentItemsToBlocks(quote.documentItems)),
+            source: surface("blockQuote", quote.syntax)
+        )
+    }
+
+    private func listMarkerName(for list: ListSyntax) -> String {
+        if list.isOrdered {
+            return "decimal_dot"
+        }
+
+        switch list.markerText {
+        case "-":
+            return "dash"
+        case "*":
+            return "asterisk"
+        case "+":
+            return "plus"
+        default:
+            return "unknown"
+        }
     }
 
     private func lowerInlineContent(_ content: InlineContentSyntax?) -> [LiminalInline] {

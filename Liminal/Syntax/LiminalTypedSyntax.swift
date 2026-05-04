@@ -77,6 +77,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
     case typedBlock(TypedBlockSyntax)
     case mathBlock(MathBlockSyntax)
     case htmlBlock(HtmlBlockSyntax)
+    case list(ListSyntax)
+    case blockQuote(BlockQuoteSyntax)
     case structuredEmbedBlock(StructuredEmbedBlockSyntax)
     case wikiEmbedBlock(WikiEmbedBlockSyntax)
 
@@ -96,6 +98,10 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             self = .mathBlock(MathBlockSyntax(unchecked: syntax))
         case .htmlBlock:
             self = .htmlBlock(HtmlBlockSyntax(unchecked: syntax))
+        case .list:
+            self = .list(ListSyntax(unchecked: syntax))
+        case .blockQuote:
+            self = .blockQuote(BlockQuoteSyntax(unchecked: syntax))
         case .structuredEmbedBlock:
             self = .structuredEmbedBlock(StructuredEmbedBlockSyntax(unchecked: syntax))
         case .wikiEmbedBlock:
@@ -120,6 +126,10 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         case .mathBlock(let item):
             item.syntax
         case .htmlBlock(let item):
+            item.syntax
+        case .list(let item):
+            item.syntax
+        case .blockQuote(let item):
             item.syntax
         case .structuredEmbedBlock(let item):
             item.syntax
@@ -144,6 +154,10 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.range
         case .htmlBlock(let item):
             item.range
+        case .list(let item):
+            item.range
+        case .blockQuote(let item):
+            item.range
         case .structuredEmbedBlock(let item):
             item.range
         case .wikiEmbedBlock(let item):
@@ -158,6 +172,8 @@ public enum BlockSyntax: Sendable, Hashable {
     case typedBlock(TypedBlockSyntax)
     case mathBlock(MathBlockSyntax)
     case htmlBlock(HtmlBlockSyntax)
+    case list(ListSyntax)
+    case blockQuote(BlockQuoteSyntax)
     case structuredEmbedBlock(StructuredEmbedBlockSyntax)
     case wikiEmbedBlock(WikiEmbedBlockSyntax)
 
@@ -173,6 +189,10 @@ public enum BlockSyntax: Sendable, Hashable {
             self = .mathBlock(MathBlockSyntax(unchecked: syntax))
         case .htmlBlock:
             self = .htmlBlock(HtmlBlockSyntax(unchecked: syntax))
+        case .list:
+            self = .list(ListSyntax(unchecked: syntax))
+        case .blockQuote:
+            self = .blockQuote(BlockQuoteSyntax(unchecked: syntax))
         case .structuredEmbedBlock:
             self = .structuredEmbedBlock(StructuredEmbedBlockSyntax(unchecked: syntax))
         case .wikiEmbedBlock:
@@ -193,6 +213,10 @@ public enum BlockSyntax: Sendable, Hashable {
         case .mathBlock(let block):
             block.syntax
         case .htmlBlock(let block):
+            block.syntax
+        case .list(let block):
+            block.syntax
+        case .blockQuote(let block):
             block.syntax
         case .structuredEmbedBlock(let block):
             block.syntax
@@ -212,6 +236,10 @@ public enum BlockSyntax: Sendable, Hashable {
         case .mathBlock(let block):
             block.range
         case .htmlBlock(let block):
+            block.range
+        case .list(let block):
+            block.range
+        case .blockQuote(let block):
             block.range
         case .structuredEmbedBlock(let block):
             block.range
@@ -382,6 +410,13 @@ public struct ParagraphSyntax: LiminalSyntaxNode {
         firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
     }
 
+    /// Per v0.2 §6.4, a trailing `^block-id` on the opening paragraph of a
+    /// list item attaches to the `ListItem`, not the paragraph: in that
+    /// position the parser emits the suffix as a sibling of the paragraph
+    /// inside the list item, and this accessor returns nil. Read
+    /// `ListItemSyntax.blockIdToken` from the parent for list-item block IDs.
+    /// Top-level paragraphs and paragraphs inside blockquote content keep
+    /// the suffix as a direct child and return it here.
     public var blockIdToken: LiminalTokenSyntax? {
         firstChild(kind: .blockIdSuffix)
             .map(BlockIdSuffixSyntax.init(unchecked:))?
@@ -474,6 +509,83 @@ public struct MathBlockSyntax: LiminalSyntaxNode {
 public struct HtmlBlockSyntax: LiminalSyntaxNode {
     public var rawText: String {
         firstToken(kind: .rawPayloadText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .list)
+public struct ListSyntax: LiminalSyntaxNode {
+    public var items: [ListItemSyntax] {
+        childNodes(kind: .listItem).map(ListItemSyntax.init(unchecked:))
+    }
+
+    public var unorderedMarkerToken: LiminalTokenSyntax? {
+        firstDescendantToken(kind: .listMarker)
+    }
+
+    public var orderedMarkerToken: LiminalTokenSyntax? {
+        firstDescendantToken(kind: .orderedListMarker)
+    }
+
+    public var markerText: String {
+        unorderedMarkerToken?.text ?? orderedMarkerToken?.text ?? ""
+    }
+
+    public var isOrdered: Bool {
+        orderedMarkerToken != nil
+    }
+
+    public var startNumber: Int? {
+        guard let marker = orderedMarkerToken?.text.dropLast(),
+              !marker.isEmpty
+        else {
+            return nil
+        }
+        return Int(String(marker))
+    }
+}
+
+public enum TaskMarkerState: Sendable, Hashable {
+    case unchecked
+    case checked
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .listItem)
+public struct ListItemSyntax: LiminalSyntaxNode {
+    public var taskMarkerToken: LiminalTokenSyntax? {
+        firstToken(kind: .taskMarker)
+    }
+
+    public var taskState: TaskMarkerState? {
+        switch taskMarkerToken?.text {
+        case "[ ]":
+            .unchecked
+        case "[x]", "[X]":
+            .checked
+        default:
+            nil
+        }
+    }
+
+    /// The trailing `^block-id` anchor token from the list item's opening
+    /// paragraph, per v0.2 §6.4. The parser emits the suffix as a direct
+    /// child of the list item (sibling of the contained paragraph), so the
+    /// opening `ParagraphSyntax.blockIdToken` returns nil and this accessor
+    /// owns the ID for the whole item.
+    public var blockIdToken: LiminalTokenSyntax? {
+        firstChild(kind: .blockIdSuffix)
+            .map(BlockIdSuffixSyntax.init(unchecked:))?
+            .blockIdToken
+    }
+
+    public var documentItems: [DocumentItemSyntax] {
+        childNodes().compactMap(DocumentItemSyntax.init)
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .blockQuote)
+public struct BlockQuoteSyntax: LiminalSyntaxNode {
+    public var documentItems: [DocumentItemSyntax] {
+        childNodes().compactMap(DocumentItemSyntax.init)
     }
 }
 

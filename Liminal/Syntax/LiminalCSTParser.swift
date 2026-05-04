@@ -20,14 +20,16 @@ import CambiumCore
 struct LiminalCSTParser {
     private let source: String
     private let baseByteOffset: Int
+    private let containerColumn: Int
     private let lines: [SourceLine]
     private var currentLineIndex = 0
 
     var diagnostics: [LiminalDiagnostic] = []
 
-    init(source: String, baseByteOffset: Int = 0) {
+    init(source: String, baseByteOffset: Int = 0, containerColumn: Int = 0) {
         self.source = source
         self.baseByteOffset = baseByteOffset
+        self.containerColumn = containerColumn
         self.lines = SourceLine.split(source, baseByteOffset: baseByteOffset)
     }
 
@@ -61,6 +63,10 @@ struct LiminalCSTParser {
                 currentLineIndex += 1
             } else if let declaration = valueDeclarationInfo(for: line) {
                 try emitValueDeclaration(declaration, line: line, with: &builder)
+            } else if blockQuoteLineInfo(for: line) != nil {
+                try emitBlockQuote(with: &builder)
+            } else if let listItem = listItemInfo(for: line) {
+                try emitList(startingWith: listItem, with: &builder)
             } else {
                 try emitParagraph(with: &builder)
             }
@@ -129,6 +135,11 @@ struct LiminalCSTParser {
     private mutating func emitParagraph(
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws {
+        guard containerColumn == 0 else {
+            try emitContainerParagraph(with: &builder)
+            return
+        }
+
         let startLineIndex = currentLineIndex
         var endLineIndex = currentLineIndex
 
@@ -155,6 +166,30 @@ struct LiminalCSTParser {
             try emitBlockIDSuffix(blockID, with: &builder)
         }
         try emitNewline(finalLine.newlineText, with: &builder)
+        try builder.finishNode()
+
+        currentLineIndex = endLineIndex
+    }
+
+    private mutating func emitContainerParagraph(
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let startLineIndex = currentLineIndex
+        var endLineIndex = currentLineIndex
+
+        repeat {
+            endLineIndex += 1
+            guard endLineIndex < lines.count else {
+                break
+            }
+        } while !startsDocumentItem(lines[endLineIndex])
+
+        builder.startNode(.paragraph)
+        try emitInlineContentForContainerParagraph(
+            Array(lines[startLineIndex..<endLineIndex]),
+            with: &builder
+        )
+        try emitNewline(lines[endLineIndex - 1].newlineText, with: &builder)
         try builder.finishNode()
 
         currentLineIndex = endLineIndex
@@ -188,6 +223,31 @@ struct LiminalCSTParser {
             diagnostics: &diagnostics,
             with: &builder
         )
+    }
+
+    private mutating func emitInlineContentForContainerParagraph(
+        _ itemLines: [SourceLine],
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.inlineContent)
+
+        for (offset, line) in itemLines.enumerated() {
+            let contentStart = lineContentStart(after: containerColumn, in: line) ?? line.contentStart
+            try emitWhitespace(String(source[line.contentStart..<contentStart]), with: &builder)
+            try LiminalInlineCSTParser.emitChildren(
+                source: String(source[contentStart..<line.contentEnd]),
+                baseByteOffset: line.byteOffset(of: contentStart),
+                diagnostics: &diagnostics,
+                with: &builder
+            )
+            if offset < itemLines.count - 1 {
+                builder.startNode(.softBreak)
+                try emitNewline(line.newlineText, with: &builder)
+                try builder.finishNode()
+            }
+        }
+
+        try builder.finishNode()
     }
 
     private mutating func emitStructuredEmbedBlock(
@@ -343,6 +403,7 @@ struct LiminalCSTParser {
     private mutating func emitNestedDocumentItems(
         _ bodyText: String,
         baseByteOffset: Int,
+        containerColumn: Int = 0,
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws {
         guard !bodyText.isEmpty else {
@@ -350,10 +411,331 @@ struct LiminalCSTParser {
         }
         var nestedParser = LiminalCSTParser(
             source: bodyText,
-            baseByteOffset: baseByteOffset
+            baseByteOffset: baseByteOffset,
+            containerColumn: containerColumn
         )
         try nestedParser.parseDocumentItems(with: &builder)
         diagnostics.append(contentsOf: nestedParser.diagnostics)
+    }
+
+    private mutating func emitList(
+        startingWith firstItem: ListItemInfo,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let listIndentColumn = firstItem.indentColumn
+        let markerFamily = firstItem.markerFamily
+
+        builder.startNode(.list)
+        while currentLineIndex < lines.count,
+              let item = listItemInfo(for: lines[currentLineIndex]),
+              item.indentColumn == listIndentColumn,
+              item.markerFamily.isCompatible(with: markerFamily)
+        {
+            try emitListItem(item, listMarkerFamily: markerFamily, with: &builder)
+        }
+        try builder.finishNode()
+    }
+
+    private mutating func emitListItem(
+        _ item: ListItemInfo,
+        listMarkerFamily: ListMarkerFamily,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let openerLineIndex = currentLineIndex
+        let openerLine = lines[openerLineIndex]
+        let endLineIndex = listItemEndLineIndex(
+            startingAt: openerLineIndex,
+            item: item,
+            listMarkerFamily: listMarkerFamily
+        )
+        let openingParagraphEndLineIndex = listItemOpeningParagraphEndLineIndex(
+            startingAt: openerLineIndex,
+            endingBefore: endLineIndex,
+            item: item
+        )
+
+        builder.startNode(.listItem)
+        try emitWhitespace(item.indentText, with: &builder)
+        switch item.markerFamily {
+        case .unordered:
+            try builder.token(.listMarker, text: item.markerText)
+        case .ordered:
+            try builder.token(.orderedListMarker, text: item.markerText)
+            if item.orderedStartText != nil, item.orderedStartNumber == nil {
+                appendDiagnostic(
+                    "ordered list marker start number is too large",
+                    at: item.markerStart,
+                    length: item.markerText.utf8.count
+                )
+            }
+        }
+        try emitWhitespace(item.markerWhitespaceText, with: &builder)
+        if let taskMarkerText = item.taskMarkerText {
+            try builder.token(.taskMarker, text: taskMarkerText)
+            try emitWhitespace(item.taskWhitespaceText, with: &builder)
+        }
+
+        try emitListItemOpeningParagraph(
+            Array(lines[openerLineIndex..<openingParagraphEndLineIndex]),
+            firstContentStart: item.contentStart,
+            contentColumn: item.contentColumn,
+            with: &builder
+        )
+
+        if endLineIndex > openingParagraphEndLineIndex {
+            let firstContinuationLine = lines[openingParagraphEndLineIndex]
+            let finalContinuationLine = lines[endLineIndex - 1]
+            let bodyText = String(source[firstContinuationLine.contentStart..<finalContinuationLine.newlineEnd])
+            try emitNestedDocumentItems(
+                bodyText,
+                baseByteOffset: firstContinuationLine.startByteOffset,
+                containerColumn: item.contentColumn,
+                with: &builder
+            )
+        }
+
+        try builder.finishNode()
+        currentLineIndex = endLineIndex
+    }
+
+    private mutating func emitListItemOpeningParagraph(
+        _ paragraphLines: [SourceLine],
+        firstContentStart: String.Index,
+        contentColumn: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        guard let firstLine = paragraphLines.first,
+              let finalLine = paragraphLines.last
+        else {
+            return
+        }
+
+        let finalContentStart = paragraphLines.count == 1
+            ? firstContentStart
+            : lineContentStart(after: contentColumn, in: finalLine) ?? finalLine.contentStart
+        let finalContentText = String(source[finalContentStart..<finalLine.contentEnd])
+        let blockID = splitTrailingBlockID(in: finalContentText)
+
+        builder.startNode(.paragraph)
+        builder.startNode(.inlineContent)
+        for (offset, line) in paragraphLines.enumerated() {
+            let contentStart = offset == 0
+                ? firstContentStart
+                : lineContentStart(after: contentColumn, in: line) ?? line.contentStart
+            let contentEnd: String.Index
+            if offset == paragraphLines.count - 1, let blockID {
+                contentEnd = source.index(
+                    contentStart,
+                    offsetBy: blockID.contentText.count
+                )
+            } else {
+                contentEnd = line.contentEnd
+            }
+
+            if offset > 0 {
+                let previousLine = paragraphLines[offset - 1]
+                builder.startNode(.softBreak)
+                try emitNewline(previousLine.newlineText, with: &builder)
+                try builder.finishNode()
+                try emitWhitespace(String(source[line.contentStart..<contentStart]), with: &builder)
+            }
+
+            try LiminalInlineCSTParser.emitChildren(
+                source: String(source[contentStart..<contentEnd]),
+                baseByteOffset: line.byteOffset(of: contentStart),
+                diagnostics: &diagnostics,
+                with: &builder
+            )
+        }
+        try builder.finishNode()
+        try builder.finishNode()
+        if let blockID {
+            try emitBlockIDSuffix(blockID, with: &builder)
+        }
+        try emitNewline(finalLine.newlineText, with: &builder)
+    }
+
+    private func listItemOpeningParagraphEndLineIndex(
+        startingAt startLineIndex: Int,
+        endingBefore endLineIndex: Int,
+        item: ListItemInfo
+    ) -> Int {
+        var lineIndex = startLineIndex + 1
+        while lineIndex < endLineIndex {
+            let line = lines[lineIndex]
+            guard !line.isBlank,
+                  !startsContainerDocumentItem(line, containerColumn: item.contentColumn)
+            else {
+                break
+            }
+            lineIndex += 1
+        }
+        return lineIndex
+    }
+
+    private func listItemEndLineIndex(
+        startingAt startLineIndex: Int,
+        item: ListItemInfo,
+        listMarkerFamily: ListMarkerFamily
+    ) -> Int {
+        var lineIndex = startLineIndex + 1
+
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
+            if line.isBlank {
+                guard hasIndentedContinuationAfterBlankLine(
+                    at: lineIndex,
+                    contentColumn: item.contentColumn
+                ) else {
+                    break
+                }
+                lineIndex += 1
+                continue
+            }
+
+            if let nextItem = listItemInfo(for: line),
+               nextItem.indentColumn == item.indentColumn,
+               nextItem.markerFamily.isCompatible(with: listMarkerFamily)
+            {
+                break
+            }
+
+            guard indentationColumn(in: line.content) >= item.contentColumn else {
+                break
+            }
+
+            lineIndex += 1
+        }
+
+        return lineIndex
+    }
+
+    private func hasIndentedContinuationAfterBlankLine(
+        at blankLineIndex: Int,
+        contentColumn: Int
+    ) -> Bool {
+        var lineIndex = blankLineIndex + 1
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
+            if line.isBlank {
+                lineIndex += 1
+                continue
+            }
+            return indentationColumn(in: line.content) >= contentColumn
+        }
+        return false
+    }
+
+    private mutating func emitBlockQuote(
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        // TODO(slice 4 follow-up): aggregate consecutive quote lines before
+        // nested parsing so constructs spanning quote markers, such as
+        // `> - item` followed by `>   continuation`, compose correctly.
+        builder.startNode(.blockQuote)
+        while currentLineIndex < lines.count {
+            guard let quote = blockQuoteLineInfo(for: lines[currentLineIndex]) else {
+                break
+            }
+            let line = lines[currentLineIndex]
+            if !quoteBodyStartsDocumentItem(quote, line: line) {
+                let paragraphEndLineIndex = blockQuoteParagraphEndLineIndex(startingAt: currentLineIndex)
+                try emitBlockQuoteParagraph(
+                    Array(lines[currentLineIndex..<paragraphEndLineIndex]),
+                    with: &builder
+                )
+                currentLineIndex = paragraphEndLineIndex
+                continue
+            }
+
+            try emitWhitespace(quote.indentText, with: &builder)
+            try builder.staticToken(.greaterThan)
+            try emitWhitespace(quote.markerWhitespaceText, with: &builder)
+
+            let bodyText = String(source[quote.contentStart..<line.newlineEnd])
+            try emitNestedDocumentItems(
+                bodyText,
+                baseByteOffset: line.byteOffset(of: quote.contentStart),
+                with: &builder
+            )
+
+            currentLineIndex += 1
+        }
+        try builder.finishNode()
+    }
+
+    private func blockQuoteParagraphEndLineIndex(startingAt startLineIndex: Int) -> Int {
+        var lineIndex = startLineIndex + 1
+        while lineIndex < lines.count {
+            guard let quote = blockQuoteLineInfo(for: lines[lineIndex]),
+                  !quoteBodyStartsDocumentItem(quote, line: lines[lineIndex])
+            else {
+                break
+            }
+            lineIndex += 1
+        }
+        return lineIndex
+    }
+
+    private mutating func emitBlockQuoteParagraph(
+        _ quoteLines: [SourceLine],
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        guard let firstLine = quoteLines.first,
+              let firstQuote = blockQuoteLineInfo(for: firstLine),
+              let finalLine = quoteLines.last,
+              let finalQuote = blockQuoteLineInfo(for: finalLine)
+        else {
+            return
+        }
+
+        let finalContentText = String(source[finalQuote.contentStart..<finalLine.contentEnd])
+        let blockID = splitTrailingBlockID(in: finalContentText)
+
+        try emitWhitespace(firstQuote.indentText, with: &builder)
+        try builder.staticToken(.greaterThan)
+        try emitWhitespace(firstQuote.markerWhitespaceText, with: &builder)
+
+        builder.startNode(.paragraph)
+        builder.startNode(.inlineContent)
+        for (offset, line) in quoteLines.enumerated() {
+            guard let quote = blockQuoteLineInfo(for: line) else {
+                continue
+            }
+
+            if offset > 0 {
+                let previousLine = quoteLines[offset - 1]
+                builder.startNode(.softBreak)
+                try emitNewline(previousLine.newlineText, with: &builder)
+                try builder.finishNode()
+                try emitWhitespace(quote.indentText, with: &builder)
+                try builder.staticToken(.greaterThan)
+                try emitWhitespace(quote.markerWhitespaceText, with: &builder)
+            }
+
+            let contentEnd: String.Index
+            if offset == quoteLines.count - 1, let blockID {
+                contentEnd = source.index(
+                    quote.contentStart,
+                    offsetBy: blockID.contentText.count
+                )
+            } else {
+                contentEnd = line.contentEnd
+            }
+
+            try LiminalInlineCSTParser.emitChildren(
+                source: String(source[quote.contentStart..<contentEnd]),
+                baseByteOffset: line.byteOffset(of: quote.contentStart),
+                diagnostics: &diagnostics,
+                with: &builder
+            )
+        }
+        try builder.finishNode()
+        if let blockID {
+            try emitBlockIDSuffix(blockID, with: &builder)
+        }
+        try emitNewline(finalLine.newlineText, with: &builder)
+        try builder.finishNode()
     }
 
     private func startsDocumentItem(_ line: SourceLine) -> Bool {
@@ -364,6 +746,8 @@ struct LiminalCSTParser {
             || structuredEmbedBlockInfo(for: line) != nil
             || wikiEmbedBlockInfo(for: line) != nil
             || valueDeclarationInfo(for: line) != nil
+            || blockQuoteLineInfo(for: line) != nil
+            || listItemInfo(for: line) != nil
     }
 
     private func headingInfo(for line: SourceLine) -> HeadingInfo? {
@@ -619,7 +1003,266 @@ struct LiminalCSTParser {
         )
     }
 
+    private func listItemInfo(for line: SourceLine) -> ListItemInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              indentEnd < content.endIndex
+        else {
+            return nil
+        }
+
+        let indentText = String(content[content.startIndex..<indentEnd])
+        let indentColumn = indentationColumn(in: content[content.startIndex..<indentEnd])
+        var cursor = indentEnd
+        let markerStart = cursor
+        let markerText: String
+        let markerFamily: ListMarkerFamily
+        var orderedStartText: String?
+        var orderedStartNumber: Int?
+
+        if content[cursor] == "-" || content[cursor] == "*" || content[cursor] == "+" {
+            let marker = content[cursor]
+            let markerEnd = content.index(after: cursor)
+            guard markerEnd < content.endIndex,
+                  content[markerEnd].isHorizontalWhitespace,
+                  !isThematicBreakLikeUnorderedMarkerLine(content, marker: marker, markerEnd: markerEnd)
+            else {
+                return nil
+            }
+            markerText = String(marker)
+            markerFamily = .unordered(marker)
+            cursor = markerEnd
+        } else if content[cursor].isDigitForLiteral {
+            let numberStart = cursor
+            repeat {
+                cursor = content.index(after: cursor)
+            } while cursor < content.endIndex && content[cursor].isDigitForLiteral
+
+            guard cursor < content.endIndex, content[cursor] == "." else {
+                return nil
+            }
+            cursor = content.index(after: cursor)
+            guard cursor < content.endIndex, content[cursor].isHorizontalWhitespace else {
+                return nil
+            }
+            let startText = String(content[numberStart..<content.index(before: cursor)])
+            markerText = String(content[numberStart..<cursor])
+            markerFamily = .ordered
+            orderedStartText = startText
+            orderedStartNumber = Int(startText)
+        } else {
+            return nil
+        }
+
+        let markerWhitespaceStart = cursor
+        repeat {
+            cursor = content.index(after: cursor)
+        } while cursor < content.endIndex && content[cursor].isHorizontalWhitespace
+        let markerWhitespaceText = String(content[markerWhitespaceStart..<cursor])
+
+        var taskMarkerText: String?
+        var taskWhitespaceText = ""
+        if let task = taskMarkerInfo(in: content, at: cursor) {
+            taskMarkerText = task.markerText
+            cursor = task.markerEnd
+            let taskWhitespaceStart = cursor
+            if cursor < content.endIndex, content[cursor].isHorizontalWhitespace {
+                cursor = content.index(after: cursor)
+            }
+            taskWhitespaceText = String(content[taskWhitespaceStart..<cursor])
+        }
+
+        return ListItemInfo(
+            indentText: indentText,
+            indentColumn: indentColumn,
+            markerStart: markerStart,
+            markerText: markerText,
+            markerFamily: markerFamily,
+            orderedStartText: orderedStartText,
+            orderedStartNumber: orderedStartNumber,
+            markerWhitespaceText: markerWhitespaceText,
+            taskMarkerText: taskMarkerText,
+            taskWhitespaceText: taskWhitespaceText,
+            contentStart: cursor,
+            contentColumn: column(in: content, upTo: cursor)
+        )
+    }
+
+    private func taskMarkerInfo(
+        in content: Substring,
+        at cursor: String.Index
+    ) -> TaskMarkerInfo? {
+        guard cursor < content.endIndex,
+              content[cursor] == "["
+        else {
+            return nil
+        }
+        let markIndex = content.index(after: cursor)
+        guard markIndex < content.endIndex else {
+            return nil
+        }
+        let closeIndex = content.index(after: markIndex)
+        guard closeIndex < content.endIndex,
+              content[closeIndex] == "]",
+              content[markIndex] == " " || content[markIndex] == "x" || content[markIndex] == "X"
+        else {
+            return nil
+        }
+        return TaskMarkerInfo(
+            markerText: String(content[cursor...closeIndex]),
+            markerEnd: content.index(after: closeIndex)
+        )
+    }
+
+    private func isThematicBreakLikeUnorderedMarkerLine(
+        _ content: Substring,
+        marker: Character,
+        markerEnd: String.Index
+    ) -> Bool {
+        var count = 1
+        var cursor = markerEnd
+        while cursor < content.endIndex {
+            if content[cursor].isHorizontalWhitespace {
+                cursor = content.index(after: cursor)
+            } else if content[cursor] == marker {
+                count += 1
+                cursor = content.index(after: cursor)
+            } else {
+                return false
+            }
+        }
+        return count >= 3
+    }
+
+    private func blockQuoteLineInfo(for line: SourceLine) -> BlockQuoteLineInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              indentEnd < content.endIndex,
+              content[indentEnd] == ">"
+        else {
+            return nil
+        }
+
+        var contentStart = content.index(after: indentEnd)
+        let markerWhitespaceStart = contentStart
+        if contentStart < content.endIndex, content[contentStart].isHorizontalWhitespace {
+            contentStart = content.index(after: contentStart)
+        }
+
+        return BlockQuoteLineInfo(
+            indentText: String(content[content.startIndex..<indentEnd]),
+            markerWhitespaceText: String(content[markerWhitespaceStart..<contentStart]),
+            contentStart: contentStart
+        )
+    }
+
+    private func quoteBodyStartsDocumentItem(
+        _ quote: BlockQuoteLineInfo,
+        line: SourceLine
+    ) -> Bool {
+        let body = source[quote.contentStart..<line.contentEnd]
+        if body.allSatisfy(\.isHorizontalWhitespace) {
+            return true
+        }
+        return startsDocumentItem(in: body)
+    }
+
+    private func startsContainerDocumentItem(
+        _ line: SourceLine,
+        containerColumn: Int
+    ) -> Bool {
+        let contentStart = lineContentStart(after: containerColumn, in: line) ?? line.contentStart
+        let body = source[contentStart..<line.contentEnd]
+        if body.allSatisfy(\.isHorizontalWhitespace) {
+            return true
+        }
+        return startsDocumentItem(in: body)
+    }
+
+    private func startsDocumentItem(in content: Substring) -> Bool {
+        guard let start = indentationEnd(in: content, containerColumn: 0),
+              start < content.endIndex
+        else {
+            return content.allSatisfy(\.isHorizontalWhitespace)
+        }
+
+        if content[start] == ">" {
+            return true
+        }
+        if startsListItem(in: content, at: start) {
+            return true
+        }
+        if startsHeading(in: content, at: start) {
+            return true
+        }
+        if content[start..<content.endIndex].hasPrefix("![[")
+            || content[start..<content.endIndex].hasPrefix("!{")
+            || content[start] == "@"
+        {
+            return true
+        }
+        return startsTypedBlock(in: content, at: start)
+    }
+
+    private func startsHeading(in content: Substring, at start: String.Index) -> Bool {
+        var cursor = start
+        var count = 0
+        while cursor < content.endIndex, content[cursor] == "#" {
+            count += 1
+            cursor = content.index(after: cursor)
+        }
+        return (1...6).contains(count)
+            && cursor < content.endIndex
+            && content[cursor].isHorizontalWhitespace
+    }
+
+    private func startsTypedBlock(in content: Substring, at start: String.Index) -> Bool {
+        var cursor = start
+        var count = 0
+        while cursor < content.endIndex, content[cursor] == ":" {
+            count += 1
+            cursor = content.index(after: cursor)
+        }
+        return count >= 3
+            && cursor < content.endIndex
+            && content[cursor].isIdentifierStart
+    }
+
+    private func startsListItem(in content: Substring, at start: String.Index) -> Bool {
+        if content[start] == "-" || content[start] == "*" || content[start] == "+" {
+            let markerEnd = content.index(after: start)
+            return markerEnd < content.endIndex
+                && content[markerEnd].isHorizontalWhitespace
+                && !isThematicBreakLikeUnorderedMarkerLine(
+                    content,
+                    marker: content[start],
+                    markerEnd: markerEnd
+                )
+        }
+
+        guard content[start].isDigitForLiteral else {
+            return false
+        }
+        var cursor = start
+        repeat {
+            cursor = content.index(after: cursor)
+        } while cursor < content.endIndex && content[cursor].isDigitForLiteral
+
+        guard cursor < content.endIndex, content[cursor] == "." else {
+            return false
+        }
+        cursor = content.index(after: cursor)
+        return cursor < content.endIndex && content[cursor].isHorizontalWhitespace
+    }
+
     private func indentationEnd(in content: Substring) -> String.Index? {
+        indentationEnd(in: content, containerColumn: containerColumn)
+    }
+
+    private func indentationEnd(
+        in content: Substring,
+        containerColumn: Int
+    ) -> String.Index? {
         var index = content.startIndex
         var columns = 0
 
@@ -630,16 +1273,65 @@ struct LiminalCSTParser {
             case "\t":
                 columns += 4 - (columns % 4)
             default:
-                return columns <= 3 ? index : nil
+                return (containerColumn...(containerColumn + 3)).contains(columns) ? index : nil
             }
 
-            guard columns <= 3 else {
+            guard columns <= containerColumn + 3 else {
                 return nil
             }
             index = content.index(after: index)
         }
 
-        return index
+        return columns >= containerColumn ? index : nil
+    }
+
+    private func lineContentStart(
+        after targetColumn: Int,
+        in line: SourceLine
+    ) -> String.Index? {
+        var index = line.contentStart
+        var columns = 0
+        while index < line.contentEnd, source[index].isHorizontalWhitespace {
+            let nextColumns = columns + indentationWidth(of: source[index], at: columns)
+            guard nextColumns <= targetColumn else {
+                return index
+            }
+            columns = nextColumns
+            index = source.index(after: index)
+            if columns == targetColumn {
+                return index
+            }
+        }
+        return columns >= targetColumn ? index : nil
+    }
+
+    // TODO(post-mvp): `indentationColumn` and `column` walk substrings
+    // character-by-character, so a multi-line container paragraph runs them
+    // O(n) per line for O(n²) per paragraph total. Negligible at typical
+    // note sizes; revisit if profiling implicates the parser on large or
+    // deeply nested documents.
+    private func indentationColumn(in content: Substring) -> Int {
+        var columns = 0
+        var cursor = content.startIndex
+        while cursor < content.endIndex, content[cursor].isHorizontalWhitespace {
+            columns += indentationWidth(of: content[cursor], at: columns)
+            cursor = content.index(after: cursor)
+        }
+        return columns
+    }
+
+    private func column(in content: Substring, upTo end: String.Index) -> Int {
+        var columns = 0
+        var cursor = content.startIndex
+        while cursor < end {
+            columns += indentationWidth(of: content[cursor], at: columns)
+            cursor = content.index(after: cursor)
+        }
+        return columns
+    }
+
+    private func indentationWidth(of character: Character, at column: Int) -> Int {
+        character == "\t" ? 4 - (column % 4) : 1
     }
 
     private func closingFenceLineIndex(
@@ -864,6 +1556,48 @@ private struct TypedBlockInfo {
 private struct RawReservedBlockInfo {
     var kind: LiminalKind
     var header: TypedBlockInfo
+}
+
+private struct ListItemInfo {
+    var indentText: String
+    var indentColumn: Int
+    var markerStart: String.Index
+    var markerText: String
+    var markerFamily: ListMarkerFamily
+    var orderedStartText: String?
+    var orderedStartNumber: Int?
+    var markerWhitespaceText: String
+    var taskMarkerText: String?
+    var taskWhitespaceText: String
+    var contentStart: String.Index
+    var contentColumn: Int
+}
+
+private enum ListMarkerFamily: Equatable {
+    case unordered(Character)
+    case ordered
+
+    func isCompatible(with other: ListMarkerFamily) -> Bool {
+        switch (self, other) {
+        case (.unordered(let lhs), .unordered(let rhs)):
+            lhs == rhs
+        case (.ordered, .ordered):
+            true
+        default:
+            false
+        }
+    }
+}
+
+private struct TaskMarkerInfo {
+    var markerText: String
+    var markerEnd: String.Index
+}
+
+private struct BlockQuoteLineInfo {
+    var indentText: String
+    var markerWhitespaceText: String
+    var contentStart: String.Index
 }
 
 private struct SourceLine {

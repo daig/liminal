@@ -236,6 +236,29 @@ struct WorkspaceLinkingTests {
         #expect(index.references.map(\.target.rawTargetString) == ["Target"])
     }
 
+    @Test("document index walks Slice 4 list and blockquote containers")
+    func documentIndexWalksSlice4ListAndBlockquoteContainers() throws {
+        let source = """
+        - Item [[List Target]] ^list-item
+          - Nested [[Nested Target]]
+
+        > Quote [[Quote Target]]
+        """
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+        let listItemOffset = try sourceRange(of: "- Item", in: source).start
+
+        #expect(index.blocks == [
+            BlockAnchor(blockID: "list-item", sourceOffset: listItemOffset)
+        ])
+        #expect(index.references.map(\.target.rawTargetString).sorted() == [
+            "List Target",
+            "Nested Target",
+            "Quote Target"
+        ])
+        #expect(index.blockOffsets.count == 2)
+    }
+
     @Test("document index stores target token ranges while preserving containment ranges")
     func documentIndexStoresTargetTokenRangesWhilePreservingContainmentRanges() throws {
         let source = "See [[Target|Alias]].\n"

@@ -92,7 +92,7 @@ struct SyntaxTests {
             ParseExpectation(
                 description: "markdown-like source",
                 source: "# Typed documents\n\n- [[Note#Heading]]\n- `code`\n",
-                rootChildKinds: [.atxHeading, .blankLine, .paragraph]
+                rootChildKinds: [.atxHeading, .blankLine, .list]
             )
         ]
     )
@@ -246,6 +246,96 @@ struct SyntaxTests {
             "Paragraph ^",
             "Paragraph ^id extra"
         ])
+    }
+
+    @Test("Slice 4 parser emits recursive list CST")
+    func slice4ParserEmitsRecursiveListCST() throws {
+        let source = """
+        - [ ] First [[Target]] ^item-id
+              - Nested
+        2. Ordered
+        3. Next
+        + Plus
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 3)
+
+        guard case .list(let dashList) = root.documentItems[0] else {
+            Issue.record("expected dash list")
+            return
+        }
+        #expect(dashList.isOrdered == false)
+        #expect(dashList.markerText == "-")
+        #expect(dashList.items.count == 1)
+        #expect(dashList.items[0].taskState == .unchecked)
+        #expect(dashList.items[0].blockIdToken?.text == "item-id")
+        #expect(dashList.items[0].documentItems.count == 2)
+        guard case .list(let nestedList) = dashList.items[0].documentItems[1] else {
+            Issue.record("expected nested list")
+            return
+        }
+        #expect(nestedList.items.count == 1)
+
+        guard case .list(let orderedList) = root.documentItems[1] else {
+            Issue.record("expected ordered list")
+            return
+        }
+        #expect(orderedList.isOrdered)
+        #expect(orderedList.startNumber == 2)
+        #expect(orderedList.items.count == 2)
+
+        guard case .list(let plusList) = root.documentItems[2] else {
+            Issue.record("expected plus marker list")
+            return
+        }
+        #expect(plusList.markerText == "+")
+    }
+
+    @Test("Slice 4 parser emits blockquotes and rejects lazy continuation")
+    func slice4ParserEmitsBlockquotesAndRejectsLazyContinuation() throws {
+        let source = """
+        > Quote [[Target]]
+        > More
+        > - Item
+        after quote
+
+        - item
+        lazy continuation
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.isEmpty)
+        #expect(root.documentItems.count == 5)
+
+        guard case .blockQuote(let quote) = root.documentItems[0] else {
+            Issue.record("expected blockquote")
+            return
+        }
+        #expect(quote.documentItems.count == 2)
+        guard case .paragraph(let quoteParagraph) = quote.documentItems[0],
+              case .list = quote.documentItems[1]
+        else {
+            Issue.record("expected paragraph and list inside blockquote")
+            return
+        }
+        #expect(quoteParagraph.inlineContent?.plainText == "Quote Target More")
+
+        guard case .paragraph(let afterQuote) = root.documentItems[1],
+              case .list(let list) = root.documentItems[3],
+              case .paragraph(let lazyParagraph) = root.documentItems[4]
+        else {
+            Issue.record("expected lazy continuation to become a following paragraph")
+            return
+        }
+        #expect(afterQuote.inlineContent?.plainText == "after quote")
+        #expect(list.items.count == 1)
+        #expect(lazyParagraph.inlineContent?.plainText == "lazy continuation")
     }
 
     @Test("inline content plaintext projection follows CST inline semantics")
