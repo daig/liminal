@@ -759,7 +759,12 @@ struct LiminalCSTParser {
             case "-":
                 try builder.staticToken(.dash)
             default:
-                try builder.token(.errorText, text: String(source[cursor]))
+                // isTableDelimiterCell guarantees only ':' and '-' inside
+                // the trimmed range; any other char is a parser invariant
+                // violation, not user input we need to recover from.
+                preconditionFailure(
+                    "delimiter cell contains non-':-' character; isTableDelimiterCell should have rejected it"
+                )
             }
             cursor = source.index(after: cursor)
         }

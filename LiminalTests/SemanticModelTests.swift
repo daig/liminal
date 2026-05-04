@@ -573,9 +573,9 @@ struct SemanticModelTests {
     @Test("Slice 6 lowering maps pipe tables to Table nodes")
     func slice6LoweringMapsPipeTablesToTableNodes() throws {
         let source = """
-        | Name | Born |
-        | :--- | ---: |
-        | [[Ada]] | 1815 |
+        | Name | Born | Note |
+        | :--- | ---: | :---: |
+        | [[Ada]] | 1815 | first |
         """
         let document = LiminalLowerer().lower(try LiminalParser().parse(source))
 
@@ -584,9 +584,10 @@ struct SemanticModelTests {
         #expect(table.fields.map(\.name.rawValue) == ["columns", "rows"])
 
         guard case .list(let columns) = table.fields[0].value,
-              columns.count == 2,
+              columns.count == 3,
               case .node(let nameColumn) = columns[0],
-              case .node(let bornColumn) = columns[1]
+              case .node(let bornColumn) = columns[1],
+              case .node(let noteColumn) = columns[2]
         else {
             Issue.record("expected table columns")
             return
@@ -604,12 +605,16 @@ struct SemanticModelTests {
         #expect(bornColumn.fields.map(\.name.rawValue) == ["label", "align"])
         #expect(bornColumn.fields[1].value == .scalar(.bare("right")))
 
+        #expect(noteColumn.fields.map(\.name.rawValue) == ["label", "align"])
+        #expect(noteColumn.fields[1].value == .scalar(.bare("center")))
+
         guard case .list(let rows) = table.fields[1].value,
               case .node(let row) = rows.first,
               case .list(let cells) = row.fields.first?.value,
-              cells.count == 2,
+              cells.count == 3,
               case .inlineLiteral(let firstCell) = cells[0],
-              case .inlineLiteral(let secondCell) = cells[1]
+              case .inlineLiteral(let secondCell) = cells[1],
+              case .inlineLiteral(let thirdCell) = cells[2]
         else {
             Issue.record("expected table row cells")
             return
@@ -621,6 +626,7 @@ struct SemanticModelTests {
             return node.type.rawValue == "WikiLink"
         })
         #expect(secondCell == [.text("1815")])
+        #expect(thirdCell == [.text("first")])
     }
 }
 
