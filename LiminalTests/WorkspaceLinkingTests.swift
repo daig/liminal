@@ -361,6 +361,19 @@ struct WorkspaceLinkingTests {
         )
     }
 
+    @Test("document index walks Slice 5 rich inline containers but skips raw payloads")
+    func documentIndexWalksSlice5RichInlineContainersButSkipsRawPayloads() throws {
+        let source = #"~~[[Strike]]~~ ==[[Highlight]]== ^[[[Foot]]] %% [[Ignored Comment]] %% \([[Ignored Math]]\)"#
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        #expect(index.references.map(\.target.rawTargetString).sorted() == [
+            "Foot",
+            "Highlight",
+            "Strike"
+        ])
+    }
+
     @Test("vault link index resolves anchors and backlinks from explicit indexes")
     func vaultLinkIndexResolvesAnchorsAndBacklinksFromExplicitIndexes() {
         let sourceNote = makeNote(

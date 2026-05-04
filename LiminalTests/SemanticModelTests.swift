@@ -467,6 +467,59 @@ struct SemanticModelTests {
         #expect(html.type.rawValue == "HtmlBlock")
         #expect(html.fields.first?.value == .scalar(.string("<div>raw</div>\n")))
     }
+
+    @Test("Slice 5 lowering maps content blocks and rich inline nodes")
+    func slice5LoweringMapsContentBlocksAndRichInlineNodes() throws {
+        let source = """
+        ---
+        title: Ada
+        ---
+
+        ```swift linenos
+        print("hello")
+        ```
+
+        %%
+        hidden
+        %%
+
+        ~~deleted~~ ==marked== ^[note] \\(x^2\\) %% hidden %% $x$
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        guard case .value(let frontmatter) = document.items.first else {
+            Issue.record("expected frontmatter value item")
+            return
+        }
+        #expect(frontmatter.type.rawValue == "Frontmatter")
+        #expect(frontmatter.fields.map(\.name.rawValue) == ["format", "raw"])
+        #expect(frontmatter.fields[0].value == .scalar(.bare("yaml")))
+        #expect(frontmatter.fields[1].value == .scalar(.string("title: Ada\n")))
+
+        #expect(document.blocks.count == 3)
+        let code = try #require(document.blocks[0].node)
+        #expect(code.type.rawValue == "CodeBlock")
+        #expect(code.fields.map(\.name.rawValue) == ["language", "info", "text"])
+        #expect(code.fields[0].value == .scalar(.bare("swift")))
+        #expect(code.fields[1].value == .scalar(.string("swift linenos")))
+        #expect(code.fields[2].value == .scalar(.string(#"print("hello")"# + "\n")))
+
+        let comment = try #require(document.blocks[1].node)
+        #expect(comment.type.rawValue == "CommentBlock")
+        #expect(comment.fields.first?.value == .scalar(.string("hidden\n")))
+
+        let paragraph = try #require(document.blocks[2].node)
+        guard case .inline(let inlines) = paragraph.content else {
+            Issue.record("expected paragraph inline content")
+            return
+        }
+        let nodeTypes = inlines.compactMap { inline -> String? in
+            guard case .node(let node) = inline else { return nil }
+            return node.type.rawValue
+        }
+        #expect(nodeTypes == ["Strikethrough", "Highlight", "FootnoteInline", "MathInline", "CommentInline"])
+        #expect(inlines.contains(.text(" $x$")))
+    }
 }
 
 private extension LiminalBlock {

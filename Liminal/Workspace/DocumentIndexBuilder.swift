@@ -42,7 +42,7 @@ struct DocumentIndexBuilder {
 
     private mutating func walkItemForReferences(_ item: DocumentItemSyntax) {
         switch item {
-        case .blankLine:
+        case .blankLine, .frontmatter:
             break
         case .paragraph(let paragraph):
             appendBlockIDAnchor(token: paragraph.blockIdToken, sourceOffset: paragraph.range.start)
@@ -72,7 +72,7 @@ struct DocumentIndexBuilder {
             }
         case .typedBlock(let block):
             walkSyntaxChildren(of: block.syntax)
-        case .mathBlock, .htmlBlock:
+        case .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock:
             break
         }
     }
@@ -114,11 +114,17 @@ struct DocumentIndexBuilder {
             if let constructor = typedInline.constructor {
                 walkSyntaxChildren(of: constructor.syntax)
             }
+        case .strikethrough(let strikethrough):
+            walkInlineContent(strikethrough.inlineContent)
+        case .highlight(let highlight):
+            walkInlineContent(highlight.inlineContent)
+        case .footnoteInline(let footnote):
+            walkInlineContent(footnote.inlineContent)
         case .mdLink(let link):
             walkInlineContent(link.labelContent)
         case .mdImage(let image):
             walkInlineContent(image.altContent)
-        case .codeSpan, .escapedPunctuation:
+        case .codeSpan, .escapedPunctuation, .mathInline, .inlineComment:
             break
         }
     }

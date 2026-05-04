@@ -17,6 +17,16 @@ public struct LiminalLowerer: Sendable {
         switch item {
         case .blankLine:
             nil
+        case .frontmatter(let frontmatter):
+            .value(LiminalNode(
+                kind: .value,
+                type: "Frontmatter",
+                fields: [
+                    field("format", .scalar(.bare("yaml"))),
+                    field("raw", .scalar(.string(frontmatter.rawYamlText)))
+                ],
+                source: surface("frontmatter", frontmatter.syntax)
+            ))
         case .paragraph(let paragraph):
             lowerParagraph(paragraph).map { .block(.node($0)) }
         case .atxHeading(let heading):
@@ -29,6 +39,8 @@ public struct LiminalLowerer: Sendable {
             // Syntactic classification only; schema validation owns final type
             // resolution and context checks.
             .block(.node(lowerTypedBlock(block)))
+        case .fencedCodeBlock(let block):
+            .block(.node(lowerFencedCodeBlock(block)))
         case .mathBlock(let block):
             .block(.node(LiminalNode(
                 kind: .block,
@@ -46,6 +58,15 @@ public struct LiminalLowerer: Sendable {
                     field("raw", .scalar(.string(block.rawText)))
                 ],
                 source: surface("htmlBlock", block.syntax)
+            )))
+        case .commentBlock(let block):
+            .block(.node(LiminalNode(
+                kind: .block,
+                type: "CommentBlock",
+                fields: [
+                    field("raw", .scalar(.string(block.rawText)))
+                ],
+                source: surface("commentBlock", block.syntax)
             )))
         case .list(let list):
             .block(.node(lowerList(list)))
@@ -103,6 +124,24 @@ public struct LiminalLowerer: Sendable {
             type: "WikiEmbedBlock",
             fields: fields,
             source: surface("wikiEmbedBlock", embed.syntax)
+        )
+    }
+
+    private func lowerFencedCodeBlock(_ block: FencedCodeBlockSyntax) -> LiminalNode {
+        var fields: [LiminalField] = []
+        if let language = block.languageText {
+            fields.append(field("language", .scalar(.bare(language))))
+        }
+        if !block.normalizedInfoText.isEmpty {
+            fields.append(field("info", .scalar(.string(block.normalizedInfoText))))
+        }
+        fields.append(field("text", .scalar(.string(block.codeText))))
+
+        return LiminalNode(
+            kind: .block,
+            type: "CodeBlock",
+            fields: fields,
+            source: surface("fencedCodeBlock", block.syntax)
         )
     }
 
@@ -217,6 +256,20 @@ public struct LiminalLowerer: Sendable {
             ))
         case .escapedPunctuation(let punctuation):
             .text(punctuation.escapedText)
+        case .strikethrough(let strikethrough):
+            .node(LiminalNode(
+                kind: .inline,
+                type: "Strikethrough",
+                content: .inline(lowerInlineContent(strikethrough.inlineContent)),
+                source: surface("strikethrough", strikethrough.syntax)
+            ))
+        case .highlight(let highlight):
+            .node(LiminalNode(
+                kind: .inline,
+                type: "Highlight",
+                content: .inline(lowerInlineContent(highlight.inlineContent)),
+                source: surface("highlight", highlight.syntax)
+            ))
         case .mdLink(let link):
             lowerMarkdownLink(link)
         case .mdImage(let image):
@@ -231,6 +284,31 @@ public struct LiminalLowerer: Sendable {
             }
         case .structuredEmbed(let embed):
             lowerStructuredEmbedInline(embed)
+        case .mathInline(let math):
+            .node(LiminalNode(
+                kind: .inline,
+                type: "MathInline",
+                fields: [
+                    field("tex", .scalar(.string(math.texText)))
+                ],
+                source: surface("mathInline", math.syntax)
+            ))
+        case .inlineComment(let comment):
+            .node(LiminalNode(
+                kind: .inline,
+                type: "CommentInline",
+                fields: [
+                    field("raw", .scalar(.string(comment.rawText)))
+                ],
+                source: surface("inlineComment", comment.syntax)
+            ))
+        case .footnoteInline(let footnote):
+            .node(LiminalNode(
+                kind: .inline,
+                type: "FootnoteInline",
+                content: .inline(lowerInlineContent(footnote.inlineContent)),
+                source: surface("footnoteInline", footnote.syntax)
+            ))
         case nil:
             nil
         }

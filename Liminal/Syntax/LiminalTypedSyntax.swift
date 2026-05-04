@@ -71,12 +71,15 @@ public struct LiminalTokenSyntax: Sendable, Hashable {
 
 public enum DocumentItemSyntax: Sendable, Hashable {
     case blankLine(BlankLineSyntax)
+    case frontmatter(FrontmatterSyntax)
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
     case valueDeclaration(ValueDeclarationSyntax)
     case typedBlock(TypedBlockSyntax)
+    case fencedCodeBlock(FencedCodeBlockSyntax)
     case mathBlock(MathBlockSyntax)
     case htmlBlock(HtmlBlockSyntax)
+    case commentBlock(CommentBlockSyntax)
     case list(ListSyntax)
     case blockQuote(BlockQuoteSyntax)
     case structuredEmbedBlock(StructuredEmbedBlockSyntax)
@@ -86,6 +89,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         switch LiminalLanguage.kind(for: syntax.rawKind) {
         case .blankLine:
             self = .blankLine(BlankLineSyntax(unchecked: syntax))
+        case .frontmatter:
+            self = .frontmatter(FrontmatterSyntax(unchecked: syntax))
         case .paragraph:
             self = .paragraph(ParagraphSyntax(unchecked: syntax))
         case .atxHeading:
@@ -94,10 +99,14 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             self = .valueDeclaration(ValueDeclarationSyntax(unchecked: syntax))
         case .typedBlock:
             self = .typedBlock(TypedBlockSyntax(unchecked: syntax))
+        case .fencedCodeBlock:
+            self = .fencedCodeBlock(FencedCodeBlockSyntax(unchecked: syntax))
         case .mathBlock:
             self = .mathBlock(MathBlockSyntax(unchecked: syntax))
         case .htmlBlock:
             self = .htmlBlock(HtmlBlockSyntax(unchecked: syntax))
+        case .commentBlock:
+            self = .commentBlock(CommentBlockSyntax(unchecked: syntax))
         case .list:
             self = .list(ListSyntax(unchecked: syntax))
         case .blockQuote:
@@ -115,6 +124,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         switch self {
         case .blankLine(let item):
             item.syntax
+        case .frontmatter(let item):
+            item.syntax
         case .paragraph(let item):
             item.syntax
         case .atxHeading(let item):
@@ -123,9 +134,13 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.syntax
         case .typedBlock(let item):
             item.syntax
+        case .fencedCodeBlock(let item):
+            item.syntax
         case .mathBlock(let item):
             item.syntax
         case .htmlBlock(let item):
+            item.syntax
+        case .commentBlock(let item):
             item.syntax
         case .list(let item):
             item.syntax
@@ -142,6 +157,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
         switch self {
         case .blankLine(let item):
             item.range
+        case .frontmatter(let item):
+            item.range
         case .paragraph(let item):
             item.range
         case .atxHeading(let item):
@@ -150,9 +167,13 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.range
         case .typedBlock(let item):
             item.range
+        case .fencedCodeBlock(let item):
+            item.range
         case .mathBlock(let item):
             item.range
         case .htmlBlock(let item):
+            item.range
+        case .commentBlock(let item):
             item.range
         case .list(let item):
             item.range
@@ -170,8 +191,10 @@ public enum BlockSyntax: Sendable, Hashable {
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
     case typedBlock(TypedBlockSyntax)
+    case fencedCodeBlock(FencedCodeBlockSyntax)
     case mathBlock(MathBlockSyntax)
     case htmlBlock(HtmlBlockSyntax)
+    case commentBlock(CommentBlockSyntax)
     case list(ListSyntax)
     case blockQuote(BlockQuoteSyntax)
     case structuredEmbedBlock(StructuredEmbedBlockSyntax)
@@ -185,10 +208,14 @@ public enum BlockSyntax: Sendable, Hashable {
             self = .atxHeading(AtxHeadingSyntax(unchecked: syntax))
         case .typedBlock:
             self = .typedBlock(TypedBlockSyntax(unchecked: syntax))
+        case .fencedCodeBlock:
+            self = .fencedCodeBlock(FencedCodeBlockSyntax(unchecked: syntax))
         case .mathBlock:
             self = .mathBlock(MathBlockSyntax(unchecked: syntax))
         case .htmlBlock:
             self = .htmlBlock(HtmlBlockSyntax(unchecked: syntax))
+        case .commentBlock:
+            self = .commentBlock(CommentBlockSyntax(unchecked: syntax))
         case .list:
             self = .list(ListSyntax(unchecked: syntax))
         case .blockQuote:
@@ -210,9 +237,13 @@ public enum BlockSyntax: Sendable, Hashable {
             block.syntax
         case .typedBlock(let block):
             block.syntax
+        case .fencedCodeBlock(let block):
+            block.syntax
         case .mathBlock(let block):
             block.syntax
         case .htmlBlock(let block):
+            block.syntax
+        case .commentBlock(let block):
             block.syntax
         case .list(let block):
             block.syntax
@@ -233,9 +264,13 @@ public enum BlockSyntax: Sendable, Hashable {
             block.range
         case .typedBlock(let block):
             block.range
+        case .fencedCodeBlock(let block):
+            block.range
         case .mathBlock(let block):
             block.range
         case .htmlBlock(let block):
+            block.range
+        case .commentBlock(let block):
             block.range
         case .list(let block):
             block.range
@@ -252,12 +287,17 @@ public enum BlockSyntax: Sendable, Hashable {
 public enum InlineSyntax: Sendable, Hashable {
     case codeSpan(CodeSpanSyntax)
     case escapedPunctuation(EscapedPunctuationSyntax)
+    case strikethrough(StrikethroughSyntax)
+    case highlight(HighlightSyntax)
     case mdLink(MdLinkSyntax)
     case mdImage(MdImageSyntax)
     case wikilink(WikilinkSyntax)
     case wikiEmbed(WikiEmbedSyntax)
     case typedInline(TypedInlineSyntax)
     case structuredEmbed(StructuredEmbedSyntax)
+    case mathInline(MathInlineSyntax)
+    case inlineComment(InlineCommentSyntax)
+    case footnoteInline(FootnoteInlineSyntax)
 
     public init?(_ syntax: SyntaxNodeHandle<LiminalLanguage>) {
         switch LiminalLanguage.kind(for: syntax.rawKind) {
@@ -265,6 +305,10 @@ public enum InlineSyntax: Sendable, Hashable {
             self = .codeSpan(CodeSpanSyntax(unchecked: syntax))
         case .escapedPunctuation:
             self = .escapedPunctuation(EscapedPunctuationSyntax(unchecked: syntax))
+        case .strikethrough:
+            self = .strikethrough(StrikethroughSyntax(unchecked: syntax))
+        case .highlight:
+            self = .highlight(HighlightSyntax(unchecked: syntax))
         case .mdLink:
             self = .mdLink(MdLinkSyntax(unchecked: syntax))
         case .mdImage:
@@ -277,6 +321,12 @@ public enum InlineSyntax: Sendable, Hashable {
             self = .typedInline(TypedInlineSyntax(unchecked: syntax))
         case .structuredEmbed:
             self = .structuredEmbed(StructuredEmbedSyntax(unchecked: syntax))
+        case .mathInline:
+            self = .mathInline(MathInlineSyntax(unchecked: syntax))
+        case .inlineComment:
+            self = .inlineComment(InlineCommentSyntax(unchecked: syntax))
+        case .footnoteInline:
+            self = .footnoteInline(FootnoteInlineSyntax(unchecked: syntax))
         default:
             return nil
         }
@@ -288,6 +338,10 @@ public enum InlineSyntax: Sendable, Hashable {
             inline.syntax
         case .escapedPunctuation(let inline):
             inline.syntax
+        case .strikethrough(let inline):
+            inline.syntax
+        case .highlight(let inline):
+            inline.syntax
         case .mdLink(let inline):
             inline.syntax
         case .mdImage(let inline):
@@ -299,6 +353,12 @@ public enum InlineSyntax: Sendable, Hashable {
         case .typedInline(let inline):
             inline.syntax
         case .structuredEmbed(let inline):
+            inline.syntax
+        case .mathInline(let inline):
+            inline.syntax
+        case .inlineComment(let inline):
+            inline.syntax
+        case .footnoteInline(let inline):
             inline.syntax
         }
     }
@@ -309,6 +369,10 @@ public enum InlineSyntax: Sendable, Hashable {
             inline.range
         case .escapedPunctuation(let inline):
             inline.range
+        case .strikethrough(let inline):
+            inline.range
+        case .highlight(let inline):
+            inline.range
         case .mdLink(let inline):
             inline.range
         case .mdImage(let inline):
@@ -320,6 +384,12 @@ public enum InlineSyntax: Sendable, Hashable {
         case .typedInline(let inline):
             inline.range
         case .structuredEmbed(let inline):
+            inline.range
+        case .mathInline(let inline):
+            inline.range
+        case .inlineComment(let inline):
+            inline.range
+        case .footnoteInline(let inline):
             inline.range
         }
     }
@@ -403,6 +473,13 @@ public enum ValueSyntax: Sendable, Hashable {
 
 @CambiumSyntaxNode(LiminalKind.self, for: .blankLine)
 public struct BlankLineSyntax: LiminalSyntaxNode {}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .frontmatter)
+public struct FrontmatterSyntax: LiminalSyntaxNode {
+    public var rawYamlText: String {
+        directTokens(kind: .frontmatterText).map(\.text).joined()
+    }
+}
 
 @CambiumSyntaxNode(LiminalKind.self, for: .paragraph)
 public struct ParagraphSyntax: LiminalSyntaxNode {
@@ -498,10 +575,35 @@ public struct TypedBlockSyntax: LiminalSyntaxNode {
     }
 }
 
+@CambiumSyntaxNode(LiminalKind.self, for: .fencedCodeBlock)
+public struct FencedCodeBlockSyntax: LiminalSyntaxNode {
+    public var infoText: String {
+        firstToken(kind: .rawPayloadText)?.text ?? ""
+    }
+
+    public var normalizedInfoText: String {
+        infoText.trimmingHorizontalWhitespace
+    }
+
+    public var languageText: String? {
+        let trimmed = normalizedInfoText
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed.split(whereSeparator: \.isWhitespace).first.map(String.init)
+    }
+
+    public var codeText: String {
+        firstToken(kind: .codeText)?.text ?? ""
+    }
+}
+
 @CambiumSyntaxNode(LiminalKind.self, for: .mathBlock)
 public struct MathBlockSyntax: LiminalSyntaxNode {
     public var texText: String {
-        firstToken(kind: .rawPayloadText)?.text ?? ""
+        firstToken(kind: .mathText)?.text
+            ?? firstToken(kind: .rawPayloadText)?.text
+            ?? ""
     }
 }
 
@@ -509,6 +611,13 @@ public struct MathBlockSyntax: LiminalSyntaxNode {
 public struct HtmlBlockSyntax: LiminalSyntaxNode {
     public var rawText: String {
         firstToken(kind: .rawPayloadText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .commentBlock)
+public struct CommentBlockSyntax: LiminalSyntaxNode {
+    public var rawText: String {
+        firstToken(kind: .commentText)?.text ?? ""
     }
 }
 
@@ -632,6 +741,20 @@ public struct EscapedPunctuationSyntax: LiminalSyntaxNode {
     }
 }
 
+@CambiumSyntaxNode(LiminalKind.self, for: .strikethrough)
+public struct StrikethroughSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .highlight)
+public struct HighlightSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+}
+
 @CambiumSyntaxNode(LiminalKind.self, for: .mdLink)
 public struct MdLinkSyntax: LiminalSyntaxNode {
     public var labelContent: InlineContentSyntax? {
@@ -750,6 +873,27 @@ public struct StructuredEmbedSyntax: LiminalSyntaxNode {
     public var targetTextToken: LiminalTokenSyntax? {
         firstChild(kind: .embedTarget)?
             .firstToken(kind: .embedTargetText)
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .mathInline)
+public struct MathInlineSyntax: LiminalSyntaxNode {
+    public var texText: String {
+        firstToken(kind: .mathText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .inlineComment)
+public struct InlineCommentSyntax: LiminalSyntaxNode {
+    public var rawText: String {
+        firstToken(kind: .commentText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .footnoteInline)
+public struct FootnoteInlineSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
     }
 }
 
@@ -914,6 +1058,10 @@ private extension InlineSyntax {
             codeSpan.codeText
         case .escapedPunctuation(let punctuation):
             punctuation.escapedText
+        case .strikethrough(let strikethrough):
+            strikethrough.inlineContent?.plainText ?? ""
+        case .highlight(let highlight):
+            highlight.inlineContent?.plainText ?? ""
         case .mdLink(let link):
             link.labelContent?.plainText ?? ""
         case .mdImage(let image):
@@ -926,6 +1074,12 @@ private extension InlineSyntax {
             typedInline.constructor?.inlineContent?.plainText ?? ""
         case .structuredEmbed(let embed):
             embed.fallbackContent?.plainText ?? embed.targetText
+        case .mathInline(let math):
+            math.texText
+        case .inlineComment:
+            ""
+        case .footnoteInline(let footnote):
+            footnote.inlineContent?.plainText ?? ""
         }
     }
 }
@@ -1015,5 +1169,31 @@ internal extension SyntaxNodeHandle where Lang == LiminalLanguage {
             }
             return result
         }
+    }
+}
+
+private extension String {
+    var trimmingHorizontalWhitespace: String {
+        var start = startIndex
+        while start < endIndex, self[start].isHorizontalWhitespace {
+            start = index(after: start)
+        }
+
+        var end = endIndex
+        while end > start {
+            let previous = index(before: end)
+            guard self[previous].isHorizontalWhitespace else {
+                break
+            }
+            end = previous
+        }
+
+        return String(self[start..<end])
+    }
+}
+
+private extension Character {
+    var isHorizontalWhitespace: Bool {
+        self == " " || self == "\t"
     }
 }

@@ -338,6 +338,96 @@ struct SyntaxTests {
         #expect(lazyParagraph.inlineContent?.plainText == "lazy continuation")
     }
 
+    @Test("Slice 5 parser emits content block CST losslessly")
+    func slice5ParserEmitsContentBlockCSTLosslessly() throws {
+        let source = """
+        ---
+        title: Ada
+        ---
+
+        ```swift linenos
+        print("hello")
+        ```
+
+        $$
+        E = mc^2
+        $$
+
+        %%
+        hidden [[Not Indexed]]
+        %%
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 7)
+
+        guard case .frontmatter(let frontmatter) = root.documentItems[0],
+              case .fencedCodeBlock(let codeBlock) = root.documentItems[2],
+              case .mathBlock(let mathBlock) = root.documentItems[4],
+              case .commentBlock(let commentBlock) = root.documentItems[6]
+        else {
+            Issue.record("expected frontmatter, code, math, and comment blocks")
+            return
+        }
+
+        #expect(frontmatter.rawYamlText == "title: Ada\n")
+        #expect(codeBlock.infoText == "swift linenos")
+        #expect(codeBlock.languageText == "swift")
+        #expect(codeBlock.codeText == #"print("hello")"# + "\n")
+        #expect(mathBlock.texText == "E = mc^2\n")
+        #expect(commentBlock.rawText == "hidden [[Not Indexed]]\n")
+    }
+
+    @Test("Slice 5 parser emits rich inline CST")
+    func slice5ParserEmitsRichInlineCST() throws {
+        let source = #"~~deleted [[Target]]~~ ==marked== ^[note [[Foot]]] \(x^2\) %% hidden %% $x$"#
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineContent = paragraph.inlineContent
+        else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let inlineNodes = inlineContent.inlineNodes
+        #expect(inlineNodes.count == 5)
+        guard case .strikethrough(let strike) = inlineNodes[0],
+              case .highlight(let highlight) = inlineNodes[1],
+              case .footnoteInline(let footnote) = inlineNodes[2],
+              case .mathInline(let math) = inlineNodes[3],
+              case .inlineComment(let comment) = inlineNodes[4]
+        else {
+            Issue.record("expected slice 5 inline nodes")
+            return
+        }
+
+        #expect(strike.inlineContent?.plainText == "deleted Target")
+        #expect(highlight.inlineContent?.plainText == "marked")
+        #expect(footnote.inlineContent?.plainText == "note Foot")
+        #expect(math.texText == "x^2")
+        #expect(comment.rawText == " hidden ")
+        #expect(inlineContent.plainText.hasSuffix(" $x$"))
+    }
+
+    @Test("Slice 5 parser recovers incomplete content blocks and rich inline")
+    func slice5ParserRecoversIncompleteContentBlocksAndRichInline() throws {
+        let blockSource = "```swift\nunterminated\n"
+        let blockResult = try LiminalParser().parse(blockSource)
+        #expect(blockResult.sourceText == blockSource)
+        #expect(blockResult.diagnostics.map(\.message) == [
+            "missing closing code block fence"
+        ])
+
+        let inlineSource = #"%% hidden \(math ^[footnote ~~strike ==highlight"#
+        let inlineResult = try LiminalParser().parse(inlineSource)
+        #expect(inlineResult.sourceText == inlineSource)
+        #expect(inlineResult.diagnostics.map(\.message).contains("missing closing inline comment delimiter"))
+    }
+
     @Test("inline content plaintext projection follows CST inline semantics")
     func inlineContentPlainTextProjectionFollowsCSTInlineSemantics() throws {
         #expect(try paragraphPlainText("Plain text\n") == "Plain text")
@@ -347,6 +437,7 @@ struct SyntaxTests {
         #expect(try paragraphPlainText("![Alt](image.png)\n") == "Alt")
         #expect(try paragraphPlainText("See @Badge[Label]\n") == "See Label")
         #expect(try paragraphPlainText("[[Target|See `code`]]\n") == "See code")
+        #expect(try paragraphPlainText(#"~~gone~~ ==marked== ^[note] \(x\) %%hidden%% $x$"#) == "gone marked note x  $x$")
     }
 
     @Test("escaped punctuation is represented by explicit CST nodes")

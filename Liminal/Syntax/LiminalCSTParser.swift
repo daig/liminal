@@ -4,10 +4,10 @@ import CambiumCore
 // MARK: - Parser reuse boundaries
 //
 // Reusable (atomic, self-bounded by source delimiters):
-//   paragraph, atxHeading, codeSpan, mdLink, mdImage, wikilink,
-//   wikiEmbed, typedInline, structuredEmbed, wikiEmbedBlock,
-//   structuredEmbedBlock, valueDeclaration, typedBlock, mathBlock,
-//   and htmlBlock.
+//   paragraph, atxHeading, frontmatter, fencedCodeBlock, mathBlock,
+//   commentBlock, codeSpan, mdLink, mdImage, wikilink, wikiEmbed,
+//   typedInline, structuredEmbed, wikiEmbedBlock, structuredEmbedBlock,
+//   valueDeclaration, typedBlock, and htmlBlock.
 //
 // Not reusable: inlineContent — the same kind is emitted under headings,
 // paragraphs, link labels, and wikilink aliases with diverging stop rules,
@@ -49,6 +49,14 @@ struct LiminalCSTParser {
             if line.isBlank {
                 try emitBlankLine(line, with: &builder)
                 currentLineIndex += 1
+            } else if let frontmatter = frontmatterInfo(for: line) {
+                try emitFrontmatter(frontmatter, openerLine: line, with: &builder)
+            } else if let fencedCode = fencedCodeBlockInfo(for: line) {
+                try emitFencedCodeBlock(fencedCode, openerLine: line, with: &builder)
+            } else if let mathBlock = mathShorthandBlockInfo(for: line) {
+                try emitMathShorthandBlock(mathBlock, openerLine: line, with: &builder)
+            } else if let commentBlock = commentBlockInfo(for: line) {
+                try emitCommentBlock(commentBlock, openerLine: line, with: &builder)
             } else if let heading = headingInfo(for: line) {
                 try emitHeading(heading, line: line, with: &builder)
                 currentLineIndex += 1
@@ -80,6 +88,162 @@ struct LiminalCSTParser {
         builder.startNode(.blankLine)
         try emitWhitespace(line.contentText, with: &builder)
         try emitNewline(line.newlineText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitFrontmatter(
+        _ frontmatter: FrontmatterInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.frontmatter)
+        if !frontmatter.byteOrderMarkText.isEmpty {
+            try builder.token(.frontmatterText, text: frontmatter.byteOrderMarkText)
+        }
+        try builder.token(.fenceRun, text: frontmatter.delimiterText)
+        try emitNewline(openerLine.newlineText, with: &builder)
+
+        if let closeLineIndex = frontmatter.closeLineIndex {
+            let closeLine = lines[closeLineIndex]
+            let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
+            if !payload.isEmpty {
+                try builder.largeToken(.frontmatterText, text: payload)
+            }
+            try builder.token(.fenceRun, text: frontmatter.delimiterText)
+            try emitNewline(closeLine.newlineText, with: &builder)
+            currentLineIndex = closeLineIndex + 1
+        } else {
+            let payload = String(source[openerLine.newlineEnd..<source.endIndex])
+            if !payload.isEmpty {
+                try builder.largeToken(.frontmatterText, text: payload)
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic(
+                "missing closing frontmatter delimiter",
+                at: openerLine.contentStart,
+                length: frontmatter.delimiterText.utf8.count
+            )
+            currentLineIndex = lines.count
+        }
+
+        try builder.finishNode()
+    }
+
+    private mutating func emitFencedCodeBlock(
+        _ block: FencedCodeBlockInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.fencedCodeBlock)
+        try emitWhitespace(block.indentText, with: &builder)
+        try builder.token(.fenceRun, text: block.fenceText)
+        if !block.infoText.isEmpty {
+            try builder.token(.rawPayloadText, text: block.infoText)
+        }
+        try emitNewline(openerLine.newlineText, with: &builder)
+
+        if let closeLineIndex = block.closeLineIndex {
+            let closeLine = lines[closeLineIndex]
+            let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
+            if !payload.isEmpty {
+                try builder.largeToken(.codeText, text: payload)
+            }
+            try emitFencedCodeClosingFence(closeLine, opener: block, with: &builder)
+            currentLineIndex = closeLineIndex + 1
+        } else {
+            let payload = String(source[openerLine.newlineEnd..<source.endIndex])
+            if !payload.isEmpty {
+                try builder.largeToken(.codeText, text: payload)
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic(
+                "missing closing code block fence",
+                at: openerLine.contentStart,
+                length: block.fenceText.utf8.count
+            )
+            currentLineIndex = lines.count
+        }
+
+        try builder.finishNode()
+    }
+
+    private mutating func emitMathShorthandBlock(
+        _ block: MathShorthandBlockInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.mathBlock)
+        try emitWhitespace(block.indentText, with: &builder)
+        try builder.token(.fenceRun, text: block.openDelimiterText)
+        try emitWhitespace(block.trailingWhitespaceText, with: &builder)
+        try emitNewline(openerLine.newlineText, with: &builder)
+
+        if let closeLineIndex = block.closeLineIndex {
+            let closeLine = lines[closeLineIndex]
+            let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
+            if !payload.isEmpty {
+                try builder.largeToken(.mathText, text: payload)
+            }
+            try emitRawLineDelimiter(
+                closeLine,
+                delimiterText: block.closeDelimiterText,
+                with: &builder
+            )
+            currentLineIndex = closeLineIndex + 1
+        } else {
+            let payload = String(source[openerLine.newlineEnd..<source.endIndex])
+            if !payload.isEmpty {
+                try builder.largeToken(.mathText, text: payload)
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic(
+                "missing closing math block delimiter",
+                at: openerLine.contentStart,
+                length: block.openDelimiterText.utf8.count
+            )
+            currentLineIndex = lines.count
+        }
+
+        try builder.finishNode()
+    }
+
+    private mutating func emitCommentBlock(
+        _ block: CommentBlockInfo,
+        openerLine: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.commentBlock)
+        try emitWhitespace(block.indentText, with: &builder)
+        try builder.token(.fenceRun, text: block.delimiterText)
+        try emitWhitespace(block.trailingWhitespaceText, with: &builder)
+        try emitNewline(openerLine.newlineText, with: &builder)
+
+        if let closeLineIndex = block.closeLineIndex {
+            let closeLine = lines[closeLineIndex]
+            let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
+            if !payload.isEmpty {
+                try builder.largeToken(.commentText, text: payload)
+            }
+            try emitRawLineDelimiter(
+                closeLine,
+                delimiterText: block.delimiterText,
+                with: &builder
+            )
+            currentLineIndex = closeLineIndex + 1
+        } else {
+            let payload = String(source[openerLine.newlineEnd..<source.endIndex])
+            if !payload.isEmpty {
+                try builder.largeToken(.commentText, text: payload)
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic(
+                "missing closing comment block delimiter",
+                at: openerLine.contentStart,
+                length: block.delimiterText.utf8.count
+            )
+            currentLineIndex = lines.count
+        }
+
         try builder.finishNode()
     }
 
@@ -337,7 +501,7 @@ struct LiminalCSTParser {
             let closeLine = lines[closeLineIndex]
             let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
             if !payload.isEmpty {
-                try builder.largeToken(.rawPayloadText, text: payload)
+                try builder.largeToken(block.kind == .mathBlock ? .mathText : .rawPayloadText, text: payload)
             }
             try emitTypedBlockClosingFence(
                 closeLine,
@@ -348,7 +512,7 @@ struct LiminalCSTParser {
         } else {
             let payload = String(source[openerLine.newlineEnd..<source.endIndex])
             if !payload.isEmpty {
-                try builder.largeToken(.rawPayloadText, text: payload)
+                try builder.largeToken(block.kind == .mathBlock ? .mathText : .rawPayloadText, text: payload)
             }
             try builder.missingNode(.missing)
             appendDiagnostic(
@@ -397,6 +561,34 @@ struct LiminalCSTParser {
         try emitWhitespace(String(content[content.startIndex..<indentEnd]), with: &builder)
         try builder.token(.colonRun, text: colonRunText)
         try emitWhitespace(String(content[colonEnd..<content.endIndex]), with: &builder)
+        try emitNewline(line.newlineText, with: &builder)
+    }
+
+    private mutating func emitFencedCodeClosingFence(
+        _ line: SourceLine,
+        opener: FencedCodeBlockInfo,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        guard let close = fencedCodeClosingFenceInfo(for: line, opener: opener) else {
+            preconditionFailure("closing fence was identified with matching code fence")
+        }
+        try emitWhitespace(close.indentText, with: &builder)
+        try builder.token(.fenceRun, text: close.fenceText)
+        try emitWhitespace(close.trailingWhitespaceText, with: &builder)
+        try emitNewline(line.newlineText, with: &builder)
+    }
+
+    private mutating func emitRawLineDelimiter(
+        _ line: SourceLine,
+        delimiterText: String,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        guard let delimiter = rawLineDelimiterInfo(for: line, delimiterText: delimiterText) else {
+            preconditionFailure("closing delimiter was identified with matching raw delimiter")
+        }
+        try emitWhitespace(delimiter.indentText, with: &builder)
+        try builder.token(.fenceRun, text: delimiter.delimiterText)
+        try emitWhitespace(delimiter.trailingWhitespaceText, with: &builder)
         try emitNewline(line.newlineText, with: &builder)
     }
 
@@ -740,6 +932,10 @@ struct LiminalCSTParser {
 
     private func startsDocumentItem(_ line: SourceLine) -> Bool {
         line.isBlank
+            || frontmatterInfo(for: line) != nil
+            || fencedCodeBlockInfo(for: line) != nil
+            || mathShorthandBlockInfo(for: line) != nil
+            || commentBlockInfo(for: line) != nil
             || headingInfo(for: line) != nil
             || rawReservedBlockInfo(for: line) != nil
             || typedBlockInfo(for: line) != nil
@@ -748,6 +944,105 @@ struct LiminalCSTParser {
             || valueDeclarationInfo(for: line) != nil
             || blockQuoteLineInfo(for: line) != nil
             || listItemInfo(for: line) != nil
+    }
+
+    private func frontmatterInfo(for line: SourceLine) -> FrontmatterInfo? {
+        guard baseByteOffset == 0,
+              currentLineIndex == 0,
+              line.contentStart == source.startIndex
+        else {
+            return nil
+        }
+
+        let content = line.content
+        let bom = "\u{FEFF}"
+        if content == "---" {
+            return FrontmatterInfo(
+                byteOrderMarkText: "",
+                delimiterText: "---",
+                closeLineIndex: frontmatterCloseLineIndex(after: currentLineIndex)
+            )
+        }
+        if content.hasPrefix(bom), content.dropFirst() == "---" {
+            return FrontmatterInfo(
+                byteOrderMarkText: bom,
+                delimiterText: "---",
+                closeLineIndex: frontmatterCloseLineIndex(after: currentLineIndex)
+            )
+        }
+        return nil
+    }
+
+    private func fencedCodeBlockInfo(for line: SourceLine) -> FencedCodeBlockInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              indentEnd < content.endIndex,
+              content[indentEnd] == "`" || content[indentEnd] == "~"
+        else {
+            return nil
+        }
+
+        let fenceCharacter = content[indentEnd]
+        var fenceEnd = indentEnd
+        var fenceLength = 0
+        while fenceEnd < content.endIndex, content[fenceEnd] == fenceCharacter {
+            fenceLength += 1
+            fenceEnd = content.index(after: fenceEnd)
+        }
+        guard fenceLength >= 3 else {
+            return nil
+        }
+
+        let fenceText = String(content[indentEnd..<fenceEnd])
+        return FencedCodeBlockInfo(
+            indentText: String(content[content.startIndex..<indentEnd]),
+            fenceText: fenceText,
+            fenceCharacter: fenceCharacter,
+            fenceLength: fenceLength,
+            infoText: String(content[fenceEnd..<content.endIndex]),
+            closeLineIndex: fencedCodeClosingFenceLineIndex(
+                after: currentLineIndex,
+                opener: FencedCodeBlockInfo.Opening(
+                    fenceCharacter: fenceCharacter,
+                    fenceLength: fenceLength
+                )
+            )
+        )
+    }
+
+    private func mathShorthandBlockInfo(for line: SourceLine) -> MathShorthandBlockInfo? {
+        guard let delimiter = rawLineDelimiterInfo(for: line, delimiterText: "$$")
+                ?? rawLineDelimiterInfo(for: line, delimiterText: "\\[")
+        else {
+            return nil
+        }
+
+        let closeDelimiter = delimiter.delimiterText == "$$" ? "$$" : "\\]"
+        return MathShorthandBlockInfo(
+            indentText: delimiter.indentText,
+            openDelimiterText: delimiter.delimiterText,
+            closeDelimiterText: closeDelimiter,
+            trailingWhitespaceText: delimiter.trailingWhitespaceText,
+            closeLineIndex: rawLineDelimiterLineIndex(
+                after: currentLineIndex,
+                delimiterText: closeDelimiter
+            )
+        )
+    }
+
+    private func commentBlockInfo(for line: SourceLine) -> CommentBlockInfo? {
+        guard let delimiter = rawLineDelimiterInfo(for: line, delimiterText: "%%") else {
+            return nil
+        }
+        return CommentBlockInfo(
+            indentText: delimiter.indentText,
+            delimiterText: delimiter.delimiterText,
+            trailingWhitespaceText: delimiter.trailingWhitespaceText,
+            closeLineIndex: rawLineDelimiterLineIndex(
+                after: currentLineIndex,
+                delimiterText: delimiter.delimiterText
+            )
+        )
     }
 
     private func headingInfo(for line: SourceLine) -> HeadingInfo? {
@@ -1195,6 +1490,12 @@ struct LiminalCSTParser {
         if startsHeading(in: content, at: start) {
             return true
         }
+        if startsFencedCodeBlock(in: content, at: start)
+            || startsMathShorthandBlock(in: content, at: start)
+            || startsCommentBlock(in: content, at: start)
+        {
+            return true
+        }
         if content[start..<content.endIndex].hasPrefix("![[")
             || content[start..<content.endIndex].hasPrefix("!{")
             || content[start] == "@"
@@ -1214,6 +1515,42 @@ struct LiminalCSTParser {
         return (1...6).contains(count)
             && cursor < content.endIndex
             && content[cursor].isHorizontalWhitespace
+    }
+
+    private func startsFencedCodeBlock(in content: Substring, at start: String.Index) -> Bool {
+        guard content[start] == "`" || content[start] == "~" else {
+            return false
+        }
+        let marker = content[start]
+        var cursor = start
+        var count = 0
+        while cursor < content.endIndex, content[cursor] == marker {
+            count += 1
+            cursor = content.index(after: cursor)
+        }
+        return count >= 3
+    }
+
+    private func startsMathShorthandBlock(in content: Substring, at start: String.Index) -> Bool {
+        rawDelimiterStartsDocumentItem(in: content, at: start, delimiterText: "$$")
+            || rawDelimiterStartsDocumentItem(in: content, at: start, delimiterText: "\\[")
+    }
+
+    private func startsCommentBlock(in content: Substring, at start: String.Index) -> Bool {
+        rawDelimiterStartsDocumentItem(in: content, at: start, delimiterText: "%%")
+    }
+
+    private func rawDelimiterStartsDocumentItem(
+        in content: Substring,
+        at start: String.Index,
+        delimiterText: String
+    ) -> Bool {
+        guard content[start..<content.endIndex].hasPrefix(delimiterText) else {
+            return false
+        }
+        let delimiterEnd = content.index(start, offsetBy: delimiterText.count)
+        return delimiterEnd <= content.endIndex
+            && content[delimiterEnd..<content.endIndex].allSatisfy(\.isHorizontalWhitespace)
     }
 
     private func startsTypedBlock(in content: Substring, at start: String.Index) -> Bool {
@@ -1355,6 +1692,108 @@ struct LiminalCSTParser {
             lineIndex += 1
         }
         return nil
+    }
+
+    private func frontmatterCloseLineIndex(after openerLineIndex: Int) -> Int? {
+        var lineIndex = openerLineIndex + 1
+        while lineIndex < lines.count {
+            if lines[lineIndex].content == "---" {
+                return lineIndex
+            }
+            lineIndex += 1
+        }
+        return nil
+    }
+
+    private func fencedCodeClosingFenceLineIndex(
+        after openerLineIndex: Int,
+        opener: FencedCodeBlockInfo.Opening
+    ) -> Int? {
+        var lineIndex = openerLineIndex + 1
+        while lineIndex < lines.count {
+            if fencedCodeClosingFenceInfo(for: lines[lineIndex], opener: opener) != nil {
+                return lineIndex
+            }
+            lineIndex += 1
+        }
+        return nil
+    }
+
+    private func fencedCodeClosingFenceInfo(
+        for line: SourceLine,
+        opener: FencedCodeBlockInfo
+    ) -> FencedCodeClosingFenceInfo? {
+        fencedCodeClosingFenceInfo(for: line, opener: opener.opening)
+    }
+
+    private func fencedCodeClosingFenceInfo(
+        for line: SourceLine,
+        opener: FencedCodeBlockInfo.Opening
+    ) -> FencedCodeClosingFenceInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              indentEnd < content.endIndex,
+              content[indentEnd] == opener.fenceCharacter
+        else {
+            return nil
+        }
+
+        var fenceEnd = indentEnd
+        var fenceLength = 0
+        while fenceEnd < content.endIndex, content[fenceEnd] == opener.fenceCharacter {
+            fenceLength += 1
+            fenceEnd = content.index(after: fenceEnd)
+        }
+        guard fenceLength >= opener.fenceLength,
+              content[fenceEnd..<content.endIndex].allSatisfy(\.isHorizontalWhitespace)
+        else {
+            return nil
+        }
+
+        return FencedCodeClosingFenceInfo(
+            indentText: String(content[content.startIndex..<indentEnd]),
+            fenceText: String(content[indentEnd..<fenceEnd]),
+            trailingWhitespaceText: String(content[fenceEnd..<content.endIndex])
+        )
+    }
+
+    private func rawLineDelimiterLineIndex(
+        after openerLineIndex: Int,
+        delimiterText: String
+    ) -> Int? {
+        var lineIndex = openerLineIndex + 1
+        while lineIndex < lines.count {
+            if rawLineDelimiterInfo(for: lines[lineIndex], delimiterText: delimiterText) != nil {
+                return lineIndex
+            }
+            lineIndex += 1
+        }
+        return nil
+    }
+
+    private func rawLineDelimiterInfo(
+        for line: SourceLine,
+        delimiterText: String
+    ) -> RawLineDelimiterInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              content[indentEnd..<content.endIndex].hasPrefix(delimiterText)
+        else {
+            return nil
+        }
+
+        let delimiterEnd = content.index(indentEnd, offsetBy: delimiterText.count)
+        guard delimiterEnd <= content.endIndex,
+              content[delimiterEnd..<content.endIndex].allSatisfy(\.isHorizontalWhitespace)
+        else {
+            return nil
+        }
+
+        return RawLineDelimiterInfo(
+            indentText: String(content[content.startIndex..<indentEnd]),
+            delimiterText: delimiterText,
+            trailingWhitespaceText: String(content[delimiterEnd..<content.endIndex])
+        )
     }
 
     private func lineIndex(
@@ -1501,6 +1940,57 @@ private struct HeadingInfo {
     var bodyText: String
     var closingWhitespaceText: String?
     var closingMarkerText: String?
+    var trailingWhitespaceText: String
+}
+
+private struct FrontmatterInfo {
+    var byteOrderMarkText: String
+    var delimiterText: String
+    var closeLineIndex: Int?
+}
+
+private struct FencedCodeBlockInfo {
+    var indentText: String
+    var fenceText: String
+    var fenceCharacter: Character
+    var fenceLength: Int
+    var infoText: String
+    var closeLineIndex: Int?
+
+    var opening: Opening {
+        Opening(fenceCharacter: fenceCharacter, fenceLength: fenceLength)
+    }
+
+    struct Opening {
+        var fenceCharacter: Character
+        var fenceLength: Int
+    }
+}
+
+private struct FencedCodeClosingFenceInfo {
+    var indentText: String
+    var fenceText: String
+    var trailingWhitespaceText: String
+}
+
+private struct MathShorthandBlockInfo {
+    var indentText: String
+    var openDelimiterText: String
+    var closeDelimiterText: String
+    var trailingWhitespaceText: String
+    var closeLineIndex: Int?
+}
+
+private struct CommentBlockInfo {
+    var indentText: String
+    var delimiterText: String
+    var trailingWhitespaceText: String
+    var closeLineIndex: Int?
+}
+
+private struct RawLineDelimiterInfo {
+    var indentText: String
+    var delimiterText: String
     var trailingWhitespaceText: String
 }
 
@@ -2554,6 +3044,12 @@ private struct LiminalInlineCSTParser {
             if source[index] == "`" {
                 try flushText(upTo: index, with: &builder)
                 try emitCodeSpan(with: &builder)
+            } else if source[index..<source.endIndex].hasPrefix("%%") {
+                try flushText(upTo: index, with: &builder)
+                try emitInlineComment(with: &builder)
+            } else if source[index..<source.endIndex].hasPrefix("\\(") {
+                try flushText(upTo: index, with: &builder)
+                try emitMathInline(with: &builder)
             } else if source[index] == "\\", canParseEscapedPunctuation() {
                 try flushText(upTo: index, with: &builder)
                 try emitEscapedPunctuation(with: &builder)
@@ -2579,6 +3075,27 @@ private struct LiminalInlineCSTParser {
             } else if source[index] == "[", canParseMarkdownLink() {
                 try flushText(upTo: index, with: &builder)
                 try emitMarkdownLink(with: &builder)
+            } else if source[index..<source.endIndex].hasPrefix("^[") {
+                try flushText(upTo: index, with: &builder)
+                try emitInlineFootnote(with: &builder)
+            } else if source[index..<source.endIndex].hasPrefix("~~") {
+                try flushText(upTo: index, with: &builder)
+                try emitDelimitedInlineContainer(
+                    kind: .strikethrough,
+                    delimiter: "~~",
+                    delimiterKind: .tilde,
+                    missingMessage: "missing closing strikethrough delimiter",
+                    with: &builder
+                )
+            } else if source[index..<source.endIndex].hasPrefix("==") {
+                try flushText(upTo: index, with: &builder)
+                try emitDelimitedInlineContainer(
+                    kind: .highlight,
+                    delimiter: "==",
+                    delimiterKind: .equals,
+                    missingMessage: "missing closing highlight delimiter",
+                    with: &builder
+                )
             } else {
                 index = source.index(after: index)
             }
@@ -2666,6 +3183,135 @@ private struct LiminalInlineCSTParser {
             index = source.endIndex
             textStart = index
         }
+    }
+
+    private mutating func emitInlineComment(
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let openerStart = index
+        builder.startNode(.inlineComment)
+        try emitRepeatedStatic(.percent, count: 2, with: &builder)
+        let contentStart = index
+
+        if let closerStart = findInlineDelimiter("%%", from: contentStart) {
+            if contentStart < closerStart {
+                try builder.largeToken(.commentText, text: String(source[contentStart..<closerStart]))
+            }
+            index = closerStart
+            try emitRepeatedStatic(.percent, count: 2, with: &builder)
+        } else {
+            if contentStart < source.endIndex {
+                try builder.largeToken(.commentText, text: String(source[contentStart..<source.endIndex]))
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic("missing closing inline comment delimiter", at: openerStart, length: 2)
+            index = source.endIndex
+        }
+
+        try builder.finishNode()
+        textStart = index
+    }
+
+    private mutating func emitMathInline(
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let openerStart = index
+        builder.startNode(.mathInline)
+        try builder.staticToken(.backslash)
+        try builder.staticToken(.leftParen)
+        index = source.index(index, offsetBy: 2)
+        let contentStart = index
+
+        if let closerStart = findInlineDelimiter("\\)", from: contentStart) {
+            if contentStart < closerStart {
+                try builder.largeToken(.mathText, text: String(source[contentStart..<closerStart]))
+            }
+            index = closerStart
+            try builder.staticToken(.backslash)
+            try builder.staticToken(.rightParen)
+            index = source.index(index, offsetBy: 2)
+        } else {
+            if contentStart < source.endIndex {
+                try builder.largeToken(.mathText, text: String(source[contentStart..<source.endIndex]))
+            }
+            try builder.missingNode(.missing)
+            appendDiagnostic("missing closing inline math delimiter", at: openerStart, length: 2)
+            index = source.endIndex
+        }
+
+        try builder.finishNode()
+        textStart = index
+    }
+
+    private mutating func emitInlineFootnote(
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let openerStart = index
+        builder.startNode(.footnoteInline)
+        try builder.staticToken(.caret)
+        index = source.index(after: index)
+        let bracketIndex = index
+        try builder.staticToken(.leftBracket)
+        index = source.index(after: index)
+        let contentStart = index
+
+        if let close = findLabelClose(openBracketAt: bracketIndex) {
+            try emitNestedInlineContent(
+                String(source[contentStart..<close]),
+                baseByteOffset: globalByteOffset(of: contentStart),
+                with: &builder
+            )
+            index = close
+            try builder.staticToken(.rightBracket)
+            index = source.index(after: index)
+        } else {
+            try emitNestedInlineContent(
+                String(source[contentStart..<source.endIndex]),
+                baseByteOffset: globalByteOffset(of: contentStart),
+                with: &builder
+            )
+            try builder.missingNode(.missing)
+            appendDiagnostic("missing closing inline footnote delimiter", at: openerStart, length: 2)
+            index = source.endIndex
+        }
+
+        try builder.finishNode()
+        textStart = index
+    }
+
+    private mutating func emitDelimitedInlineContainer(
+        kind: LiminalKind,
+        delimiter: String,
+        delimiterKind: LiminalKind,
+        missingMessage: String,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let openerStart = index
+        builder.startNode(kind)
+        try emitRepeatedStatic(delimiterKind, count: delimiter.count, with: &builder)
+        let contentStart = index
+
+        if let closerStart = findInlineDelimiter(delimiter, from: contentStart) {
+            try emitNestedInlineContent(
+                String(source[contentStart..<closerStart]),
+                baseByteOffset: globalByteOffset(of: contentStart),
+                with: &builder
+            )
+            index = closerStart
+            try emitRepeatedStatic(delimiterKind, count: delimiter.count, with: &builder)
+        } else {
+            try emitNestedInlineContent(
+                String(source[contentStart..<source.endIndex]),
+                baseByteOffset: globalByteOffset(of: contentStart),
+                with: &builder
+            )
+            try builder.missingNode(.missing)
+            appendDiagnostic(missingMessage, at: openerStart, length: delimiter.utf8.count)
+            index = source.endIndex
+        }
+
+        try builder.finishNode()
+        textStart = index
     }
 
     private mutating func emitMarkdownLink(
@@ -2977,6 +3623,17 @@ private struct LiminalInlineCSTParser {
         textStart = end
     }
 
+    private mutating func emitRepeatedStatic(
+        _ kind: LiminalKind,
+        count: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        for _ in 0..<count {
+            try builder.staticToken(kind)
+            index = source.index(after: index)
+        }
+    }
+
     private func canParseMarkdownLink() -> Bool {
         guard let labelClose = findLabelClose(openBracketAt: index) else {
             return true
@@ -3091,6 +3748,22 @@ private struct LiminalInlineCSTParser {
                 if next < source.endIndex, source[next] == "]", !source.isEscaped(cursor) {
                     return cursor
                 }
+            }
+            cursor = source.index(after: cursor)
+        }
+        return nil
+    }
+
+    private func findInlineDelimiter(
+        _ delimiter: String,
+        from start: String.Index
+    ) -> String.Index? {
+        var cursor = start
+        while cursor < source.endIndex {
+            if source[cursor..<source.endIndex].hasPrefix(delimiter),
+               !source.isEscaped(cursor)
+            {
+                return cursor
             }
             cursor = source.index(after: cursor)
         }
