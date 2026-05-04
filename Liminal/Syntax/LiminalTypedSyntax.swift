@@ -33,6 +33,21 @@ public extension LiminalSyntaxNode {
             node.makeString()
         }
     }
+
+    /// True when the parser inserted a `.missing` child during recovery.
+    /// Used by lowering to fall back to literal text per spec rules
+    /// (e.g. §7.4 unmatched delimiters remain literal text).
+    var isIncomplete: Bool {
+        syntax.withCursor { node in
+            var found = false
+            node.forEachChild { child in
+                if !found, child.kind == .missing {
+                    found = true
+                }
+            }
+            return found
+        }
+    }
 }
 
 public struct LiminalTokenSyntax: Sendable, Hashable {

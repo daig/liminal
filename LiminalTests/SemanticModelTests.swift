@@ -520,6 +520,55 @@ struct SemanticModelTests {
         #expect(nodeTypes == ["Strikethrough", "Highlight", "FootnoteInline", "MathInline", "CommentInline"])
         #expect(inlines.contains(.text(" $x$")))
     }
+
+    @Test("incomplete inline containers lower as flat literal text")
+    func incompleteInlineContainersLowerAsFlatLiteralText() throws {
+        // Spec §7.4 (strikethrough/highlight) and §7.13 (footnote) say
+        // unmatched delimiters remain literal text. The CST keeps the
+        // incomplete node for recovery (§13); the lowerer drops to text.
+        let cases: [(source: String, expected: String)] = [
+            ("~~unclosed [[Wiki]]\n", "~~unclosed [[Wiki]]"),
+            ("==unclosed marker\n", "==unclosed marker"),
+            ("^[unclosed [[Note]]\n", "^[unclosed [[Note]]")
+        ]
+
+        for (source, expected) in cases {
+            let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+            let paragraph = try #require(document.blocks.first?.node)
+            guard case .inline(let inlines) = paragraph.content else {
+                Issue.record("expected paragraph inline content for \(source)")
+                continue
+            }
+            let semanticNodeTypes = inlines.compactMap { inline -> String? in
+                guard case .node(let node) = inline else { return nil }
+                return node.type.rawValue
+            }
+            #expect(
+                semanticNodeTypes.isEmpty,
+                "incomplete container should not produce a semantic node for \(source)"
+            )
+            let plainText = inlines.compactMap { inline -> String? in
+                guard case .text(let text) = inline else { return nil }
+                return text
+            }.joined()
+            #expect(plainText == expected, "for source \(source)")
+        }
+    }
+
+    @Test("fenced code block info field preserves raw whitespace")
+    func fencedCodeBlockInfoFieldPreservesRawWhitespace() throws {
+        // Spec §6.6: the `info` field carries the raw info string;
+        // only `language` is trimmed. Trailing whitespace must round-trip.
+        let source = "```swift   \nbody\n```\n"
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let code = try #require(document.blocks.first?.node)
+
+        #expect(code.type.rawValue == "CodeBlock")
+        #expect(code.fields.map(\.name.rawValue) == ["language", "info", "text"])
+        #expect(code.fields[0].value == .scalar(.bare("swift")))
+        #expect(code.fields[1].value == .scalar(.string("swift   ")))
+        #expect(code.fields[2].value == .scalar(.string("body\n")))
+    }
 }
 
 private extension LiminalBlock {

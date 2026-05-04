@@ -428,6 +428,60 @@ struct SyntaxTests {
         #expect(inlineResult.diagnostics.map(\.message).contains("missing closing inline comment delimiter"))
     }
 
+    @Test("frontmatter parser emits leading BOM as whitespace trivia")
+    func frontmatterParserEmitsLeadingBOMAsWhitespaceTrivia() throws {
+        let source = "\u{FEFF}---\ntitle: Ada\n---\n"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+
+        guard case .frontmatter(let frontmatter) = root.documentItems.first else {
+            Issue.record("expected frontmatter")
+            return
+        }
+
+        // BOM is preserved in the source bytes but kept out of the YAML payload.
+        #expect(frontmatter.rawYamlText == "title: Ada\n")
+        #expect(frontmatter.sourceText.hasPrefix("\u{FEFF}"))
+    }
+
+    @Test("raw payload inline delimiters ignore backslash escapes")
+    func rawPayloadInlineDelimitersIgnoreBackslashEscapes() throws {
+        // Math content is raw text per spec §7.10 — `\)` always closes
+        // at the first occurrence, even when preceded by a backslash
+        // that would mark it as escaped in non-raw contexts.
+        // Source `\(x \\) y\)` would, under escape-honoring rules, treat
+        // the first `\)` (at position 5-6) as escaped and close at the
+        // second `\)`. Under raw rules, it closes at position 5-6.
+        let mathSource = #"\(x \\) y\)"#
+        let mathRoot = try LiminalParser().parse(mathSource).rootSyntax
+        guard case .paragraph(let mathParagraph) = mathRoot.documentItems.first,
+              let mathInlines = mathParagraph.inlineContent?.inlineNodes,
+              case .mathInline(let math) = mathInlines.first
+        else {
+            Issue.record("expected math inline node")
+            return
+        }
+        #expect(math.texText == "x \\")
+        #expect(mathRoot.sourceText == mathSource)
+
+        // Comment content is raw text per spec §7.12 — `%%` always
+        // closes at the first occurrence even when preceded by `\`.
+        let commentSource = #"text %%a \%% rest %%"#
+        let commentRoot = try LiminalParser().parse(commentSource).rootSyntax
+        guard case .paragraph(let commentParagraph) = commentRoot.documentItems.first,
+              let commentInlines = commentParagraph.inlineContent?.inlineNodes,
+              case .inlineComment(let comment) = commentInlines.first
+        else {
+            Issue.record("expected inline comment node")
+            return
+        }
+        #expect(comment.rawText == "a \\")
+        #expect(commentRoot.sourceText == commentSource)
+    }
+
     @Test("inline content plaintext projection follows CST inline semantics")
     func inlineContentPlainTextProjectionFollowsCSTInlineSemantics() throws {
         #expect(try paragraphPlainText("Plain text\n") == "Plain text")

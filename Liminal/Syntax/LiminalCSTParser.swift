@@ -97,8 +97,11 @@ struct LiminalCSTParser {
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws {
         builder.startNode(.frontmatter)
+        // BOM is file-boundary trivia, not part of the YAML payload, so emit it
+        // as `.whitespace`. This keeps `FrontmatterSyntax.rawYamlText` clean
+        // while still preserving the source bytes losslessly.
         if !frontmatter.byteOrderMarkText.isEmpty {
-            try builder.token(.frontmatterText, text: frontmatter.byteOrderMarkText)
+            try builder.token(.whitespace, text: frontmatter.byteOrderMarkText)
         }
         try builder.token(.fenceRun, text: frontmatter.delimiterText)
         try emitNewline(openerLine.newlineText, with: &builder)
@@ -3193,7 +3196,7 @@ private struct LiminalInlineCSTParser {
         try emitRepeatedStatic(.percent, count: 2, with: &builder)
         let contentStart = index
 
-        if let closerStart = findInlineDelimiter("%%", from: contentStart) {
+        if let closerStart = findInlineDelimiter("%%", from: contentStart, honoringEscape: false) {
             if contentStart < closerStart {
                 try builder.largeToken(.commentText, text: String(source[contentStart..<closerStart]))
             }
@@ -3222,7 +3225,7 @@ private struct LiminalInlineCSTParser {
         index = source.index(index, offsetBy: 2)
         let contentStart = index
 
-        if let closerStart = findInlineDelimiter("\\)", from: contentStart) {
+        if let closerStart = findInlineDelimiter("\\)", from: contentStart, honoringEscape: false) {
             if contentStart < closerStart {
                 try builder.largeToken(.mathText, text: String(source[contentStart..<closerStart]))
             }
@@ -3756,12 +3759,13 @@ private struct LiminalInlineCSTParser {
 
     private func findInlineDelimiter(
         _ delimiter: String,
-        from start: String.Index
+        from start: String.Index,
+        honoringEscape: Bool = true
     ) -> String.Index? {
         var cursor = start
         while cursor < source.endIndex {
             if source[cursor..<source.endIndex].hasPrefix(delimiter),
-               !source.isEscaped(cursor)
+               !honoringEscape || !source.isEscaped(cursor)
             {
                 return cursor
             }

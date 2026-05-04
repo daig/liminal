@@ -132,8 +132,11 @@ public struct LiminalLowerer: Sendable {
         if let language = block.languageText {
             fields.append(field("language", .scalar(.bare(language))))
         }
+        // Per spec §6.6 the `info` field carries the raw info string;
+        // only `language` is trimmed. Gate emission on the normalized
+        // form so a whitespace-only info string doesn't produce a field.
         if !block.normalizedInfoText.isEmpty {
-            fields.append(field("info", .scalar(.string(block.normalizedInfoText))))
+            fields.append(field("info", .scalar(.string(block.infoText))))
         }
         fields.append(field("text", .scalar(.string(block.codeText))))
 
@@ -257,19 +260,23 @@ public struct LiminalLowerer: Sendable {
         case .escapedPunctuation(let punctuation):
             .text(punctuation.escapedText)
         case .strikethrough(let strikethrough):
-            .node(LiminalNode(
-                kind: .inline,
-                type: "Strikethrough",
-                content: .inline(lowerInlineContent(strikethrough.inlineContent)),
-                source: surface("strikethrough", strikethrough.syntax)
-            ))
+            strikethrough.isIncomplete
+                ? .text(strikethrough.sourceText)
+                : .node(LiminalNode(
+                    kind: .inline,
+                    type: "Strikethrough",
+                    content: .inline(lowerInlineContent(strikethrough.inlineContent)),
+                    source: surface("strikethrough", strikethrough.syntax)
+                ))
         case .highlight(let highlight):
-            .node(LiminalNode(
-                kind: .inline,
-                type: "Highlight",
-                content: .inline(lowerInlineContent(highlight.inlineContent)),
-                source: surface("highlight", highlight.syntax)
-            ))
+            highlight.isIncomplete
+                ? .text(highlight.sourceText)
+                : .node(LiminalNode(
+                    kind: .inline,
+                    type: "Highlight",
+                    content: .inline(lowerInlineContent(highlight.inlineContent)),
+                    source: surface("highlight", highlight.syntax)
+                ))
         case .mdLink(let link):
             lowerMarkdownLink(link)
         case .mdImage(let image):
@@ -303,12 +310,14 @@ public struct LiminalLowerer: Sendable {
                 source: surface("inlineComment", comment.syntax)
             ))
         case .footnoteInline(let footnote):
-            .node(LiminalNode(
-                kind: .inline,
-                type: "FootnoteInline",
-                content: .inline(lowerInlineContent(footnote.inlineContent)),
-                source: surface("footnoteInline", footnote.syntax)
-            ))
+            footnote.isIncomplete
+                ? .text(footnote.sourceText)
+                : .node(LiminalNode(
+                    kind: .inline,
+                    type: "FootnoteInline",
+                    content: .inline(lowerInlineContent(footnote.inlineContent)),
+                    source: surface("footnoteInline", footnote.syntax)
+                ))
         case nil:
             nil
         }
