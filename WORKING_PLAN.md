@@ -201,100 +201,109 @@ Per-slice discipline:
 - Each slice records its incremental reuse candidates.
 - Tests assert narrow contracts instead of broad golden CST dumps.
 
-### Phase 3 - Lowerer and Semantic Model
+### Phase 3 - Semantic Model and Schema Validation
 
-`LiminalLowerer.lower()` walks the typed overlay and produces a
-`LiminalDocument` with ordered document items. Renderable blocks remain a
-derived view of those items.
+Most of the originally-planned Phase 3 scope shipped incrementally during
+Phase 2. The lowerer (`Liminal/Semantics/Pipeline.swift`) covers every
+typed-overlay construct through slice 7; `LiminalDocument.items:
+[LiminalDocumentItem]` exists with `.block` / `.value` / `.schema` /
+`.template` / `.directive` cases; document-item lowering is wired for
+all five. What remains is prelude validation, structured schema-body
+parsing, and template execution semantics — three sub-arcs ordered by
+dependency.
 
-Construct lowering:
+**Phase 3a - Prelude reshape and base schema validator.** Self-contained;
+no dependencies on later sub-arcs.
 
-- Paragraph -> `Paragraph`.
-- ATX heading -> `Heading`.
-- Markdown link -> `Link`.
-- Markdown image -> `Image`.
-- Code span -> `CodeSpan`.
-- Soft/hard break -> `SoftBreak` / `HardBreak`.
-- Wikilink -> `WikiLink`.
-- Wiki embed -> `WikiEmbedInline` or `WikiEmbedBlock`.
-- Structured embed -> `EmbedInline`, `EmbedBlock`, or `EmbedValue`.
-- Frontmatter -> `Frontmatter`.
-- Generic typed constructors -> unresolved/resolved `LiminalNode` carrying the
-  source qname.
+- Reshape `LiminalPrelude.declarations` (`Liminal/Semantics/Schema.swift`)
+  to v0.2 §11. `Document` switches from `blocks: [blocks]` to `items:
+  [DocumentItem]` plus a `DocumentItem` variant type. Split the current
+  single inline `Math` and `Html` into `MathBlock` / `MathInline` and
+  `HtmlBlock` / `HtmlInline`. Add an optional `info` field to `CodeBlock`.
+  Add the missing v0.2 prelude types: `Frontmatter`, `ThematicBreak`,
+  `BlockQuote`, `List`, `ListItem`, `CommentBlock`, `EmbedBlock`,
+  `EmbedInline`, `EmbedValue`, `WikiLink`, `WikiEmbedBlock`,
+  `WikiEmbedInline`, `SoftBreak`, `HardBreak`, `Emphasis`, `Strong`,
+  `Strikethrough`, `Highlight`, `FootnoteInline`, `CommentInline`,
+  `Interpolation`.
+- Rewrite `LiminalTests/PreludeSchemaTests.swift` (currently hard-pins
+  the stale list).
+- Replace `SchemaValidator.validate(_:against:)` no-op stub
+  (`Liminal/Semantics/Schema.swift`) with a prelude-shape validation
+  pass over the lowered tree. Diagnostics are separate from parser
+  diagnostics; the validator never rewrites the CST or the lowered
+  document.
 
-Document-item lowering:
+**Phase 3b - User schemas and reference resolution.** Depends on Phase 3a.
 
-- Renderable blocks (paragraph, heading, list, code block, etc.) -> block
-  document item.
-- Top-level value declaration -> value document item carrying the resolved
-  `LiminalNode`.
-- `:::schema` block -> schema document item.
-- `:::template` block -> template document item.
-- `::use` directive -> directive document item.
+- Parse `:::schema` block bodies into structured `TypeDecl` / `TypeExpr`
+  per spec §9, replacing today's `largeToken(.schemaText)` raw text.
+  Add typed-overlay accessors for the parsed declarations.
+- Parse `::use` directive bodies into `UseKind? StringOrBare
+  ImportFilter? ImportAlias?` per spec §5, replacing today's raw
+  `directiveText`. Pairs naturally with reference resolution since
+  resolution is the consumer.
+- Resolve user-defined types: `@CustomLink{...}` resolves against the
+  union of prelude + `:::schema`-declared types + `::use`-imported
+  types. Unresolved typed constructors stay valid CST and produce
+  validation diagnostics, never parse errors.
 
-The Swift shape evolves from `LiminalDocument.blocks: [LiminalBlock]`
-(`Liminal/Semantics/Model.swift`) to `LiminalDocument.items:
-[LiminalDocumentItem]`, where `LiminalDocumentItem` is a tagged union over
-renderable block, value declaration, schema declaration, template declaration,
-and directive. The existing `blocks` field becomes a derived view (or is
-removed once consumers migrate).
+**Phase 3c - Template semantics.** Depends on Phase 3a; can run in
+parallel with 3b.
 
-Schema validation starts with the required v0.2 prelude shape. The existing
-`LiminalPrelude.declarations` (`Liminal/Semantics/Schema.swift`) must be
-reshaped, not just extended:
-
-- `Document` switches from `blocks: [blocks]` to `items: [DocumentItem]`, and
-  a `DocumentItem` variant type is added.
-- The current single inline `Math` and `Html` types split into `MathBlock` /
-  `MathInline` and `HtmlBlock` / `HtmlInline`.
-- `CodeBlock` gains an optional `info` field alongside `language` and `text`.
-- Add `Frontmatter`, `ThematicBreak`, `BlockQuote`, `List`, `ListItem`,
-  `CommentBlock`, `EmbedBlock`, `EmbedInline`, `EmbedValue`, `WikiLink`,
-  `WikiEmbedBlock`, `WikiEmbedInline`, `SoftBreak`, `HardBreak`, `Emphasis`,
-  `Strong`, `Strikethrough`, `Highlight`, `FootnoteInline`, `CommentInline`,
-  and `Interpolation`.
-
-`PreludeSchemaTests.swift` hard-pins the current type list and field shapes;
-it must be rewritten alongside the prelude.
-
-The schema pass annotates resolution and validation diagnostics. It never
-rewrites the CST. The current `SchemaValidator.validate(_:against:)`
-(`Liminal/Semantics/Schema.swift`) is a no-op stub; replace it with the
-prelude-shape validation pass described above as part of this phase.
+- Specialize `:::if` and `:::for` lowering: inside a `:::template` body,
+  these typed blocks lower to template-control semantic nodes (not
+  generic typed nodes) per spec §10.
+- Parse template signatures (`Card(person: Person) -> blocks`)
+  structurally per §10, replacing today's raw `templateText`.
+- Parse interpolation expressions (`${person.name ?? fallback}`) per
+  spec §7.14 grammar (NullCoalesce / Projection / Primary / Literal),
+  replacing today's raw `interpolationText`.
+- Template execution engine consumes all three. May spin out as a
+  Phase 3d depending on scope at that point.
 
 ### Phase 4 - Workspace Migration onto the CST
 
-The CST-backed `DocumentIndexBuilder` ships pre-slice-3 as a standalone
-walker over `RootSyntax`. `DocumentIndex.build(from:)` no longer goes
-through the lowerer; references carry both `sourceRange` (whole construct,
-for cursor containment) and `targetRange` (sub-token, for hover / Cmd-click
-/ rename), and `VaultLinkIndex` propagates the latter into
-`ResolvedReference`. `DocumentIndex.reference(containing:)` and
-`VaultLinkIndex.reference(in:at:)` return the innermost containing
-reference.
+Shipped via the CST-indexer migration (`a128aa2`) and slice 3
+(`5ab3b73`). `DocumentIndexBuilder` walks `RootSyntax` directly;
+`DocumentIndex.build(from:)` does not go through the lowerer; references
+carry both `sourceRange` (whole construct, cursor containment) and
+`targetRange` (sub-token, hover / Cmd-click / rename); `VaultLinkIndex`
+propagates `targetRange` into `ResolvedReference`;
+`reference(containing:)` returns the innermost match; heading anchors
+are top-level only; block anchors come from
+`paragraph.blockIdToken` / `atxHeading.blockIdToken`.
 
-Indexing sources today:
+Markdown link/image destination indexing and structured embed target
+indexing are intentionally not in Phase 4. They unblock with Phase 4.5
+below.
 
-- Heading anchors come from top-level `AtxHeadingSyntax` only. Headings
-  inside typed-block bodies and block literal values are content; the
-  spec'd way to anchor inside those constructs is a block ID (`^id`).
-- References come from `WikilinkSyntax`, `WikiEmbedSyntax`, and
-  `WikiEmbedBlockSyntax`.
+### Phase 4.5 - External-URI Policy
 
-Slice 3 adds block anchors via `paragraph.blockIdToken` /
-`atxHeading.blockIdToken`. After that, no other Phase 4 work is
-outstanding; vault resolution stays as-is.
+Markdown link/image destinations and structured embed targets are not
+indexed today because `WikiTarget.parse` / `LinkActivationPolicy.decision`
+cannot distinguish external URIs (`https://example.org`) from
+vault-relative paths. Indexing them now would let an external URL flow
+into `LinkActivationPolicy.decision` as `.createNote(relativePath:
+"https://...")` — Cmd-clicking would attempt to create a literally-named
+note.
 
-Deferred indexing (token accessors land but no references emitted):
+Scope:
 
-- Markdown link/image destinations
-  (`MdLinkSyntax.destinationTextToken`,
-  `MdImageSyntax.destinationTextToken`).
-- Structured embed targets (`StructuredEmbed*Syntax.targetTextToken`).
-- Both share the failure mode where `https://example.org` flows through
-  `WikiTarget.parse` into `LinkActivationPolicy.decision` as
-  `.createNote(relativePath: "https://...")`. They unblock as a unit
-  once a separate vault-resolution PR introduces an external-URI policy.
+- Extend `WikiTarget` (or successor) to model external URI versus
+  vault-relative path as distinct cases.
+- Update `LinkActivationPolicy.decision` for external targets (open in
+  default handler, no auto-create).
+- Once the policy lands, extend `DocumentIndexBuilder` to emit
+  `DocumentReference`s from `MdLinkSyntax` / `MdImageSyntax`
+  destinations and `StructuredEmbed*Syntax` targets. Token accessors
+  already exist (`destinationTextToken`, `targetTextToken`).
+- Decide whether image destinations should be `kind: .link` or
+  `kind: .embed` (asset embedding is a separate navigation concern).
+
+Vault navigation stays correct without this work; closing the gap is
+about reach, not correctness. May reshuffle ahead of Phase 3 if editor
+work in Phase 7 needs it sooner.
 
 ### Phase 5 - Printer
 
@@ -400,9 +409,11 @@ These are no longer open design questions:
 - **Document items.** Any blocks-only document model must move to ordered items
   plus a renderable block view.
 - **Source provenance.** Semantic document items may retain CST/source
-  provenance through `SurfaceInfo` / `SurfaceForm`, and `LiminalDocument` may
-  retain the syntax tree. Semantic consumers should not own raw source text or
-  reparse strings.
+  provenance through `SurfaceForm`, and `LiminalDocument` may retain the
+  syntax tree. The workspace indexer reads provenance from CST tokens
+  directly (not from `SurfaceForm`); any future consumer needing
+  sub-token range fidelity should follow the same pattern. No semantic
+  consumer should own raw source text or reparse strings.
 - **`GreenTreeContext` namespace stability.** Keep parse-session context
   threaded consistently with `policy: .parseSession(maxEntries: 16_384)` until
   there is a measured reason to change it. Interner collisions become silent
@@ -418,22 +429,34 @@ These are no longer open design questions:
 
 ## Exit Criteria per Phase
 
-- **Phase 0.** `LiminalKind` has stable v0.2 category coverage and correct
-  Cambium classification.
-- **Phase 1.** Slice 1 typed overlays compile.
-- **Phase 2 slice N.** Constructs round-trip losslessly, ranges are correct,
-  recovery emits sentinels, and reuse candidates are recorded.
-- **Phase 3 per slice.** `LiminalDocument` document items populate correctly,
-  renderable block views work, and prelude validation runs.
-- **Phase 4.** `DocumentIndex` is extracted from the CST and exposes
-  sub-token `targetRange` alongside containment `sourceRange`;
-  `VaultLinkIndex` builds from those CST-derived indexes without ad hoc
-  source scanning. Block anchors land with slice 3.
-- **Phase 5.** Lossless print walks real CST tokens; canonical print emits
-  schema-ordered typed syntax for lowered document items.
+- **Phase 0** [satisfied: `9498111`]. `LiminalKind` has stable v0.2
+  category coverage and correct Cambium classification.
+- **Phase 1** [satisfied: `c593936`]. Typed-overlay infrastructure
+  compiles.
+- **Phase 2** [satisfied: slices 1-7 plus `e9ff413`]. Constructs round-
+  trip losslessly, ranges are correct, recovery emits sentinels, reuse
+  candidates are recorded, same-colon-count nesting works.
+- **Phase 3a.** Prelude matches v0.2 §11; `PreludeSchemaTests` rewritten;
+  `SchemaValidator.validate` runs prelude-shape validation against
+  lowered documents.
+- **Phase 3b.** `:::schema` bodies and `::use` directive bodies parse
+  structurally; reference resolution unifies prelude with user-defined
+  types.
+- **Phase 3c.** `:::if` / `:::for` lower to template-control semantic
+  nodes; template signatures parse structurally; interpolation
+  expressions parse per §7.14.
+- **Phase 4** [satisfied: `a128aa2` + `5ab3b73`]. `DocumentIndex` is
+  extracted from the CST and exposes sub-token `targetRange` alongside
+  containment `sourceRange`; `VaultLinkIndex` builds without ad hoc
+  source scanning; block anchors come from CST suffix tokens.
+- **Phase 4.5.** `WikiTarget` distinguishes external URIs from vault-
+  relative paths; markdown destinations and structured embed targets
+  are indexed and route through correct activation policy.
+- **Phase 5.** Lossless print walks real CST tokens; canonical print
+  emits schema-ordered typed syntax for lowered document items.
 - **Phase 6.** Reparses with edits demonstrably reuse eligible subtrees.
-- **Phase 7.** The editor opens, renders, edits, navigates, and indexes a real
-  `.lim` document.
+- **Phase 7.** The editor opens, renders, edits, navigates, and indexes
+  a real `.lim` document.
 
 ---
 
@@ -444,9 +467,9 @@ Already shipped:
 - **Phase 0** (`9498111`): Cambium product dependencies, the v0.2 kind
   taxonomy with stable raw bands, `serializationVersion` bump, and pinned
   language classification tests.
-- **Phase 1** (`c593936`): typed-overlay infrastructure (`LiminalSyntaxNode`,
-  `LiminalTokenSyntax`, the four union dispatch points, shared traversal
-  helpers, and `RootSyntax`).
+- **Phase 1** (`c593936`): typed-overlay infrastructure
+  (`LiminalSyntaxNode`, `LiminalTokenSyntax`, the four union dispatch
+  points, shared traversal helpers, and `RootSyntax`).
 - **Slice 1** (`d0c7fb0`): root, blank lines, paragraphs, ATX headings,
   inline text, code spans, markdown links/images, wikilinks, and wiki
   embeds, with typed overlays and lowering to ordered document items.
@@ -455,18 +478,40 @@ Already shipped:
   references, inline/block literals, and reserved raw `MathBlock` /
   `HtmlBlock` fences.
 - **Indexer items-walk fix** (`52756b1`): `DocumentIndex.build` walks
-  `document.items` (not just blocks) and recurses through field values so
-  wikilinks/embeds inside top-level value declarations or typed-block
-  bodies are no longer dropped.
+  `document.items` and recurses through field values so wikilinks/embeds
+  inside top-level value declarations or typed-block bodies are no
+  longer dropped.
 - **CST-based indexing migration** (`a128aa2`): `DocumentIndexBuilder`
-  walks `RootSyntax` directly; indexing no longer depends on the lowerer.
-  `DocumentReference` and `ResolvedReference` carry sub-token `targetRange`
-  alongside containment `sourceRange`. `reference(containing:)` returns
-  the innermost match. Heading anchors are top-level only. Markdown
-  destination and structured embed target indexing are explicitly deferred
-  pending external-URI policy. Most of Phase 4's scope ships here.
+  walks `RootSyntax` directly; sub-token `targetRange` on references;
+  innermost-match containment; top-level-only heading anchors. Most of
+  Phase 4's scope ships here.
+- **Slice 3** (`5ab3b73`): trailing `^block-id` suffix on paragraphs and
+  ATX headings, through parser, typed overlay, lowerer
+  (`LiminalNode.id`), and `DocumentIndexBuilder` (`BlockAnchor` from
+  `blockIdToken`). Completes Phase 4.
+- **Slice 4** (`bde0148`): recursive containers — ordered/unordered/task
+  lists, blockquotes, nesting, continuation indentation; lazy
+  continuation rejected.
+- **Slice 5** (`41ee006` + `79683bc`): content blocks and rich inline —
+  fenced code, `MathBlock`, frontmatter, comment blocks, inline
+  comments, strikethrough, highlights, inline footnotes, `\(...\)`
+  inline math.
+- **Slice 6** (`ea9a1f1` + `abc6fdd`): high-complexity surfaces — pipe
+  tables and explicit `:::HtmlBlock` raw fences.
+- **Slice 7** (`597b51f`): language-level items — `::use` directives
+  (raw body), `:::schema` blocks (raw body), `:::template` blocks
+  (parsed body with interpolation), `${...}` interpolation parsing
+  (raw expression), and an external-reference cursor fix. Schema bodies,
+  `::use` bodies, template signatures, and interpolation expressions
+  are intentionally raw text; structured parsing pairs with their
+  consumers in Phase 3.
+- **Typed-block nesting fix** (`e9ff413`): `closingFenceLineIndex`
+  tracks same-colon-count nesting via `nestedDepth`; the duplicate
+  `templateClosingFenceLineIndex` is gone. Phase 2 cleanup.
 
-Next: **slice 3 — block IDs.** Trailing `^block-id` on paragraphs and ATX
-headings (list items follow when slice 4 lands lists), through parser,
-typed overlay, lowerer, and `DocumentIndexBuilder`. See Phase 2 slice 3
-and Phase 4 above.
+Next: **Phase 3a — prelude reshape and base schema validator.** Reshape
+`LiminalPrelude.declarations` (`Liminal/Semantics/Schema.swift`) to
+match v0.2 §11, rewrite `LiminalTests/PreludeSchemaTests.swift`, and
+replace the `SchemaValidator.validate(_:against:)` no-op stub with a
+prelude-shape validation pass. Self-contained; no dependencies on later
+sub-arcs.
