@@ -1424,15 +1424,11 @@ struct LiminalCSTParser {
     }
 
     private func templateBlockInfo(for line: SourceLine) -> TypedBlockInfo? {
-        guard var block = typedBlockInfo(for: line),
+        guard let block = typedBlockInfo(for: line),
               block.qnameText == "template"
         else {
             return nil
         }
-        block.closeLineIndex = templateClosingFenceLineIndex(
-            after: currentLineIndex,
-            colonRunText: block.colonRunText
-        )
         return block
     }
 
@@ -2181,29 +2177,6 @@ struct LiminalCSTParser {
     }
 
     private func closingFenceLineIndex(
-        after openerLineIndex: Int,
-        colonRunText: String
-    ) -> Int? {
-        var lineIndex = openerLineIndex + 1
-        while lineIndex < lines.count {
-            let line = lines[lineIndex]
-            let content = line.content
-            if let indentEnd = indentationEnd(in: content),
-               content[indentEnd..<content.endIndex].hasPrefix(colonRunText)
-            {
-                let colonEnd = content.index(indentEnd, offsetBy: colonRunText.count)
-                if colonEnd <= content.endIndex,
-                   content[colonEnd..<content.endIndex].allSatisfy(\.isHorizontalWhitespace)
-                {
-                    return lineIndex
-                }
-            }
-            lineIndex += 1
-        }
-        return nil
-    }
-
-    private func templateClosingFenceLineIndex(
         after openerLineIndex: Int,
         colonRunText: String
     ) -> Int? {

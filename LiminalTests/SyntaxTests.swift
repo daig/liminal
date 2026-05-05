@@ -707,6 +707,72 @@ struct SyntaxTests {
         #expect(referenceTexts == ["ada", "people.ada", "./people.lim#ada"])
     }
 
+    @Test("typed block fences support same-colon-count nesting")
+    func typedBlockFencesSupportSameColonCountNesting() throws {
+        let source = """
+        :::Outer
+        :::Inner
+        body
+        :::
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 1)
+
+        guard case .typedBlock(let outer) = root.documentItems.first else {
+            Issue.record("expected outer typed block")
+            return
+        }
+        #expect(outer.typeName == "Outer")
+        #expect(outer.documentItems.count == 1)
+
+        guard case .typedBlock(let inner) = outer.documentItems.first else {
+            Issue.record("expected nested typed block")
+            return
+        }
+        #expect(inner.typeName == "Inner")
+
+        guard case .paragraph(let paragraph) = inner.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes
+        else {
+            Issue.record("expected nested body paragraph")
+            return
+        }
+        #expect(inlineNodes.isEmpty)
+        #expect(paragraph.sourceText == "body\n")
+    }
+
+    @Test("schema block close detection skips nested colon-fence-like content")
+    func schemaBlockCloseDetectionSkipsNestedColonFenceLikeContent() throws {
+        let source = """
+        :::schema prelude
+        :::Callout
+        body
+        :::
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 1)
+
+        guard case .schemaBlock(let schema) = root.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        #expect(schema.nameText == "prelude")
+        // The schema's close fence is the OUTER `:::`; the inner `:::Callout`
+        // colon-fence content stays inside the schema's raw body text.
+        #expect(schema.rawText.contains(":::Callout"))
+        #expect(schema.rawText.contains("body"))
+    }
+
     @Test("inline content plaintext projection follows CST inline semantics")
     func inlineContentPlainTextProjectionFollowsCSTInlineSemantics() throws {
         #expect(try paragraphPlainText("Plain text\n") == "Plain text")
