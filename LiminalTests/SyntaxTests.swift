@@ -6,7 +6,7 @@ import Testing
 struct SyntaxTests {
     @Test("syntax kinds use stable Phase 0 raw bands")
     func syntaxKindRawBandsAreStable() {
-        #expect(LiminalLanguage.serializationVersion == 4)
+        #expect(LiminalLanguage.serializationVersion == 5)
 
         #expect(LiminalKind.whitespace.rawValue == 1)
         #expect(LiminalKind.newline.rawValue == 2)
@@ -658,6 +658,98 @@ struct SyntaxTests {
         #expect(control.typeName == "if")
         #expect(interpolation.expressionText == "person.bio")
         #expect(wikilink.targetText == "Target")
+    }
+
+    @Test("Phase 3b.1 parser structures :::schema declaration shells")
+    func phase3b1ParserStructuresSchemaDeclarations() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = {
+          name: str
+        }
+        type Card : block = { title: str }
+        type Render : template = PersonCard(p: Person) -> blocks
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 1)
+
+        guard case .schemaBlock(let schema) = root.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+
+        #expect(schema.declarations.count == 2)
+        #expect(schema.templateDeclarations.count == 1)
+
+        #expect(schema.declarations[0].qnameText == "Person")
+        #expect(schema.declarations[0].nodeKindText == "value")
+        #expect(schema.declarations[0].rhsText.contains("name: str"))
+
+        #expect(schema.declarations[1].qnameText == "Card")
+        #expect(schema.declarations[1].nodeKindText == "block")
+
+        #expect(schema.templateDeclarations[0].qnameText == "Render")
+        #expect(schema.templateDeclarations[0].nodeKindText == "template")
+        #expect(schema.templateDeclarations[0].signatureText.contains("PersonCard"))
+    }
+
+    @Test("Phase 3b.1 parser preserves schema rawText for slice 7 sources")
+    func phase3b1ParserPreservesSchemaRawText() throws {
+        // Re-run the slice 7 source verbatim and confirm `schema.rawText`
+        // (now derived from `body.sourceText`) still produces the same
+        // substring the slice 7 test pinned.
+        let source = """
+        ::use type "./schema.lim" as schema
+        :::schema prelude
+        type Person : value = {
+          name: str
+        }
+        :::
+        :::template PersonCard(person: Person) -> blocks
+        :::if{test: person.bio}
+        Bio ${person.bio} [[Target]]
+        :::
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.isEmpty)
+
+        guard case .schemaBlock(let schema) = root.documentItems[1] else {
+            Issue.record("expected schema block document item")
+            return
+        }
+        #expect(schema.rawText.contains("type Person : value"))
+        #expect(schema.rawText.contains("name: str"))
+    }
+
+    @Test("Phase 3b.1 parser recovers from a malformed schema declaration")
+    func phase3b1ParserRecoversMalformedSchemaDeclaration() throws {
+        let source = """
+        :::schema prelude
+        type Person value = {}
+        type Card : block = {}
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.contains { $0.message.contains("expected `:`") })
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        // Recovery doesn't drop subsequent declarations.
+        let names = schema.declarations.map(\.qnameText)
+        #expect(names.contains("Card"))
     }
 
     @Test("Slice 7 parser recovers incomplete language-level syntax")

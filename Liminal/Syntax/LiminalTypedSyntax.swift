@@ -570,12 +570,24 @@ public struct SchemaBlockSyntax: LiminalSyntaxNode {
         firstChild(kind: .schemaHeader).map(SchemaHeaderSyntax.init(unchecked:))
     }
 
+    public var body: SchemaBodySyntax? {
+        firstChild(kind: .schemaBody).map(SchemaBodySyntax.init(unchecked:))
+    }
+
     public var nameText: String? {
         header?.nameText
     }
 
     public var rawText: String {
-        directTokens(kind: .schemaText).map(\.text).joined()
+        body?.sourceText ?? ""
+    }
+
+    public var declarations: [SchemaTypeDeclarationSyntax] {
+        body?.declarations ?? []
+    }
+
+    public var templateDeclarations: [SchemaTemplateTypeDeclarationSyntax] {
+        body?.templateDeclarations ?? []
     }
 }
 
@@ -591,6 +603,60 @@ public struct SchemaHeaderSyntax: LiminalSyntaxNode {
             return nil
         }
         return identifiers[1].text
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaBody)
+public struct SchemaBodySyntax: LiminalSyntaxNode {
+    public var declarations: [SchemaTypeDeclarationSyntax] {
+        childNodes(kind: .schemaTypeDeclaration).map(SchemaTypeDeclarationSyntax.init(unchecked:))
+    }
+
+    public var templateDeclarations: [SchemaTemplateTypeDeclarationSyntax] {
+        childNodes(kind: .schemaTemplateTypeDeclaration).map(SchemaTemplateTypeDeclarationSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaTypeDeclaration)
+public struct SchemaTypeDeclarationSyntax: LiminalSyntaxNode {
+    public var qnameText: String {
+        firstToken(kind: .qname)?.text ?? ""
+    }
+
+    /// The discriminator identifier — the second `.identifier` token (the
+    /// first being the literal `type` keyword). Returns the empty string
+    /// when the declaration is malformed and the discriminator is missing.
+    public var nodeKindText: String {
+        let identifiers = directTokens(kind: .identifier)
+        guard identifiers.count > 1 else {
+            return ""
+        }
+        return identifiers[1].text
+    }
+
+    public var rhsText: String {
+        firstToken(kind: .schemaText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaTemplateTypeDeclaration)
+public struct SchemaTemplateTypeDeclarationSyntax: LiminalSyntaxNode {
+    public var qnameText: String {
+        firstToken(kind: .qname)?.text ?? ""
+    }
+
+    public var nodeKindText: String {
+        let identifiers = directTokens(kind: .identifier)
+        guard identifiers.count > 1 else {
+            return ""
+        }
+        return identifiers[1].text
+    }
+
+    /// Same accessor as `SchemaTypeDeclarationSyntax.rhsText` but named
+    /// for the template surface where the RHS is the template signature.
+    public var signatureText: String {
+        firstToken(kind: .schemaText)?.text ?? ""
     }
 }
 

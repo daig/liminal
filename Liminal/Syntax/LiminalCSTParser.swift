@@ -322,12 +322,18 @@ struct LiminalCSTParser {
         try emitSchemaHeader(block, with: &builder)
         try emitNewline(openerLine.newlineText, with: &builder)
 
+        let bodyBaseByteOffset = openerLine.startByteOffset
+            + source[openerLine.contentStart..<openerLine.newlineEnd].utf8.count
         if let closeLineIndex = block.closeLineIndex {
             let closeLine = lines[closeLineIndex]
             let payload = String(source[openerLine.newlineEnd..<closeLine.contentStart])
-            if !payload.isEmpty {
-                try builder.largeToken(.schemaText, text: payload)
-            }
+            builder.startNode(.schemaBody)
+            try emitSchemaDeclarations(
+                payload,
+                baseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            try builder.finishNode()
             try emitTypedBlockClosingFence(
                 closeLine,
                 colonRunText: block.colonRunText,
@@ -336,9 +342,13 @@ struct LiminalCSTParser {
             currentLineIndex = closeLineIndex + 1
         } else {
             let payload = String(source[openerLine.newlineEnd..<source.endIndex])
-            if !payload.isEmpty {
-                try builder.largeToken(.schemaText, text: payload)
-            }
+            builder.startNode(.schemaBody)
+            try emitSchemaDeclarations(
+                payload,
+                baseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            try builder.finishNode()
             try builder.missingNode(.missing)
             appendDiagnostic(
                 "missing closing schema fence",
@@ -349,6 +359,291 @@ struct LiminalCSTParser {
         }
 
         try builder.finishNode()
+    }
+
+    private mutating func emitSchemaDeclarations(
+        _ bodyText: String,
+        baseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let bodyLines = SourceLine.split(bodyText, baseByteOffset: baseByteOffset)
+        var lineIndex = 0
+        while lineIndex < bodyLines.count {
+            let line = bodyLines[lineIndex]
+            if let openerInfo = schemaDeclarationOpenerInfo(in: line) {
+                let groupEnd = nextSchemaDeclarationOpenerIndex(after: lineIndex, in: bodyLines)
+                try emitSchemaDeclaration(
+                    openerInfo: openerInfo,
+                    openerLine: line,
+                    rhsLineRange: lineIndex..<groupEnd,
+                    bodyLines: bodyLines,
+                    with: &builder
+                )
+                lineIndex = groupEnd
+            } else {
+                if line.contentStart < line.contentEnd {
+                    try builder.token(.schemaText, text: String(line.content))
+                }
+                try emitNewline(line.newlineText, with: &builder)
+                lineIndex += 1
+            }
+        }
+    }
+
+    private func schemaDeclarationOpenerInfo(in line: SourceLine) -> SchemaDeclarationOpenerInfo? {
+        let content = line.content
+        guard let indentEnd = indentationEnd(in: content),
+              let keywordEnd = content.index(indentEnd, offsetBy: 4, limitedBy: content.endIndex)
+        else {
+            return nil
+        }
+        guard String(content[indentEnd..<keywordEnd]) == "type" else {
+            return nil
+        }
+        if keywordEnd == content.endIndex || content[keywordEnd].isHorizontalWhitespace {
+            return SchemaDeclarationOpenerInfo(
+                indentText: String(content[content.startIndex..<indentEnd]),
+                keywordEnd: keywordEnd
+            )
+        }
+        return nil
+    }
+
+    private func nextSchemaDeclarationOpenerIndex(
+        after openerLineIndex: Int,
+        in bodyLines: [SourceLine]
+    ) -> Int {
+        var index = openerLineIndex + 1
+        while index < bodyLines.count {
+            if schemaDeclarationOpenerInfo(in: bodyLines[index]) != nil {
+                return index
+            }
+            index += 1
+        }
+        return bodyLines.count
+    }
+
+    private func schemaDeclarationDiscriminator(
+        in line: SourceLine,
+        fromKeywordEnd keywordEnd: String.Index
+    ) -> String {
+        let content = line.content
+        var cursor = keywordEnd
+        while cursor < content.endIndex, content[cursor].isHorizontalWhitespace {
+            cursor = content.index(after: cursor)
+        }
+        guard let qnameEnd = LiminalStructuredScanner(source: line.source).qnameEnd(from: cursor) else {
+            return ""
+        }
+        cursor = qnameEnd
+        while cursor < content.endIndex, content[cursor].isHorizontalWhitespace {
+            cursor = content.index(after: cursor)
+        }
+        guard cursor < content.endIndex, content[cursor] == ":" else {
+            return ""
+        }
+        cursor = content.index(after: cursor)
+        while cursor < content.endIndex, content[cursor].isHorizontalWhitespace {
+            cursor = content.index(after: cursor)
+        }
+        guard let identEnd = identifierEnd(in: line.source, from: cursor),
+              identEnd <= content.endIndex
+        else {
+            return ""
+        }
+        return String(content[cursor..<identEnd])
+    }
+
+    private mutating func emitSchemaDeclaration(
+        openerInfo: SchemaDeclarationOpenerInfo,
+        openerLine: SourceLine,
+        rhsLineRange: Range<Int>,
+        bodyLines: [SourceLine],
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let discriminator = schemaDeclarationDiscriminator(
+            in: openerLine,
+            fromKeywordEnd: openerInfo.keywordEnd
+        )
+        let nodeKind: LiminalKind = discriminator == "template"
+            ? .schemaTemplateTypeDeclaration
+            : .schemaTypeDeclaration
+
+        builder.startNode(nodeKind)
+
+        let content = openerLine.content
+        let bodySource = openerLine.source
+
+        if !openerInfo.indentText.isEmpty {
+            try emitWhitespace(openerInfo.indentText, with: &builder)
+        }
+
+        try builder.token(.identifier, text: "type")
+        var cursor = openerInfo.keywordEnd
+
+        cursor = try skipAndEmitWhitespace(in: content, from: cursor, with: &builder)
+
+        // qname
+        if let qnameEnd = LiminalStructuredScanner(source: bodySource).qnameEnd(from: cursor) {
+            try builder.token(.qname, text: String(content[cursor..<qnameEnd]))
+            cursor = qnameEnd
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected qname after `type`",
+                at: openerLine.byteOffset(of: cursor),
+                length: 0
+            )
+            try salvageSchemaDeclarationGroup(
+                from: cursor,
+                openerLine: openerLine,
+                rhsLineRange: rhsLineRange,
+                bodyLines: bodyLines,
+                with: &builder
+            )
+            try builder.finishNode()
+            return
+        }
+
+        cursor = try skipAndEmitWhitespace(in: content, from: cursor, with: &builder)
+
+        // ":"
+        if cursor < content.endIndex, content[cursor] == ":" {
+            try builder.staticToken(.colon)
+            cursor = content.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected `:` after schema type name",
+                at: openerLine.byteOffset(of: cursor),
+                length: 0
+            )
+            try salvageSchemaDeclarationGroup(
+                from: cursor,
+                openerLine: openerLine,
+                rhsLineRange: rhsLineRange,
+                bodyLines: bodyLines,
+                with: &builder
+            )
+            try builder.finishNode()
+            return
+        }
+
+        cursor = try skipAndEmitWhitespace(in: content, from: cursor, with: &builder)
+
+        // Discriminator identifier
+        if let identEnd = identifierEnd(in: bodySource, from: cursor),
+           identEnd <= content.endIndex
+        {
+            let discText = String(content[cursor..<identEnd])
+            try builder.token(.identifier, text: discText)
+            if !["document", "block", "inline", "value", "template"].contains(discText) {
+                appendSchemaBodyDiagnostic(
+                    "unknown schema node kind '\(discText)'",
+                    at: openerLine.byteOffset(of: cursor),
+                    length: bodySource[cursor..<identEnd].utf8.count
+                )
+            }
+            cursor = identEnd
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected schema node kind",
+                at: openerLine.byteOffset(of: cursor),
+                length: 0
+            )
+        }
+
+        cursor = try skipAndEmitWhitespace(in: content, from: cursor, with: &builder)
+
+        // "="
+        if cursor < content.endIndex, content[cursor] == "=" {
+            try builder.staticToken(.equals)
+            cursor = content.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected `=` in schema declaration",
+                at: openerLine.byteOffset(of: cursor),
+                length: 0
+            )
+            try salvageSchemaDeclarationGroup(
+                from: cursor,
+                openerLine: openerLine,
+                rhsLineRange: rhsLineRange,
+                bodyLines: bodyLines,
+                with: &builder
+            )
+            try builder.finishNode()
+            return
+        }
+
+        cursor = try skipAndEmitWhitespace(in: content, from: cursor, with: &builder)
+
+        // RHS payload spans from cursor (within opener line) to end of last
+        // line in the group. The trailing newline of the last line becomes
+        // .newline trivia immediately after.
+        let lastLine = bodyLines[rhsLineRange.upperBound - 1]
+        let rhsText = String(bodySource[cursor..<lastLine.contentEnd])
+        if !rhsText.isEmpty {
+            try builder.largeToken(.schemaText, text: rhsText)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected RHS after `=`",
+                at: openerLine.byteOffset(of: cursor),
+                length: 0
+            )
+        }
+
+        try emitNewline(lastLine.newlineText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func skipAndEmitWhitespace(
+        in content: Substring,
+        from cursor: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var end = cursor
+        while end < content.endIndex, content[end].isHorizontalWhitespace {
+            end = content.index(after: end)
+        }
+        if cursor != end {
+            try emitWhitespace(String(content[cursor..<end]), with: &builder)
+        }
+        return end
+    }
+
+    private mutating func salvageSchemaDeclarationGroup(
+        from cursor: String.Index,
+        openerLine: SourceLine,
+        rhsLineRange: Range<Int>,
+        bodyLines: [SourceLine],
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let lastLine = bodyLines[rhsLineRange.upperBound - 1]
+        let bodySource = openerLine.source
+        let salvageText = String(bodySource[cursor..<lastLine.contentEnd])
+        if !salvageText.isEmpty {
+            try builder.token(.schemaText, text: salvageText)
+        }
+        try emitNewline(lastLine.newlineText, with: &builder)
+    }
+
+    private mutating func appendSchemaBodyDiagnostic(
+        _ message: String,
+        at byteOffset: Int,
+        length: Int
+    ) {
+        diagnostics.append(LiminalDiagnostic(
+            severity: .error,
+            message: message,
+            range: TextRange(
+                start: TextSize(UInt32(byteOffset)),
+                length: TextSize(UInt32(length))
+            )
+        ))
     }
 
     private func emitSchemaHeader(
@@ -2527,6 +2822,11 @@ private struct DirectiveInfo {
     var colonRunText: String
     var keywordText: String
     var bodyText: String
+}
+
+private struct SchemaDeclarationOpenerInfo {
+    var indentText: String
+    var keywordEnd: String.Index
 }
 
 private struct FrontmatterInfo {
