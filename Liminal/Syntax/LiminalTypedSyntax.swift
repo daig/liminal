@@ -559,8 +559,69 @@ public struct UseDirectiveSyntax: LiminalSyntaxNode {
         firstToken(kind: .identifier)?.text ?? ""
     }
 
+    /// The full directive body following the `use` keyword and its
+    /// trailing whitespace, derived from the underlying tokens. Slice 7
+    /// callers depended on this string when the body was a single
+    /// `.directiveText` token; Phase 3b.2 reconstructs it by stripping
+    /// the `use` prefix from `sourceText`.
     public var bodyText: String {
-        firstToken(kind: .directiveText)?.text ?? ""
+        let text = sourceText
+        guard text.hasPrefix("use") else { return text }
+        var cursor = text.index(text.startIndex, offsetBy: 3)
+        while cursor < text.endIndex, text[cursor].isWhitespace {
+            cursor = text.index(after: cursor)
+        }
+        return String(text[cursor..<text.endIndex])
+    }
+
+    /// The optional `UseKind` ("type" or "data") if the directive body
+    /// supplies one before the target.
+    public var kindText: String? {
+        let identifiers = directTokens(kind: .identifier).map(\.text)
+        guard identifiers.count >= 2 else { return nil }
+        let candidate = identifiers[1]
+        return (candidate == "type" || candidate == "data") ? candidate : nil
+    }
+
+    /// The interpreted target value: bare scalar text, or quoted string
+    /// content with surrounding quotes stripped (escape decoding is
+    /// deferred to the consumer that needs it).
+    public var targetText: String {
+        if let token = firstToken(kind: .quotedStringLiteral) {
+            let raw = token.text
+            if raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") {
+                return String(raw.dropFirst().dropLast())
+            }
+            return raw
+        }
+        if let token = firstToken(kind: .bareScalarLiteral) {
+            return token.text
+        }
+        return ""
+    }
+
+    /// Whether the target was supplied as a quoted string. Useful when
+    /// the consumer needs to distinguish raw paths from bare scalars
+    /// (e.g., for escape-decoding policy).
+    public var targetIsQuoted: Bool {
+        firstToken(kind: .quotedStringLiteral) != nil
+    }
+
+    /// QNames inside the optional `only { … }` filter, in source order.
+    /// Empty when no filter is supplied.
+    public var filterQNames: [String] {
+        directTokens(kind: .qname).map(\.text)
+    }
+
+    /// The optional alias identifier introduced by `as <ident>`.
+    public var aliasText: String? {
+        let identifiers = directTokens(kind: .identifier).map(\.text)
+        guard let asIndex = identifiers.firstIndex(of: "as"),
+              asIndex + 1 < identifiers.count
+        else {
+            return nil
+        }
+        return identifiers[asIndex + 1]
     }
 }
 

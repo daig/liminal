@@ -301,16 +301,285 @@ struct LiminalCSTParser {
         try builder.token(.colonRun, text: directive.colonRunText)
         builder.startNode(.useDirective)
         try builder.token(.identifier, text: directive.keywordText)
-        try emitHeaderPayload(
+        try emitUseDirectiveBody(
             directive.bodyText,
-            tokenKind: .directiveText,
-            missingMessage: "missing use directive body",
-            diagnosticIndex: line.contentEnd,
+            bodyBaseByteOffset: directive.bodyBaseByteOffset,
+            missingBodyDiagnosticAt: line.contentEnd,
             with: &builder
         )
         try builder.finishNode()
         try emitNewline(line.newlineText, with: &builder)
         try builder.finishNode()
+    }
+
+    private mutating func emitUseDirectiveBody(
+        _ bodyText: String,
+        bodyBaseByteOffset: Int,
+        missingBodyDiagnosticAt missingBodyIndex: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        // Leading whitespace (between `use` and the body content).
+        var cursor = bodyText.startIndex
+        cursor = try emitDirectiveBodyWhitespace(
+            in: bodyText,
+            from: cursor,
+            with: &builder
+        )
+
+        if cursor == bodyText.endIndex {
+            try builder.missingNode(.missing)
+            appendDiagnostic("missing use directive body", at: missingBodyIndex, length: 0)
+            return
+        }
+
+        // Optional UseKind: `type` | `data`. Only consume if there's more
+        // content after it (otherwise it's the bare-scalar target).
+        if let identEnd = identifierEnd(in: bodyText, from: cursor) {
+            let identText = String(bodyText[cursor..<identEnd])
+            if identText == "type" || identText == "data" {
+                var lookahead = identEnd
+                while lookahead < bodyText.endIndex,
+                      bodyText[lookahead].isHorizontalWhitespace
+                {
+                    lookahead = bodyText.index(after: lookahead)
+                }
+                if lookahead < bodyText.endIndex {
+                    try builder.token(.identifier, text: identText)
+                    cursor = identEnd
+                    cursor = try emitDirectiveBodyWhitespace(
+                        in: bodyText,
+                        from: cursor,
+                        with: &builder
+                    )
+                }
+            }
+        }
+
+        // Required target: quoted string or bare scalar.
+        if cursor < bodyText.endIndex, bodyText[cursor] == "\"" {
+            try emitDirectiveBodyQuotedString(
+                in: bodyText,
+                from: &cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+        } else if cursor < bodyText.endIndex,
+                  !bodyText[cursor].isScalarTerminator
+        {
+            let start = cursor
+            while cursor < bodyText.endIndex,
+                  !bodyText[cursor].isScalarTerminator
+            {
+                cursor = bodyText.index(after: cursor)
+            }
+            try builder.token(.bareScalarLiteral, text: String(bodyText[start..<cursor]))
+        } else {
+            try builder.missingNode(.missing)
+            appendBodyDiagnostic(
+                "missing use directive target",
+                at: bodyBaseByteOffset
+                    + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+
+        cursor = try emitDirectiveBodyWhitespace(
+            in: bodyText,
+            from: cursor,
+            with: &builder
+        )
+
+        // Optional ImportFilter: `only` `{` QName ( `,` QName )* `,`? `}`.
+        if let identEnd = identifierEnd(in: bodyText, from: cursor),
+           String(bodyText[cursor..<identEnd]) == "only"
+        {
+            try builder.token(.identifier, text: "only")
+            cursor = identEnd
+            cursor = try emitDirectiveBodyWhitespace(
+                in: bodyText,
+                from: cursor,
+                with: &builder
+            )
+
+            if cursor < bodyText.endIndex, bodyText[cursor] == "{" {
+                try builder.staticToken(.leftBrace)
+                cursor = bodyText.index(after: cursor)
+            } else {
+                try builder.missingNode(.missing)
+                appendBodyDiagnostic(
+                    "expected `{` in use directive filter",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+
+            cursor = try emitDirectiveBodyWhitespace(
+                in: bodyText,
+                from: cursor,
+                with: &builder
+            )
+
+            // QName list.
+            while cursor < bodyText.endIndex, bodyText[cursor] != "}" {
+                guard let qnameEnd = LiminalStructuredScanner(source: bodyText)
+                    .qnameEnd(from: cursor)
+                else {
+                    break
+                }
+                try builder.token(.qname, text: String(bodyText[cursor..<qnameEnd]))
+                cursor = qnameEnd
+                cursor = try emitDirectiveBodyWhitespace(
+                    in: bodyText,
+                    from: cursor,
+                    with: &builder
+                )
+                if cursor < bodyText.endIndex, bodyText[cursor] == "," {
+                    try builder.staticToken(.comma)
+                    cursor = bodyText.index(after: cursor)
+                    cursor = try emitDirectiveBodyWhitespace(
+                        in: bodyText,
+                        from: cursor,
+                        with: &builder
+                    )
+                } else {
+                    break
+                }
+            }
+
+            if cursor < bodyText.endIndex, bodyText[cursor] == "}" {
+                try builder.staticToken(.rightBrace)
+                cursor = bodyText.index(after: cursor)
+            } else {
+                try builder.missingNode(.missing)
+                appendBodyDiagnostic(
+                    "missing closing `}` in use directive filter",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+
+            cursor = try emitDirectiveBodyWhitespace(
+                in: bodyText,
+                from: cursor,
+                with: &builder
+            )
+        }
+
+        // Optional ImportAlias: `as` Ident.
+        if let identEnd = identifierEnd(in: bodyText, from: cursor),
+           String(bodyText[cursor..<identEnd]) == "as"
+        {
+            try builder.token(.identifier, text: "as")
+            cursor = identEnd
+            cursor = try emitDirectiveBodyWhitespace(
+                in: bodyText,
+                from: cursor,
+                with: &builder
+            )
+            if let aliasEnd = identifierEnd(in: bodyText, from: cursor) {
+                try builder.token(
+                    .identifier,
+                    text: String(bodyText[cursor..<aliasEnd])
+                )
+                cursor = aliasEnd
+            } else {
+                try builder.missingNode(.missing)
+                appendBodyDiagnostic(
+                    "expected alias identifier after `as`",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+        }
+
+        cursor = try emitDirectiveBodyWhitespace(
+            in: bodyText,
+            from: cursor,
+            with: &builder
+        )
+
+        // Salvage anything we didn't recognize as a single .directiveText
+        // token so the round-trip stays lossless.
+        if cursor < bodyText.endIndex {
+            try builder.token(
+                .directiveText,
+                text: String(bodyText[cursor..<bodyText.endIndex])
+            )
+        }
+    }
+
+    private mutating func emitDirectiveBodyWhitespace(
+        in bodyText: String,
+        from cursor: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var end = cursor
+        while end < bodyText.endIndex, bodyText[end].isHorizontalWhitespace {
+            end = bodyText.index(after: end)
+        }
+        if cursor != end {
+            try emitWhitespace(String(bodyText[cursor..<end]), with: &builder)
+        }
+        return end
+    }
+
+    private mutating func emitDirectiveBodyQuotedString(
+        in bodyText: String,
+        from cursor: inout String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        let start = cursor
+        cursor = bodyText.index(after: cursor)
+        while cursor < bodyText.endIndex {
+            if bodyText[cursor] == "\\",
+               bodyText.index(after: cursor) < bodyText.endIndex
+            {
+                cursor = bodyText.index(after: bodyText.index(after: cursor))
+                continue
+            }
+            if bodyText[cursor] == "\"" {
+                cursor = bodyText.index(after: cursor)
+                try builder.token(
+                    .quotedStringLiteral,
+                    text: String(bodyText[start..<cursor])
+                )
+                return
+            }
+            if bodyText[cursor].isNewlineStart {
+                break
+            }
+            cursor = bodyText.index(after: cursor)
+        }
+        try builder.token(
+            .quotedStringLiteral,
+            text: String(bodyText[start..<cursor])
+        )
+        try builder.missingNode(.missing)
+        appendBodyDiagnostic(
+            "missing closing string delimiter",
+            at: bodyBaseByteOffset
+                + bodyText[bodyText.startIndex..<start].utf8.count,
+            length: 1
+        )
+    }
+
+    private mutating func appendBodyDiagnostic(
+        _ message: String,
+        at byteOffset: Int,
+        length: Int
+    ) {
+        diagnostics.append(LiminalDiagnostic(
+            severity: .error,
+            message: message,
+            range: TextRange(
+                start: TextSize(UInt32(byteOffset)),
+                length: TextSize(UInt32(length))
+            )
+        ))
     }
 
     private mutating func emitSchemaBlock(
@@ -1705,7 +1974,8 @@ struct LiminalCSTParser {
             indentText: String(content[content.startIndex..<indentEnd]),
             colonRunText: String(content[indentEnd..<colonEnd]),
             keywordText: String(content[colonEnd..<keywordEnd]),
-            bodyText: String(content[keywordEnd..<content.endIndex])
+            bodyText: String(content[keywordEnd..<content.endIndex]),
+            bodyBaseByteOffset: line.byteOffset(of: keywordEnd)
         )
     }
 
@@ -2822,6 +3092,7 @@ private struct DirectiveInfo {
     var colonRunText: String
     var keywordText: String
     var bodyText: String
+    var bodyBaseByteOffset: Int
 }
 
 private struct SchemaDeclarationOpenerInfo {

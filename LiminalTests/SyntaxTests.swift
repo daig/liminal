@@ -6,7 +6,7 @@ import Testing
 struct SyntaxTests {
     @Test("syntax kinds use stable Phase 0 raw bands")
     func syntaxKindRawBandsAreStable() {
-        #expect(LiminalLanguage.serializationVersion == 5)
+        #expect(LiminalLanguage.serializationVersion == 6)
 
         #expect(LiminalKind.whitespace.rawValue == 1)
         #expect(LiminalKind.newline.rawValue == 2)
@@ -658,6 +658,84 @@ struct SyntaxTests {
         #expect(control.typeName == "if")
         #expect(interpolation.expressionText == "person.bio")
         #expect(wikilink.targetText == "Target")
+    }
+
+    @Test("Phase 3b.2 parser structures ::use directive bodies")
+    func phase3b2ParserStructuresUseDirective() throws {
+        let source = """
+        ::use type "./schema.lim" as schema
+        ::use data "./people.lim" only { Entry, Citation } as people
+        ::use "./bibliography.lim"
+        ::use ./bare-path
+        """
+        let result = try LiminalParser().parse(source)
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(result.rootSyntax.documentItems.count == 4)
+
+        let directives = result.rootSyntax.documentItems.compactMap { item -> UseDirectiveSyntax? in
+            guard case .directive(let directive) = item else { return nil }
+            return directive.useDirective
+        }
+        #expect(directives.count == 4)
+
+        // 0: kind + quoted target + alias
+        #expect(directives[0].kindText == "type")
+        #expect(directives[0].targetText == "./schema.lim")
+        #expect(directives[0].targetIsQuoted)
+        #expect(directives[0].filterQNames.isEmpty)
+        #expect(directives[0].aliasText == "schema")
+
+        // 1: kind + filter + alias
+        #expect(directives[1].kindText == "data")
+        #expect(directives[1].targetText == "./people.lim")
+        #expect(directives[1].filterQNames == ["Entry", "Citation"])
+        #expect(directives[1].aliasText == "people")
+
+        // 2: just a quoted target
+        #expect(directives[2].kindText == nil)
+        #expect(directives[2].targetText == "./bibliography.lim")
+        #expect(directives[2].targetIsQuoted)
+        #expect(directives[2].filterQNames.isEmpty)
+        #expect(directives[2].aliasText == nil)
+
+        // 3: bare-scalar target
+        #expect(directives[3].kindText == nil)
+        #expect(directives[3].targetText == "./bare-path")
+        #expect(!directives[3].targetIsQuoted)
+        #expect(directives[3].aliasText == nil)
+    }
+
+    @Test("Phase 3b.2 parser preserves the slice 7 ::use bodyText contract")
+    func phase3b2ParserPreservesUseDirectiveBodyText() throws {
+        let source = #"::use type "./schema.lim" as schema"# + "\n"
+        let result = try LiminalParser().parse(source)
+
+        guard case .directive(let directive) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected directive document item")
+            return
+        }
+
+        #expect(directive.keywordText == "use")
+        #expect(directive.bodyText == #"type "./schema.lim" as schema"#)
+    }
+
+    @Test("Phase 3b.2 parser recovers from malformed ::use directives")
+    func phase3b2ParserRecoversMalformedUseDirective() throws {
+        // Missing closing `}` in the filter.
+        let unclosedFilter = "::use \"./schema.lim\" only { Foo, Bar\n"
+        let unclosedResult = try LiminalParser().parse(unclosedFilter)
+        #expect(unclosedResult.sourceText == unclosedFilter)
+        #expect(unclosedResult.diagnostics.contains { $0.message.contains("missing closing `}`") })
+
+        // Missing alias identifier after `as`.
+        let missingAlias = "::use \"./schema.lim\" as\n"
+        let missingAliasResult = try LiminalParser().parse(missingAlias)
+        #expect(missingAliasResult.sourceText == missingAlias)
+        #expect(missingAliasResult.diagnostics.contains {
+            $0.message.contains("expected alias identifier")
+        })
     }
 
     @Test("Phase 3b.1 parser structures :::schema declaration shells")
