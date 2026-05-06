@@ -479,6 +479,18 @@ public struct SchemaValidator: Sendable {
         node: LiminalNode,
         diagnostics: inout [LiminalDiagnostic]
     ) {
+        // Per spec §8.1, the constructor body maps to the @content field.
+        // Supplying both an explicit field and a surface body for the same
+        // @content slot doubles the logical content value with no defined
+        // precedence; report it.
+        if explicit != nil, node.content != nil {
+            diagnostics.append(diagnostic(
+                .error,
+                "type '\(typeName.rawValue)' supplies the @content body '\(declared.name.rawValue)' both as an explicit field and as the surface body; pick one",
+                node: node
+            ))
+        }
+
         if let explicit {
             validate(
                 value: explicit.value,

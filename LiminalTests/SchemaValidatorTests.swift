@@ -298,6 +298,25 @@ struct SchemaValidatorTests {
         #expect(validated.diagnostics.isEmpty)
     }
 
+    @Test("supplying @content both as explicit field and as surface body produces an error")
+    func explicitAndSurfaceContentBothSuppliedProducesAnError() throws {
+        // The Link constructor below carries both an explicit `body` field
+        // and an inline `[surface]` body. Per spec §8.1 the surface body
+        // already maps to the @content field; doubling them is ambiguous.
+        let source = "Body @Link{href: \"T\", body: @[field]}[surface]\n"
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        let added = Array(validated.diagnostics.dropFirst(document.diagnostics.count))
+        #expect(added.contains { diag in
+            diag.severity == .error &&
+            diag.message.contains("'Link'") &&
+            diag.message.contains("'body'") &&
+            (diag.message.contains("both") || diag.message.contains("pick one"))
+        })
+    }
+
     @Test("explicit @content field with the wrong shape produces an error")
     func explicitContentFieldWithWrongShapeProducesAnError() throws {
         // WikiLink.body is `inline @content`. An explicit numeric value
