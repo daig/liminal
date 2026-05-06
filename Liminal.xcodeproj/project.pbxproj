@@ -3,8 +3,8 @@
 	archiveVersion = 1;
 	classes = {
 	};
-		objectVersion = 77;
-		objects = {
+	objectVersion = 77;
+	objects = {
 
 /* Begin PBXBuildFile section */
 		CA2000000000000000000001 /* CambiumCore in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000001 /* CambiumCore */; };
@@ -148,16 +148,16 @@
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
-					TargetAttributes = {
-						2313497E2FA67AAF00958BAB = {
-							CreatedOnToolsVersion = 26.4.1;
-						};
-						CA3000000000000000000006 = {
-							CreatedOnToolsVersion = 26.4.1;
-							TestTargetID = 2313497E2FA67AAF00958BAB;
-						};
+				TargetAttributes = {
+					2313497E2FA67AAF00958BAB = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					CA3000000000000000000006 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 2313497E2FA67AAF00958BAB;
 					};
 				};
+			};
 			buildConfigurationList = 2313497A2FA67AAF00958BAB /* Build configuration list for PBXProject "Liminal" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -490,7 +490,7 @@
 /* Begin XCLocalSwiftPackageReference section */
 		CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "../cambium";
+			relativePath = ../cambium;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -521,6 +521,6 @@
 			productName = CambiumSyntaxMacros;
 		};
 /* End XCSwiftPackageProductDependency section */
-		};
-		rootObject = 231349772FA67AAF00958BAB /* Project object */;
-	}
+	};
+	rootObject = 231349772FA67AAF00958BAB /* Project object */;
+}
