@@ -394,29 +394,30 @@ public struct SchemaValidator: Sendable {
 
         for declared in declaredFields {
             if declared.modifiers.contains(.content) {
-                validate(
-                    content: node.content,
+                // @content fields can be supplied via the surface body
+                // (node.content) or as an explicit record field — v0.2's
+                // generic typed/value forms use the explicit shape, e.g.
+                // `@ListItem{body: @{First}}` and `@BlockQuote{body: @{...}}`
+                // (spec §6.4, §6.5). Validate whichever form the user used
+                // against the declared content type; the field is required
+                // only if neither form is provided.
+                validateContentField(
                     declared: declared,
+                    explicit: nodeFieldsByName[declared.name],
                     onType: typeName,
                     node: node,
                     diagnostics: &diagnostics
                 )
             } else if let presentField = nodeFieldsByName[declared.name] {
-                if isNull(presentField.value) {
-                    if !declared.isOptional {
-                        diagnostics.append(diagnostic(
-                            .error,
-                            "field '\(declared.name.rawValue)' on type '\(typeName.rawValue)' has the wrong shape for declared type",
-                            node: node
-                        ))
-                    }
-                } else if !valueMatches(presentField.value, type: declared.type) {
-                    diagnostics.append(diagnostic(
-                        .error,
-                        "field '\(declared.name.rawValue)' on type '\(typeName.rawValue)' has the wrong shape for declared type",
-                        node: node
-                    ))
-                }
+                validate(
+                    value: presentField.value,
+                    against: declared.type,
+                    isOptional: declared.isOptional,
+                    fieldName: declared.name,
+                    onType: typeName,
+                    node: node,
+                    diagnostics: &diagnostics
+                )
             } else if !declared.isOptional {
                 diagnostics.append(diagnostic(
                     .error,
@@ -426,29 +427,83 @@ public struct SchemaValidator: Sendable {
             }
         }
 
-        // Report unknown / misplaced fields once per name in source order.
-        // A field declared with @content is the body slot — the user must
-        // supply it via the constructor body, not as an explicit record
-        // field.
+        // Unknown fields (declared lookup misses), once per name in source
+        // order. Fields whose name matches a declared @content slot are
+        // valid — they were validated above as the explicit content form.
         var reported: Set<FieldName> = []
         for nodeField in nodeFields {
             guard reported.insert(nodeField.name).inserted else { continue }
 
-            if let declared = declaredByName[nodeField.name] {
-                if declared.modifiers.contains(.content) {
-                    diagnostics.append(diagnostic(
-                        .error,
-                        "field '\(nodeField.name.rawValue)' on type '\(typeName.rawValue)' is the @content body; supply it as inline/block content rather than an explicit field",
-                        node: node
-                    ))
-                }
-            } else {
+            if declaredByName[nodeField.name] == nil {
                 diagnostics.append(diagnostic(
                     .warning,
                     "unknown field '\(nodeField.name.rawValue)' on type '\(typeName.rawValue)'",
                     node: node
                 ))
             }
+        }
+    }
+
+    private func validate(
+        value: LiminalValue,
+        against type: SchemaTypeExpression,
+        isOptional: Bool,
+        fieldName: FieldName,
+        onType typeName: QualifiedName,
+        node: LiminalNode,
+        diagnostics: inout [LiminalDiagnostic]
+    ) {
+        if isNull(value) {
+            if !isOptional {
+                diagnostics.append(diagnostic(
+                    .error,
+                    "field '\(fieldName.rawValue)' on type '\(typeName.rawValue)' has the wrong shape for declared type",
+                    node: node
+                ))
+            }
+            return
+        }
+        if !valueMatches(value, type: type) {
+            diagnostics.append(diagnostic(
+                .error,
+                "field '\(fieldName.rawValue)' on type '\(typeName.rawValue)' has the wrong shape for declared type",
+                node: node
+            ))
+        }
+    }
+
+    private func validateContentField(
+        declared: SchemaField,
+        explicit: LiminalField?,
+        onType typeName: QualifiedName,
+        node: LiminalNode,
+        diagnostics: inout [LiminalDiagnostic]
+    ) {
+        if let explicit {
+            validate(
+                value: explicit.value,
+                against: declared.type,
+                isOptional: declared.isOptional,
+                fieldName: declared.name,
+                onType: typeName,
+                node: node,
+                diagnostics: &diagnostics
+            )
+        }
+        if node.content != nil {
+            validate(
+                content: node.content,
+                declared: declared,
+                onType: typeName,
+                node: node,
+                diagnostics: &diagnostics
+            )
+        } else if explicit == nil, !declared.isOptional {
+            diagnostics.append(diagnostic(
+                .error,
+                "missing required content '\(declared.name.rawValue)' on type '\(typeName.rawValue)'",
+                node: node
+            ))
         }
     }
 

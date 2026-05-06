@@ -270,11 +270,38 @@ struct SchemaValidatorTests {
         })
     }
 
-    @Test("explicit field for a @content slot produces an error")
-    func explicitFieldForContentSlotProducesAnError() throws {
-        // WikiLink.body is declared as `inline @content`; supplying it as
-        // an explicit record field instead of via the body literal must
-        // be flagged.
+    @Test("explicit @content field with the right shape is accepted")
+    func explicitContentFieldWithRightShapeIsAccepted() throws {
+        // The generic typed/value form of v0.2 supplies @content fields
+        // explicitly: `@ListItem{body: @{First}}`, `@BlockQuote{body: @{...}}`.
+        // The validator must accept these as a legitimate alternative to
+        // the surface body form.
+        let listItem = LiminalNode(
+            kind: .value,
+            type: "ListItem",
+            fields: [
+                LiminalField(
+                    name: "body",
+                    value: .blockLiteral([
+                        .node(LiminalNode(
+                            kind: .block,
+                            type: "Paragraph",
+                            content: .inline([.text("First")])
+                        ))
+                    ])
+                )
+            ]
+        )
+        let document = LiminalDocument(items: [.value(listItem)])
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.isEmpty)
+    }
+
+    @Test("explicit @content field with the wrong shape produces an error")
+    func explicitContentFieldWithWrongShapeProducesAnError() throws {
+        // WikiLink.body is `inline @content`. An explicit numeric value
+        // cannot match `.inline`.
         let source = "Body @WikiLink{target: \"T\", body: 123}\n"
         let parsed = try LiminalParser().parse(source)
         let document = LiminalLowerer().lower(parsed)
@@ -284,8 +311,7 @@ struct SchemaValidatorTests {
         #expect(added.contains { diag in
             diag.severity == .error &&
             diag.message.contains("'body'") &&
-            diag.message.contains("'WikiLink'") &&
-            diag.message.contains("@content")
+            diag.message.contains("'WikiLink'")
         })
     }
 
