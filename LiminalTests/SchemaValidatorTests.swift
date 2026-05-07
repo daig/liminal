@@ -699,4 +699,83 @@ struct SchemaValidatorTests {
             diag.message == "unknown field 'extra' on type 'Person'"
         })
     }
+
+    @Test("Phase 3c.4 :::if and :::for resolve via the prelude inside templates")
+    func phase3c4TemplateControlValidatesViaPrelude() throws {
+        let source = """
+        :::template Card(person: Person) -> blocks
+        :::if{test: person.bio}
+        ${person.bio}
+        :::
+        :::for{item: link, in: person.links}
+        ${link.label}
+        :::
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(!validated.diagnostics.contains {
+            $0.message.contains("unresolved type 'if'") ||
+            $0.message.contains("unresolved type 'for'")
+        })
+    }
+
+    @Test("Phase 3c.4 :::if without test field is flagged")
+    func phase3c4IfMissingTestFieldIsFlagged() throws {
+        let source = """
+        :::template Card() -> blocks
+        :::if{}
+        body
+        :::
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message == "missing required field 'test' on type 'if'"
+        })
+    }
+
+    @Test("Phase 3c.4 :::for without item or in is flagged")
+    func phase3c4ForMissingRequiredFieldsIsFlagged() throws {
+        let source = """
+        :::template Card() -> blocks
+        :::for{item: link}
+        ${link}
+        :::
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message == "missing required field 'in' on type 'for'"
+        })
+    }
+
+    @Test("Phase 3c.4 unknown field on :::if is flagged")
+    func phase3c4UnknownFieldOnIfIsFlagged() throws {
+        let source = """
+        :::template Card() -> blocks
+        :::if{test: ok, extra: 1}
+        body
+        :::
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unknown field 'extra' on type 'if'"
+        })
+    }
 }

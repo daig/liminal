@@ -263,6 +263,24 @@ public enum LiminalPrelude {
                 field("expected", .type, isOptional: true),
                 field("fallback", .inline, isOptional: true),
                 field("target", .target)
+            ]),
+
+            // Template control structures (spec §10). Their reserved
+            // surface forms are `:::if{test: …}` and `:::for{item: …, in: …}`.
+            // The expression slots use `.unknown` because the value
+            // parser captures `test` / `item` / `in` as bare scalars
+            // today; structural template-expression parsing inside
+            // typed-block fields remains future work — `.unknown` keeps
+            // the validator's shape check permissive while still
+            // enforcing field presence (`isOptional: false`).
+            type("if", kind: .block, fields: [
+                field("test", .unknown),
+                field("body", .blocks, modifiers: [.content])
+            ]),
+            type("for", kind: .block, fields: [
+                field("item", .unknown),
+                field("in", .unknown),
+                field("body", .blocks, modifiers: [.content])
             ])
         ]
     }

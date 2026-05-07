@@ -43,7 +43,9 @@ struct PreludeSchemaTests {
             "CommentInline",
             "FootnoteInline",
             "Interpolation",
-            "EmbedValue"
+            "EmbedValue",
+            "if",
+            "for"
         ])
     }
 
@@ -348,6 +350,28 @@ struct PreludeSchemaTests {
 
         #expect(schema.name == "prelude")
         #expect(schema.types.isEmpty)
+    }
+
+    @Test("Phase 3c.4 prelude declares if/for template control structures")
+    func phase3c4TemplateControlShapesArePresent() throws {
+        let ifType = try #require(LiminalPrelude.schema.type(named: "if"))
+        #expect(ifType.kind == .block)
+        let ifFields = try recordFields(in: ifType)
+        #expect(ifFields.map(\.name.rawValue) == ["test", "body"])
+        // Expression slot uses the .unknown sentinel; body is @content of blocks.
+        #expect(ifFields[0].type == .unknown)
+        #expect(ifFields[0].isOptional == false)
+        #expect(ifFields[1].type == .blocks)
+        #expect(ifFields[1].modifiers.contains(.content))
+
+        let forType = try #require(LiminalPrelude.schema.type(named: "for"))
+        #expect(forType.kind == .block)
+        let forFields = try recordFields(in: forType)
+        #expect(forFields.map(\.name.rawValue) == ["item", "in", "body"])
+        #expect(forFields[0].type == .unknown)
+        #expect(forFields[1].type == .unknown)
+        #expect(forFields[2].type == .blocks)
+        #expect(forFields[2].modifiers.contains(.content))
     }
 
     private func recordFields(in declaration: SchemaTypeDeclaration) throws -> [SchemaField] {
