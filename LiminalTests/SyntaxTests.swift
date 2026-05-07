@@ -1340,6 +1340,47 @@ struct SyntaxTests {
         })
     }
 
+    @Test("Phase 3.5 parser requires comma or newline between schema record fields")
+    func phase35ParserRequiresSchemaFieldSeparator() throws {
+        let source = """
+        :::schema prelude
+        type P : value = { name: str age: int }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.contains {
+            $0.message.contains("missing `,` or newline between schema fields")
+        })
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        // Recovery still produces both fields so downstream consumers see
+        // the user's intent, not a truncated record.
+        let definition = try #require(schema.declarations.first?.definition)
+        #expect(definition.recordFields.map(\.fieldNameText) == ["name", "age"])
+    }
+
+    @Test("Phase 3.5 parser requires comma or newline between value record fields")
+    func phase35ParserRequiresValueRecordFieldSeparator() throws {
+        let source = #"@Person{name: "Ada" age: 36}"# + "\n"
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.contains {
+            $0.message.contains("missing `,` or newline between fields")
+        })
+
+        guard case .valueDeclaration(let declaration) = result.rootSyntax.documentItems.first,
+              let fields = declaration.constructor?.fields?.fields
+        else {
+            Issue.record("expected value declaration with field record")
+            return
+        }
+        #expect(fields.map(\.name) == ["name", "age"])
+    }
+
     @Test("Phase 3c.1 parser keeps slice 7 expressionText contract")
     func phase3c1ParserPreservesSlice7ExpressionTextContract() throws {
         // Re-runs the slice 7 wikilink+interpolation source verbatim and

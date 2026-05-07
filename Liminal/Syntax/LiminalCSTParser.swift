@@ -1141,11 +1141,36 @@ struct LiminalCSTParser {
             )
             try builder.finishNode()
 
-            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            // Spec §9 separates record fields with `,` or newline. If the
+            // next non-trivia char is another field-name identifier but
+            // neither a comma nor a newline appeared in the trivia, emit
+            // a missing-separator diagnostic and continue parsing the
+            // next field (so we don't drop it the way we did before).
+            var crossedNewline = false
+            cursor = try emitSchemaPayloadTrivia(
+                in: text,
+                from: cursor,
+                crossedNewline: &crossedNewline,
+                with: &builder
+            )
+            var sawSeparator = crossedNewline
             if cursor < text.endIndex, text[cursor] == "," {
                 try builder.staticToken(.comma)
                 cursor = text.index(after: cursor)
                 cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+                sawSeparator = true
+            }
+            if !sawSeparator,
+               cursor < text.endIndex,
+               text[cursor] != "}",
+               identifierEnd(in: text, from: cursor) != nil
+            {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "missing `,` or newline between schema fields",
+                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
             }
         }
 
@@ -1283,6 +1308,26 @@ struct LiminalCSTParser {
         from cursor: String.Index,
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws -> String.Index {
+        var ignored = false
+        return try emitSchemaPayloadTrivia(
+            in: text,
+            from: cursor,
+            crossedNewline: &ignored,
+            with: &builder
+        )
+    }
+
+    /// Variant of `emitSchemaPayloadTrivia` that reports back whether at
+    /// least one newline was emitted. Used at field-separator boundaries
+    /// (3.5 #1) so the parser can tell `name: str age: int` (same line,
+    /// no separator) apart from `name: str\n  age: int` (newline-
+    /// separated, valid).
+    private mutating func emitSchemaPayloadTrivia(
+        in text: String,
+        from cursor: String.Index,
+        crossedNewline: inout Bool,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
         var cursor = cursor
         while cursor < text.endIndex {
             if text[cursor].isHorizontalWhitespace {
@@ -1294,6 +1339,7 @@ struct LiminalCSTParser {
             } else if let nlEnd = newlineEndIn(text, at: cursor) {
                 try emitNewline(String(text[cursor..<nlEnd]), with: &builder)
                 cursor = nlEnd
+                crossedNewline = true
             } else {
                 break
             }
@@ -4312,8 +4358,19 @@ private struct LiminalStructuredCSTParser {
         builder.startNode(.fields)
         try emitStatic(.leftBrace, expected: "{", with: &builder)
 
+        // Spec §8 separates record fields with `,` or newline. Track
+        // whether the previous iteration consumed a separator so we can
+        // diagnose `{name: "Ada" age: 36}` (same-line, no separator)
+        // while still letting newline-separated and comma-separated
+        // fields parse cleanly. Initialised true so the very first field
+        // doesn't get a spurious diagnostic.
+        var sawSeparator = true
         while index < source.endIndex {
-            try emitTrivia(with: &builder)
+            var crossedNewline = false
+            try emitTrivia(crossedNewline: &crossedNewline, with: &builder)
+            if crossedNewline {
+                sawSeparator = true
+            }
             guard index < source.endIndex else {
                 break
             }
@@ -4325,13 +4382,24 @@ private struct LiminalStructuredCSTParser {
             }
             if source[index] == "," {
                 try emitStatic(.comma, expected: ",", with: &builder)
+                sawSeparator = true
                 continue
             }
 
             if source[index].isIdentifierStart {
+                if !sawSeparator {
+                    try builder.missingNode(.missing)
+                    appendDiagnostic(
+                        "missing `,` or newline between fields",
+                        at: index,
+                        length: 0
+                    )
+                }
                 try emitField(with: &builder)
+                sawSeparator = false
             } else {
                 try emitErrorRun(message: "expected field", with: &builder)
+                sawSeparator = false
             }
         }
 
@@ -4644,6 +4712,18 @@ private struct LiminalStructuredCSTParser {
     private mutating func emitTrivia(
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws {
+        var ignored = false
+        try emitTrivia(crossedNewline: &ignored, with: &builder)
+    }
+
+    /// Variant of `emitTrivia` that reports whether at least one newline
+    /// was emitted. Used by `emitFields` (3.5 #1) to detect a missing
+    /// field separator when neither `,` nor newline separates two
+    /// adjacent identifier-start characters on the same line.
+    private mutating func emitTrivia(
+        crossedNewline: inout Bool,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
         while index < source.endIndex {
             if source[index].isHorizontalWhitespace {
                 let start = index
@@ -4654,6 +4734,7 @@ private struct LiminalStructuredCSTParser {
             } else if let newlineEnd = newlineEnd(at: index) {
                 try builder.token(.newline, text: String(source[index..<newlineEnd]))
                 index = newlineEnd
+                crossedNewline = true
             } else {
                 return
             }
