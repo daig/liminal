@@ -1253,8 +1253,36 @@ public struct MathInlineSyntax: LiminalSyntaxNode {
 
 @CambiumSyntaxNode(LiminalKind.self, for: .interpolation)
 public struct InterpolationSyntax: LiminalSyntaxNode {
+    /// The structured expression body, when the parser produced one.
+    /// Always present in well-formed `${ ... }` (3c.1 emits the wrapper
+    /// even for empty bodies); a missing wrapper indicates a recovery
+    /// path where the body was not parseable.
+    public var expression: InterpolationExpressionSyntax? {
+        firstChild(kind: .interpolationExpression)
+            .map(InterpolationExpressionSyntax.init(unchecked:))
+    }
+
+    /// Source text of the expression body. Prefers the structured
+    /// expression's `sourceText` (which preserves bytes between `${`
+    /// and `}`), falling back to the legacy `.interpolationText`
+    /// salvage token used during recovery.
     public var expressionText: String {
-        firstToken(kind: .interpolationText)?.text ?? ""
+        if let expression {
+            return expression.sourceText
+        }
+        return firstToken(kind: .interpolationText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .interpolationExpression)
+public struct InterpolationExpressionSyntax: LiminalSyntaxNode {
+    /// Nested expression nodes — present when the body contains a
+    /// parenthesized sub-expression. (`??` operands are represented as
+    /// flat token sequences in 3c.1; richer accessors come with 3c.4
+    /// when the lowered template-control nodes need them.)
+    public var subExpressions: [InterpolationExpressionSyntax] {
+        childNodes(kind: .interpolationExpression)
+            .map(InterpolationExpressionSyntax.init(unchecked:))
     }
 }
 

@@ -6,7 +6,7 @@ import Testing
 struct SyntaxTests {
     @Test("syntax kinds use stable Phase 0 raw bands")
     func syntaxKindRawBandsAreStable() {
-        #expect(LiminalLanguage.serializationVersion == 6)
+        #expect(LiminalLanguage.serializationVersion == 7)
 
         #expect(LiminalKind.whitespace.rawValue == 1)
         #expect(LiminalKind.newline.rawValue == 2)
@@ -830,6 +830,99 @@ struct SyntaxTests {
         #expect(names.contains("Card"))
     }
 
+    @Test("Phase 3c.1 parser structures interpolation expressions")
+    func phase3c1ParserStructuresInterpolationExpressions() throws {
+        // One line per shape — each interpolation should expose a structured
+        // .interpolationExpression child whose source text equals the body
+        // between `${` and `}`.
+        let cases: [(source: String, expectedBody: String)] = [
+            ("Hello ${person}\n", "person"),
+            ("Hello ${person.name}\n", "person.name"),
+            ("Hello ${items[0]}\n", "items[0]"),
+            ("Hello ${a ?? b}\n", "a ?? b"),
+            ("Hello ${(a)}\n", "(a)"),
+            (#"Hello ${"literal"}"# + "\n", #""literal""#),
+            ("Hello ${42}\n", "42"),
+            ("Hello ${1.5}\n", "1.5"),
+            ("Hello ${true}\n", "true"),
+            ("Hello ${null}\n", "null"),
+            ("Hello ${&ada}\n", "&ada")
+        ]
+
+        for testCase in cases {
+            let result = try LiminalParser().parse(testCase.source)
+            #expect(result.diagnostics.isEmpty, "diagnostics for \(testCase.source.debugDescription)")
+            #expect(result.sourceText == testCase.source)
+
+            let interpolation = firstInterpolation(in: result.rootSyntax)
+            let interp = try #require(interpolation, "no interpolation in \(testCase.source.debugDescription)")
+            #expect(
+                interp.expressionText == testCase.expectedBody,
+                "expressionText mismatch for \(testCase.source.debugDescription): got \(interp.expressionText.debugDescription)"
+            )
+            #expect(
+                interp.expression != nil,
+                "missing structured expression for \(testCase.source.debugDescription)"
+            )
+        }
+    }
+
+    @Test("Phase 3c.1 parenthesized expression nests inside outer wrapper")
+    func phase3c1ParenthesizedExpressionNestsWrapper() throws {
+        let source = "Hello ${(person.name)}\n"
+        let result = try LiminalParser().parse(source)
+        let interpolation = try #require(firstInterpolation(in: result.rootSyntax))
+        let outer = try #require(interpolation.expression)
+        #expect(outer.subExpressions.count == 1)
+        let inner = outer.subExpressions[0]
+        #expect(inner.sourceText == "person.name")
+    }
+
+    @Test("Phase 3c.1 parser recovers from malformed interpolation expressions")
+    func phase3c1ParserRecoversMalformedInterpolationExpression() throws {
+        // Unterminated `${...` keeps the slice 7 diagnostic.
+        let unterminated = "Hello ${person.name\n"
+        let unterm = try LiminalParser().parse(unterminated)
+        #expect(unterm.sourceText == unterminated)
+        #expect(unterm.diagnostics.contains {
+            $0.message == "missing closing interpolation delimiter"
+        })
+
+        // Stray `??` with no rhs.
+        let danglingCoalesce = "Hello ${a ?? }\n"
+        let dangling = try LiminalParser().parse(danglingCoalesce)
+        #expect(dangling.sourceText == danglingCoalesce)
+        #expect(dangling.diagnostics.contains {
+            $0.message.contains("missing right-hand side after `??`")
+        })
+
+        // Unparseable garbage falls back to .interpolationText salvage so
+        // the bytes round-trip without losing source content.
+        let garbage = "Hello ${@@@}\n"
+        let garbageResult = try LiminalParser().parse(garbage)
+        #expect(garbageResult.sourceText == garbage)
+        #expect(garbageResult.diagnostics.contains {
+            $0.message == "unrecognized interpolation expression token"
+        })
+    }
+
+    @Test("Phase 3c.1 parser keeps slice 7 expressionText contract")
+    func phase3c1ParserPreservesSlice7ExpressionTextContract() throws {
+        // Re-runs the slice 7 wikilink+interpolation source verbatim and
+        // confirms `interpolation.expressionText` still returns the body
+        // text the slice 7 test pinned (`"person.bio"`).
+        let source = """
+        :::template PersonCard(person: Person) -> blocks
+        :::if{test: person.bio}
+        Bio ${person.bio} [[Target]]
+        :::
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        let interpolation = try #require(firstInterpolation(in: result.rootSyntax))
+        #expect(interpolation.expressionText == "person.bio")
+    }
+
     @Test("Slice 7 parser recovers incomplete language-level syntax")
     func slice7ParserRecoversIncompleteLanguageLevelSyntax() throws {
         let directiveResult = try LiminalParser().parse("::use\n")
@@ -1157,6 +1250,45 @@ private func sourceRange(of needle: String, in source: String) throws -> TextRan
         start: TextSize(UInt32(start)),
         length: TextSize(UInt32(needle.utf8.count))
     )
+}
+
+private func firstInterpolation(in root: RootSyntax) -> InterpolationSyntax? {
+    for item in root.documentItems {
+        if let found = findInterpolation(in: item) {
+            return found
+        }
+    }
+    return nil
+}
+
+private func findInterpolation(in item: DocumentItemSyntax) -> InterpolationSyntax? {
+    switch item {
+    case .paragraph(let paragraph):
+        return paragraph.inlineContent.flatMap(findInterpolation(in:))
+    case .atxHeading(let heading):
+        return heading.inlineContent.flatMap(findInterpolation(in:))
+    case .templateBlock(let template):
+        for nested in template.documentItems {
+            if let found = findInterpolation(in: nested) { return found }
+        }
+        return nil
+    case .typedBlock(let block):
+        for nested in block.documentItems {
+            if let found = findInterpolation(in: nested) { return found }
+        }
+        return nil
+    default:
+        return nil
+    }
+}
+
+private func findInterpolation(in inlineContent: InlineContentSyntax) -> InterpolationSyntax? {
+    for node in inlineContent.inlineNodes {
+        if case .interpolation(let interpolation) = node {
+            return interpolation
+        }
+    }
+    return nil
 }
 
 struct ParseExpectation: CustomTestStringConvertible, Sendable {

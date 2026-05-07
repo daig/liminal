@@ -4468,18 +4468,27 @@ private struct LiminalInlineCSTParser {
         index = source.index(index, offsetBy: 2)
         let contentStart = index
 
+        let bodyBaseByteOffset = baseByteOffset
+            + source[source.startIndex..<contentStart].utf8.count
+
         if let close = findInterpolationClose(from: contentStart) {
-            if contentStart < close {
-                try builder.largeToken(.interpolationText, text: String(source[contentStart..<close]))
-            }
+            let body = String(source[contentStart..<close])
+            try emitInterpolationBody(
+                in: body,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
             index = close
             try builder.staticToken(.rightBrace)
             index = source.index(after: index)
         } else {
             let boundary = inlineBoundary(from: contentStart)
-            if contentStart < boundary {
-                try builder.largeToken(.interpolationText, text: String(source[contentStart..<boundary]))
-            }
+            let body = String(source[contentStart..<boundary])
+            try emitInterpolationBody(
+                in: body,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
             try builder.missingNode(.missing)
             appendDiagnostic("missing closing interpolation delimiter", at: openerStart, length: 2)
             index = boundary
@@ -4487,6 +4496,377 @@ private struct LiminalInlineCSTParser {
 
         try builder.finishNode()
         textStart = index
+    }
+
+    private mutating func emitInterpolationBody(
+        in bodyText: String,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        // Outer wrapper for the whole expression body. Always emitted even
+        // when the body is empty so InterpolationSyntax can present a
+        // single .interpolationExpression child to the typed overlay.
+        builder.startNode(.interpolationExpression)
+        var cursor = bodyText.startIndex
+        cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+        if cursor < bodyText.endIndex {
+            cursor = try parseInterpolationExpr(
+                in: bodyText,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+        }
+        if cursor < bodyText.endIndex {
+            // Salvage anything we couldn't recognize so byte preservation
+            // holds; we keep the legacy `.interpolationText` token kind for
+            // exactly this purpose.
+            try builder.largeToken(
+                .interpolationText,
+                text: String(bodyText[cursor..<bodyText.endIndex])
+            )
+        }
+        try builder.finishNode()
+    }
+
+    private mutating func parseInterpolationExpr(
+        in bodyText: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        // Expr = NullCoalesce = Projection ("??" Projection)?
+        var cursor = try parseInterpolationProjection(
+            in: bodyText,
+            from: cursor,
+            bodyBaseByteOffset: bodyBaseByteOffset,
+            with: &builder
+        )
+        cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+        if isAtNullCoalesceOperator(in: bodyText, at: cursor) {
+            try builder.staticToken(.questionMark)
+            try builder.staticToken(.questionMark)
+            cursor = bodyText.index(cursor, offsetBy: 2)
+            cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+            if cursor < bodyText.endIndex {
+                cursor = try parseInterpolationProjection(
+                    in: bodyText,
+                    from: cursor,
+                    bodyBaseByteOffset: bodyBaseByteOffset,
+                    with: &builder
+                )
+            } else {
+                try builder.missingNode(.missing)
+                appendBodyDiagnostic(
+                    "missing right-hand side after `??` in interpolation",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+        }
+        return cursor
+    }
+
+    private mutating func parseInterpolationProjection(
+        in bodyText: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = try parseInterpolationPrimary(
+            in: bodyText,
+            from: cursor,
+            bodyBaseByteOffset: bodyBaseByteOffset,
+            with: &builder
+        )
+        while cursor < bodyText.endIndex {
+            if bodyText[cursor] == ".",
+               !isAtNullCoalesceOperator(in: bodyText, at: cursor)
+            {
+                try builder.staticToken(.dot)
+                cursor = bodyText.index(after: cursor)
+                if let identEnd = identifierEnd(in: bodyText, from: cursor) {
+                    try builder.token(.identifier, text: String(bodyText[cursor..<identEnd]))
+                    cursor = identEnd
+                } else {
+                    try builder.missingNode(.missing)
+                    appendBodyDiagnostic(
+                        "expected identifier after `.` in interpolation",
+                        at: bodyBaseByteOffset
+                            + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                    break
+                }
+            } else if bodyText[cursor] == "[" {
+                try builder.staticToken(.leftBracket)
+                cursor = bodyText.index(after: cursor)
+                cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+                if let intEnd = asciiDigitEnd(in: bodyText, from: cursor), intEnd > cursor {
+                    try builder.token(.integerLiteral, text: String(bodyText[cursor..<intEnd]))
+                    cursor = intEnd
+                } else {
+                    try builder.missingNode(.missing)
+                    appendBodyDiagnostic(
+                        "expected integer index in interpolation projection",
+                        at: bodyBaseByteOffset
+                            + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                }
+                cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+                if cursor < bodyText.endIndex, bodyText[cursor] == "]" {
+                    try builder.staticToken(.rightBracket)
+                    cursor = bodyText.index(after: cursor)
+                } else {
+                    try builder.missingNode(.missing)
+                    appendBodyDiagnostic(
+                        "missing `]` in interpolation projection",
+                        at: bodyBaseByteOffset
+                            + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                    break
+                }
+            } else {
+                break
+            }
+        }
+        return cursor
+    }
+
+    private mutating func parseInterpolationPrimary(
+        in bodyText: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        guard cursor < bodyText.endIndex else {
+            try builder.missingNode(.missing)
+            appendBodyDiagnostic(
+                "missing interpolation expression",
+                at: bodyBaseByteOffset
+                    + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+            return cursor
+        }
+
+        let ch = bodyText[cursor]
+        if ch == "(" {
+            try builder.staticToken(.leftParen)
+            cursor = bodyText.index(after: cursor)
+            cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+            builder.startNode(.interpolationExpression)
+            if cursor < bodyText.endIndex, bodyText[cursor] != ")" {
+                cursor = try parseInterpolationExpr(
+                    in: bodyText,
+                    from: cursor,
+                    bodyBaseByteOffset: bodyBaseByteOffset,
+                    with: &builder
+                )
+            }
+            try builder.finishNode()
+            cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+            if cursor < bodyText.endIndex, bodyText[cursor] == ")" {
+                try builder.staticToken(.rightParen)
+                cursor = bodyText.index(after: cursor)
+            } else {
+                try builder.missingNode(.missing)
+                appendBodyDiagnostic(
+                    "missing `)` in interpolation expression",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+            return cursor
+        }
+
+        if ch == "&" {
+            builder.startNode(.reference)
+            try builder.staticToken(.ampersand)
+            cursor = bodyText.index(after: cursor)
+            if cursor < bodyText.endIndex, bodyText[cursor] == "<" {
+                try builder.staticToken(.lessThan)
+                cursor = bodyText.index(after: cursor)
+                let targetStart = cursor
+                var search = cursor
+                var close: String.Index? = nil
+                while search < bodyText.endIndex {
+                    if bodyText[search] == ">" {
+                        close = search
+                        break
+                    }
+                    search = bodyText.index(after: search)
+                }
+                if let close {
+                    if targetStart < close {
+                        try builder.token(
+                            .externalReferenceText,
+                            text: String(bodyText[targetStart..<close])
+                        )
+                    }
+                    cursor = close
+                    try builder.staticToken(.greaterThan)
+                    cursor = bodyText.index(after: cursor)
+                } else {
+                    if targetStart < bodyText.endIndex {
+                        try builder.token(
+                            .externalReferenceText,
+                            text: String(bodyText[targetStart..<bodyText.endIndex])
+                        )
+                        cursor = bodyText.endIndex
+                    }
+                    try builder.missingNode(.missing)
+                    appendBodyDiagnostic(
+                        "missing closing `>` in external reference",
+                        at: bodyBaseByteOffset
+                            + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                }
+            } else if let qnameEnd = LiminalStructuredScanner(source: bodyText)
+                .qnameEnd(from: cursor)
+            {
+                try builder.token(.qname, text: String(bodyText[cursor..<qnameEnd]))
+                cursor = qnameEnd
+            } else {
+                try builder.missingNode(.missing)
+                appendBodyDiagnostic(
+                    "expected reference target after `&`",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+            try builder.finishNode()
+            return cursor
+        }
+
+        if ch == "\"" {
+            let start = cursor
+            cursor = bodyText.index(after: cursor)
+            while cursor < bodyText.endIndex {
+                if bodyText[cursor] == "\\",
+                   bodyText.index(after: cursor) < bodyText.endIndex
+                {
+                    cursor = bodyText.index(after: bodyText.index(after: cursor))
+                    continue
+                }
+                if bodyText[cursor] == "\"" {
+                    cursor = bodyText.index(after: cursor)
+                    try builder.token(
+                        .quotedStringLiteral,
+                        text: String(bodyText[start..<cursor])
+                    )
+                    return cursor
+                }
+                if bodyText[cursor].isNewlineStart {
+                    break
+                }
+                cursor = bodyText.index(after: cursor)
+            }
+            try builder.token(
+                .quotedStringLiteral,
+                text: String(bodyText[start..<cursor])
+            )
+            try builder.missingNode(.missing)
+            appendBodyDiagnostic(
+                "missing closing string delimiter in interpolation",
+                at: bodyBaseByteOffset
+                    + bodyText[bodyText.startIndex..<start].utf8.count,
+                length: 1
+            )
+            return cursor
+        }
+
+        if let identEnd = identifierEnd(in: bodyText, from: cursor) {
+            let text = String(bodyText[cursor..<identEnd])
+            switch text {
+            case "true", "false":
+                try builder.token(.booleanLiteral, text: text)
+            case "null":
+                try builder.token(.nullLiteral, text: text)
+            default:
+                try builder.token(.identifier, text: text)
+            }
+            return identEnd
+        }
+
+        if let numericEnd = numericLiteralEnd(in: bodyText, from: cursor) {
+            let text = String(bodyText[cursor..<numericEnd])
+            let kind: LiminalKind = text.contains(".") || text.contains("e") || text.contains("E")
+                ? .numberLiteral
+                : .integerLiteral
+            try builder.token(kind, text: text)
+            return numericEnd
+        }
+
+        try builder.missingNode(.missing)
+        appendBodyDiagnostic(
+            "unrecognized interpolation expression token",
+            at: bodyBaseByteOffset
+                + bodyText[bodyText.startIndex..<cursor].utf8.count,
+            length: 0
+        )
+        return cursor
+    }
+
+    private mutating func emitInterpolationWhitespace(
+        in bodyText: String,
+        from cursor: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var end = cursor
+        while end < bodyText.endIndex, bodyText[end].isHorizontalWhitespace {
+            end = bodyText.index(after: end)
+        }
+        if cursor != end {
+            try emitWhitespace(String(bodyText[cursor..<end]), with: &builder)
+        }
+        return end
+    }
+
+    private func isAtNullCoalesceOperator(in bodyText: String, at cursor: String.Index) -> Bool {
+        guard cursor < bodyText.endIndex, bodyText[cursor] == "?" else { return false }
+        let next = bodyText.index(after: cursor)
+        return next < bodyText.endIndex && bodyText[next] == "?"
+    }
+
+    private func asciiDigitEnd(in text: String, from start: String.Index) -> String.Index? {
+        var cursor = start
+        while cursor < text.endIndex,
+              let v = text[cursor].asciiValue,
+              v >= 48, v <= 57
+        {
+            cursor = text.index(after: cursor)
+        }
+        return cursor == start ? nil : cursor
+    }
+
+    private func numericLiteralEnd(in text: String, from start: String.Index) -> String.Index? {
+        guard let intEnd = asciiDigitEnd(in: text, from: start) else { return nil }
+        var cursor = intEnd
+        if cursor < text.endIndex, text[cursor] == "." {
+            let afterDot = text.index(after: cursor)
+            if let fracEnd = asciiDigitEnd(in: text, from: afterDot) {
+                cursor = fracEnd
+            }
+        }
+        if cursor < text.endIndex, text[cursor] == "e" || text[cursor] == "E" {
+            var afterE = text.index(after: cursor)
+            if afterE < text.endIndex, text[afterE] == "+" || text[afterE] == "-" {
+                afterE = text.index(after: afterE)
+            }
+            if let expEnd = asciiDigitEnd(in: text, from: afterE) {
+                cursor = expEnd
+            }
+        }
+        return cursor
     }
 
     private mutating func emitInlineFootnote(
@@ -5225,6 +5605,35 @@ private struct LiminalInlineCSTParser {
                 length: TextSize(UInt32(length))
             )
         ))
+    }
+
+    fileprivate mutating func appendBodyDiagnostic(
+        _ message: String,
+        at byteOffset: Int,
+        length: Int
+    ) {
+        diagnostics.append(LiminalDiagnostic(
+            severity: .error,
+            message: message,
+            range: TextRange(
+                start: TextSize(UInt32(byteOffset)),
+                length: TextSize(UInt32(length))
+            )
+        ))
+    }
+
+    fileprivate func identifierEnd(
+        in text: String,
+        from start: String.Index
+    ) -> String.Index? {
+        guard start < text.endIndex, text[start].isIdentifierStart else {
+            return nil
+        }
+        var cursor = text.index(after: start)
+        while cursor < text.endIndex, text[cursor].isIdentifierContinue {
+            cursor = text.index(after: cursor)
+        }
+        return cursor
     }
 }
 
