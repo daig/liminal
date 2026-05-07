@@ -712,7 +712,7 @@ struct SemanticModelTests {
         #expect(directive.useKind == .type)
         #expect(directive.targetText == "./schema.lim")
         #expect(directive.targetIsQuoted)
-        #expect(directive.filterQNames.map(\.rawValue) == ["Person", "Card"])
+        #expect(directive.filterQNames?.map(\.rawValue) == ["Person", "Card"])
         #expect(directive.alias == "ext")
 
         guard case .schema(let schema) = document.items[1] else {

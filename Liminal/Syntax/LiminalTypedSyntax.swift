@@ -607,8 +607,16 @@ public struct UseDirectiveSyntax: LiminalSyntaxNode {
         firstToken(kind: .quotedStringLiteral) != nil
     }
 
+    /// True iff an `only { … }` import filter is present, even when the
+    /// filter list is empty. Distinguishes "no filter (import all)" from
+    /// "explicit empty filter (import nothing)".
+    public var hasFilter: Bool {
+        directTokens(kind: .identifier).contains { $0.text == "only" }
+    }
+
     /// QNames inside the optional `only { … }` filter, in source order.
-    /// Empty when no filter is supplied.
+    /// Empty when no filter is supplied or when the filter list itself is
+    /// empty — use `hasFilter` to distinguish.
     public var filterQNames: [String] {
         directTokens(kind: .qname).map(\.text)
     }

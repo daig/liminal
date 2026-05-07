@@ -297,12 +297,22 @@ public struct LiminalSchemaResolver: Sendable {
         case unresolved
     }
 
+    /// One `::use type ... as <alias>` entry indexed for type lookup.
+    /// `filter == nil` means "no `only { … }` was supplied — import all".
+    /// `filter == []` means "explicit empty filter — import nothing".
+    /// A non-empty array is a whitelist of qnames within the imported
+    /// schema's namespace.
+    private struct AliasedTypeImport: Sendable {
+        var alias: String
+        var filter: [QualifiedName]?
+    }
+
     public let prelude: LiminalSchema
     public let diagnostics: [LiminalDiagnostic]
 
     private let preludeIndex: [QualifiedName: SchemaTypeDeclaration]
     private let userIndex: [QualifiedName: LiminalUserSchemaTypeDeclaration]
-    private let importedAliases: Set<String>
+    private let typeImports: [String: AliasedTypeImport]
 
     public init(prelude: LiminalSchema, document: LiminalDocument) {
         self.prelude = prelude
@@ -312,41 +322,60 @@ public struct LiminalSchemaResolver: Sendable {
         }
 
         var userIndex: [QualifiedName: LiminalUserSchemaTypeDeclaration] = [:]
-        var importedAliases: Set<String> = []
+        var typeImports: [String: AliasedTypeImport] = [:]
         var diagnostics: [LiminalDiagnostic] = []
-        var reportedCollisions: Set<QualifiedName> = []
+        var reportedShadows: Set<QualifiedName> = []
+        var reportedDuplicates: Set<QualifiedName> = []
+        // Track every qname seen in any user `:::schema` block, even when
+        // shadowed. Without this, a doubly-declared shadowed name would
+        // emit only the shadow warning since the second occurrence never
+        // makes it into `userIndex`.
+        var seenUserDeclarations: Set<QualifiedName> = []
 
         for item in document.items {
             switch item {
             case .schema(let block):
                 for declaration in block.declarations {
-                    if preludeIndex[declaration.name] != nil {
-                        if reportedCollisions.insert(declaration.name).inserted {
-                            diagnostics.append(LiminalDiagnostic(
-                                severity: .warning,
-                                message: "user-declared type '\(declaration.name.rawValue)' shadows prelude type; prelude shape will be used",
-                                range: block.source?.range ?? .empty
-                            ))
-                        }
-                        continue
+                    let isPreludeShadow = preludeIndex[declaration.name] != nil
+                    let isUserDuplicate = !seenUserDeclarations.insert(declaration.name).inserted
+
+                    if isPreludeShadow,
+                       reportedShadows.insert(declaration.name).inserted
+                    {
+                        diagnostics.append(LiminalDiagnostic(
+                            severity: .warning,
+                            message: "user-declared type '\(declaration.name.rawValue)' shadows prelude type; prelude shape will be used",
+                            range: block.source?.range ?? .empty
+                        ))
                     }
-                    if userIndex[declaration.name] != nil {
-                        if reportedCollisions.insert(declaration.name).inserted {
-                            diagnostics.append(LiminalDiagnostic(
-                                severity: .warning,
-                                message: "duplicate user-declared type '\(declaration.name.rawValue)'; first declaration will be used",
-                                range: block.source?.range ?? .empty
-                            ))
-                        }
-                        continue
+                    if isUserDuplicate,
+                       reportedDuplicates.insert(declaration.name).inserted
+                    {
+                        diagnostics.append(LiminalDiagnostic(
+                            severity: .warning,
+                            message: "duplicate user-declared type '\(declaration.name.rawValue)'; first declaration will be used",
+                            range: block.source?.range ?? .empty
+                        ))
                     }
-                    userIndex[declaration.name] = declaration
+                    if !isPreludeShadow, !isUserDuplicate {
+                        userIndex[declaration.name] = declaration
+                    }
                 }
             case .directive(let directive):
-                guard directive.name == "use", let alias = directive.alias else {
+                // Only `::use type ... as <alias>` participates in type
+                // resolution. `::use data ...` affects value-level reference
+                // resolution (separate arc) and must not suppress
+                // unresolved-type warnings under `@<alias>.X`.
+                guard directive.name == "use",
+                      directive.useKind == .type,
+                      let alias = directive.alias
+                else {
                     continue
                 }
-                importedAliases.insert(alias)
+                typeImports[alias] = AliasedTypeImport(
+                    alias: alias,
+                    filter: directive.filterQNames
+                )
             case .block, .value, .template:
                 continue
             }
@@ -354,7 +383,7 @@ public struct LiminalSchemaResolver: Sendable {
 
         self.preludeIndex = preludeIndex
         self.userIndex = userIndex
-        self.importedAliases = importedAliases
+        self.typeImports = typeImports
         self.diagnostics = diagnostics
     }
 
@@ -365,7 +394,18 @@ public struct LiminalSchemaResolver: Sendable {
         if let declaration = userIndex[name] {
             return .userDeclared(name: declaration.name, kind: declaration.kind)
         }
-        if let prefix = name.parts.first, importedAliases.contains(prefix) {
+        // Alias-qualified type lookup: `@ext.Person` against `::use type
+        // ... as ext`. Requires at least one segment past the alias (a
+        // bare `@ext` carries no type within the imported namespace) and
+        // respects the import filter.
+        if name.parts.count >= 2,
+           let prefix = name.parts.first,
+           let importEntry = typeImports[prefix]
+        {
+            let imported = QualifiedName(parts: Array(name.parts.dropFirst()))
+            if let filter = importEntry.filter, !filter.contains(imported) {
+                return .unresolved
+            }
             return .importedNamespace(alias: prefix)
         }
         return .unresolved

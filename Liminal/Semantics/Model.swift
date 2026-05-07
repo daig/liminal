@@ -112,7 +112,10 @@ public struct LiminalDirective: Equatable, Sendable {
     public var useKind: LiminalUseKind?
     public var targetText: String
     public var targetIsQuoted: Bool
-    public var filterQNames: [QualifiedName]
+    /// Optional import-filter list. `nil` when no `only { … }` is supplied
+    /// (import all); `[]` when the filter is explicitly empty (import
+    /// nothing); a non-empty array when a whitelist is supplied.
+    public var filterQNames: [QualifiedName]?
     public var alias: String?
     public var source: SurfaceForm?
 
@@ -122,7 +125,7 @@ public struct LiminalDirective: Equatable, Sendable {
         useKind: LiminalUseKind? = nil,
         targetText: String = "",
         targetIsQuoted: Bool = false,
-        filterQNames: [QualifiedName] = [],
+        filterQNames: [QualifiedName]? = nil,
         alias: String? = nil,
         source: SurfaceForm? = nil
     ) {

@@ -97,7 +97,12 @@ public struct LiminalLowerer: Sendable {
         let useKind = useDirective?.kindText.flatMap(LiminalUseKind.init(rawValue:))
         let targetText = useDirective?.targetText ?? ""
         let targetIsQuoted = useDirective?.targetIsQuoted ?? false
-        let filterQNames = useDirective?.filterQNames.map { QualifiedName($0) } ?? []
+        let filterQNames: [QualifiedName]?
+        if let useDirective, useDirective.hasFilter {
+            filterQNames = useDirective.filterQNames.map { QualifiedName($0) }
+        } else {
+            filterQNames = nil
+        }
         let alias = useDirective?.aliasText
         return LiminalDirective(
             name: directive.keywordText,

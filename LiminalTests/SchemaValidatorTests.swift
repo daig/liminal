@@ -470,4 +470,100 @@ struct SchemaValidatorTests {
             diag.message.contains("'Document'")
         })
     }
+
+    @Test("Phase 3b.3 ::use data alias does not suppress unresolved-type warning")
+    func phase3b3DataImportAliasDoesNotSuppressTypeWarning() throws {
+        let source = """
+        ::use data "./people.lim" as people
+        @people.Person{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unresolved type 'people.Person'"
+        })
+    }
+
+    @Test("Phase 3b.3 import filter restricts which qnames the alias resolves")
+    func phase3b3ImportFilterRestrictsAliasResolution() throws {
+        let source = """
+        ::use type "./schema.lim" only { Person } as ext
+        @ext.Person{name: "Ada"}
+        @ext.Card{title: "Hi"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(!validated.diagnostics.contains { diag in
+            diag.message.contains("unresolved type 'ext.Person'")
+        })
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unresolved type 'ext.Card'"
+        })
+    }
+
+    @Test("Phase 3b.3 explicit empty filter excludes everything from the alias")
+    func phase3b3EmptyFilterExcludesEverything() throws {
+        let source = """
+        ::use type "./schema.lim" only { } as ext
+        @ext.Person{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unresolved type 'ext.Person'"
+        })
+    }
+
+    @Test("Phase 3b.3 bare alias qname (no segment past alias) is unresolved")
+    func phase3b3BareAliasQnameIsUnresolved() throws {
+        let source = """
+        ::use type "./schema.lim" as ext
+        @ext{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unresolved type 'ext'"
+        })
+    }
+
+    @Test("Phase 3b.3 separate reported sets emit shadow + duplicate per qname")
+    func phase3b3ShadowAndDuplicateEmitSeparateWarnings() throws {
+        let source = """
+        :::schema a
+        type Document : document = { foo: str }
+        :::
+        :::schema b
+        type Document : document = { bar: str }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        let shadow = validated.diagnostics.filter { diag in
+            diag.message.contains("shadows prelude type") &&
+            diag.message.contains("'Document'")
+        }
+        let duplicate = validated.diagnostics.filter { diag in
+            diag.message.contains("duplicate user-declared type") &&
+            diag.message.contains("'Document'")
+        }
+        // Both kinds reported (sets are separate); shadow wins for resolution
+        // but the duplicate signal is preserved.
+        #expect(shadow.count == 1)
+        #expect(duplicate.count == 1)
+    }
 }
