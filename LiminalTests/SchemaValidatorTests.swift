@@ -608,6 +608,30 @@ struct SchemaValidatorTests {
         })
     }
 
+    @Test("Phase 3c.2 validator skips type-shape check for deferred-form field types")
+    func phase3c2ValidatorSkipsTypeCheckForDeferredFieldType() throws {
+        // `tags: map<str>` is a deferred TypeExpr form; its value-type
+        // lowers to `.unknown` so any actual value passes shape validation
+        // (we still enforce field presence). Without the .unknown sentinel
+        // this would degrade to .named("map") and reject the list value.
+        let source = """
+        :::schema prelude
+        type Item : value = { name: str, tags: map<str> }
+        :::
+        @Item{name: "Ada", tags: ["a", "b"]}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        let added = Array(validated.diagnostics.dropFirst(document.diagnostics.count))
+        #expect(added.allSatisfy { diag in
+            !diag.message.contains("missing required field") &&
+            !diag.message.contains("unknown field 'tags'") &&
+            !diag.message.contains("wrong shape")
+        })
+    }
+
     @Test("Phase 3c.2 validator flags unknown field on user-declared type")
     func phase3c2UserDeclaredRecordUnknownFieldIsFlagged() throws {
         let source = """

@@ -913,6 +913,28 @@ struct LiminalCSTParser {
     ) throws -> String.Index {
         builder.startNode(.schemaTypeExpression)
         var cursor = cursor
+        // Detect TypeExpr forms 3c.2 hasn't structured yet
+        // (`map<T>` / `ref<T>` / `embed<T>` / `enum {...}` / `variant ...`).
+        // Salvage the entire form as `.schemaText` inside the wrapper so
+        // `qnameText` / `isRecord` / `isList` accessors all return false
+        // and lowering yields nil → field-level paths fall back to the
+        // `.unknown` sentinel; top-level paths get kind-only validation.
+        if let identEnd = identifierEnd(in: text, from: cursor) {
+            let firstIdent = String(text[cursor..<identEnd])
+            if isDeferredSchemaTypeKeyword(firstIdent) {
+                let formEnd = scanDeferredSchemaTypeFormEnd(in: text, from: cursor)
+                if cursor < formEnd {
+                    try builder.largeToken(
+                        .schemaText,
+                        text: String(text[cursor..<formEnd])
+                    )
+                }
+                cursor = formEnd
+                try builder.finishNode()
+                return cursor
+            }
+        }
+
         if cursor < text.endIndex {
             let ch = text[cursor]
             if ch == "{" {
@@ -949,6 +971,61 @@ struct LiminalCSTParser {
             cursor = text.index(after: cursor)
         }
         try builder.finishNode()
+        return cursor
+    }
+
+    private func isDeferredSchemaTypeKeyword(_ text: String) -> Bool {
+        switch text {
+        case "map", "ref", "embed", "enum", "variant":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func scanDeferredSchemaTypeFormEnd(
+        in text: String,
+        from start: String.Index
+    ) -> String.Index {
+        // Walks forward through balanced `{} [] <> ()` (with quoted-string
+        // awareness) and stops at the next top-level field separator (`,`,
+        // `}`, `]`) or end of body. Used to capture the byte range of a
+        // deferred TypeExpr form so it can be emitted as a single
+        // `.schemaText` salvage token inside the `.schemaTypeExpression`
+        // wrapper without disturbing the surrounding record or RHS.
+        var cursor = start
+        var depth = 0
+        var inString = false
+        while cursor < text.endIndex {
+            let ch = text[cursor]
+            if inString {
+                if ch == "\\",
+                   text.index(after: cursor) < text.endIndex
+                {
+                    cursor = text.index(after: text.index(after: cursor))
+                    continue
+                }
+                if ch == "\"" { inString = false }
+                cursor = text.index(after: cursor)
+                continue
+            }
+            if ch == "\"" {
+                inString = true
+                cursor = text.index(after: cursor)
+                continue
+            }
+            if depth == 0 {
+                if ch == "," || ch == "}" || ch == "]" {
+                    return cursor
+                }
+            }
+            if ch == "{" || ch == "[" || ch == "<" || ch == "(" {
+                depth += 1
+            } else if ch == "}" || ch == "]" || ch == ">" || ch == ")" {
+                depth = Swift.max(0, depth - 1)
+            }
+            cursor = text.index(after: cursor)
+        }
         return cursor
     }
 
@@ -1100,9 +1177,22 @@ struct LiminalCSTParser {
                 cursor = text.index(after: cursor)
                 let argsStart = cursor
                 var depth = 1
+                var inString = false
                 while cursor < text.endIndex, depth > 0 {
                     let ch = text[cursor]
-                    if ch == "(" {
+                    if inString {
+                        if ch == "\\",
+                           text.index(after: cursor) < text.endIndex
+                        {
+                            cursor = text.index(after: text.index(after: cursor))
+                            continue
+                        }
+                        if ch == "\"" {
+                            inString = false
+                        }
+                    } else if ch == "\"" {
+                        inString = true
+                    } else if ch == "(" {
                         depth += 1
                     } else if ch == ")" {
                         depth -= 1

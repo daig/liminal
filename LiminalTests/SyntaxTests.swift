@@ -1055,6 +1055,113 @@ struct SyntaxTests {
         #expect(names.contains("Bar"))
     }
 
+    @Test("Phase 3c.2 modifier argument scan is string-aware")
+    func phase3c2ModifierArgumentScanIsStringAware() throws {
+        let source = """
+        :::schema prelude
+        type Greeting : value = { msg: str @default(")") }
+        type Note : value = { tag: str @deprecated("use foo()") }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let greetingMod = try #require(
+            schema.declarations[0].definition?.recordFields.first?.modifiers.first
+        )
+        #expect(greetingMod.modifierName == "default")
+        #expect(greetingMod.argumentsText == #"")""#)
+
+        let noteMod = try #require(
+            schema.declarations[1].definition?.recordFields.first?.modifiers.first
+        )
+        #expect(noteMod.modifierName == "deprecated")
+        #expect(noteMod.argumentsText == #""use foo()""#)
+    }
+
+    @Test("Phase 3c.2 deferred TypeExpr forms leave definition unstructured")
+    func phase3c2DeferredTypeExprFormsLeaveDefinitionUnstructured() throws {
+        let source = """
+        :::schema prelude
+        type Tags : value = map<str>
+        type Refs : value = ref<Person>
+        type Pic : value = embed<Image>
+        type Color : value = enum { red, green, blue }
+        type Maybe : value = variant by kind { yes: { v: str }, no: {} }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        for declaration in schema.declarations {
+            // Each deferred form leaves an empty `.schemaTypeExpression`
+            // wrapper — qnameText/isRecord/isList all false — so lowering
+            // returns nil and the validator falls back to kind-only.
+            let definition = try #require(declaration.definition)
+            #expect(definition.qnameText == nil)
+            #expect(definition.isRecord == false)
+            #expect(definition.isList == false)
+        }
+    }
+
+    @Test("Phase 3c.2 deferred form inside a record field doesn't shadow as named type")
+    func phase3c2DeferredFormInsideRecordFieldDoesNotShadow() throws {
+        // `tags: map<str>` previously degraded to `.named("map")`; the
+        // outer record now structures cleanly while the field's inner
+        // definition is unstructured.
+        let source = """
+        :::schema prelude
+        type Item : value = { name: str, tags: map<str> }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let definition = try #require(schema.declarations.first?.definition)
+        #expect(definition.isRecord)
+        let fields = definition.recordFields
+        #expect(fields.map(\.fieldNameText) == ["name", "tags"])
+
+        let nameType = try #require(fields[0].valueType)
+        #expect(nameType.qnameText == "str")
+
+        let tagsType = try #require(fields[1].valueType)
+        // The tags field's value type is the deferred form — no qname,
+        // not a record, not a list.
+        #expect(tagsType.qnameText == nil)
+        #expect(tagsType.isRecord == false)
+        #expect(tagsType.isList == false)
+    }
+
+    @Test("Phase 3c.2 rhsText preserves trailing modifier salvage bytes")
+    func phase3c2RhsTextPreservesTrailingSalvageBytes() throws {
+        let source = """
+        :::schema prelude
+        type A : value = str @deprecated("old")
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        // rhsText must include the trailing salvage bytes; previously
+        // returned only `str` because the structured wrapper stopped at
+        // the TypeExpr.
+        #expect(schema.declarations[0].rhsText == #"str @deprecated("old")"#)
+    }
+
     @Test("Phase 3c.1 parser keeps slice 7 expressionText contract")
     func phase3c1ParserPreservesSlice7ExpressionTextContract() throws {
         // Re-runs the slice 7 wikilink+interpolation source verbatim and

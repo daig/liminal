@@ -167,7 +167,12 @@ public struct LiminalLowerer: Sendable {
         // value type itself is optional (`field: T?`). Validation treats
         // both forms uniformly per spec §9.
         let valueTypeSyntax = syntax.valueType
-        let valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .str
+        // Fields whose value type is a deferred TypeExpr form (or otherwise
+        // unparseable) lower to `.unknown` so the validator skips type
+        // shape checks for them while still honouring presence and
+        // optionality. Without this, a field declared as `tags: map<str>`
+        // would degrade to `.str` and reject every valid value.
+        let valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .unknown
         let typeLevelOptional = valueTypeSyntax?.isOptional ?? false
         let modifiers = syntax.modifiers.compactMap(lowerSchemaModifier)
         return SchemaField(

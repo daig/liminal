@@ -712,11 +712,42 @@ public struct SchemaTypeDeclarationSyntax: LiminalSyntaxNode {
             .map(SchemaTypeExpressionSyntax.init(unchecked:))
     }
 
+    /// Source text of everything after the `=` and before the trailing
+    /// newline. Walks every direct child/token in source order so trailing
+    /// `.schemaText` salvage (top-level modifiers, deferred TypeExpr
+    /// forms 3c.2 doesn't structure) is preserved alongside the
+    /// structured `.schemaTypeExpression` payload.
     public var rhsText: String {
-        if let definition {
-            return definition.sourceText
+        var pieces: [String] = []
+        var afterEquals = false
+        syntax.withCursor { node in
+            node.forEachChildOrToken { element in
+                switch element {
+                case .token(let token):
+                    if !afterEquals {
+                        if token.kind == .equals {
+                            afterEquals = true
+                        }
+                        return
+                    }
+                    // Drop the trailing newline and any whitespace that
+                    // immediately follows `=` so the returned text covers
+                    // just the RHS bytes.
+                    if token.kind == .newline { return }
+                    if pieces.isEmpty, token.kind == .whitespace { return }
+                    pieces.append(token.makeString())
+                case .node(let child):
+                    if afterEquals {
+                        pieces.append(child.makeString())
+                    }
+                }
+            }
         }
-        return firstToken(kind: .schemaText)?.text ?? ""
+        var result = pieces.joined()
+        while result.last?.isWhitespace == true {
+            result.removeLast()
+        }
+        return result
     }
 }
 

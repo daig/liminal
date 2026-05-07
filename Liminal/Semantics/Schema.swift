@@ -59,6 +59,13 @@ public indirect enum SchemaTypeExpression: Equatable, Sendable {
     case enumeration([String])
     case record([SchemaField])
     case variant(discriminator: FieldName, cases: [SchemaVariantCase])
+    /// Sentinel for type expressions the parser/lowerer didn't structure
+    /// in this slice (e.g. `map<T>`, `ref<T>`, `embed<T>`, `enum`,
+    /// `variant` — deferred to a follow-up TypeExpr sub-slice). The
+    /// validator treats `.unknown` as "skip type-shape validation"; field
+    /// presence and `isOptional` are still checked. Removed when the full
+    /// TypeExpr surface lands.
+    case unknown
 }
 
 public struct SchemaField: Equatable, Sendable {
@@ -768,6 +775,10 @@ public struct SchemaValidator: Sendable {
     }
 
     private func valueMatches(_ value: LiminalValue, type: SchemaTypeExpression) -> Bool {
+        if case .unknown = type {
+            // Deferred TypeExpr form — skip shape validation. (3c.2 sentinel.)
+            return true
+        }
         switch (value, type) {
         case (.scalar(let scalar), let primitive):
             return scalarMatches(scalar, type: primitive)
