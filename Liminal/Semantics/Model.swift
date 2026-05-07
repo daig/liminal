@@ -188,8 +188,8 @@ public struct LiminalTemplateSignature: Equatable, Sendable {
 
 public struct LiminalTemplateParameter: Equatable, Sendable {
     public var name: String
-    /// Param value-type, `.unknown` for deferred TypeExpr forms (mirrors
-    /// `lowerSchemaField`'s sentinel behaviour).
+    /// Param value-type, `.deferred` for deferred TypeExpr forms
+    /// (mirrors `lowerSchemaField`'s sentinel behaviour).
     public var type: SchemaTypeExpression
     /// True when the parameter's declared TypeExpr carries a trailing `?`.
     public var isOptional: Bool

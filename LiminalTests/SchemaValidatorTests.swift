@@ -611,8 +611,8 @@ struct SchemaValidatorTests {
     @Test("Phase 3c.2 validator skips type-shape check for deferred-form field types")
     func phase3c2ValidatorSkipsTypeCheckForDeferredFieldType() throws {
         // `tags: map<str>` is a deferred TypeExpr form; its value-type
-        // lowers to `.unknown` so any actual value passes shape validation
-        // (we still enforce field presence). Without the .unknown sentinel
+        // lowers to `.deferred` so any actual value passes shape validation
+        // (we still enforce field presence). Without the .deferred sentinel
         // this would degrade to .named("map") and reject the list value.
         let source = """
         :::schema prelude

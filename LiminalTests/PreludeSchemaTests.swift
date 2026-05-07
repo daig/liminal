@@ -358,8 +358,8 @@ struct PreludeSchemaTests {
         #expect(ifType.kind == .block)
         let ifFields = try recordFields(in: ifType)
         #expect(ifFields.map(\.name.rawValue) == ["test", "body"])
-        // Expression slot uses the .unknown sentinel; body is @content of blocks.
-        #expect(ifFields[0].type == .unknown)
+        // Expression slot uses the .deferred sentinel; body is @content of blocks.
+        #expect(ifFields[0].type == .deferred)
         #expect(ifFields[0].isOptional == false)
         #expect(ifFields[1].type == .blocks)
         #expect(ifFields[1].modifiers.contains(.content))
@@ -368,8 +368,8 @@ struct PreludeSchemaTests {
         #expect(forType.kind == .block)
         let forFields = try recordFields(in: forType)
         #expect(forFields.map(\.name.rawValue) == ["item", "in", "body"])
-        #expect(forFields[0].type == .unknown)
-        #expect(forFields[1].type == .unknown)
+        #expect(forFields[0].type == .deferred)
+        #expect(forFields[1].type == .deferred)
         #expect(forFields[2].type == .blocks)
         #expect(forFields[2].modifiers.contains(.content))
     }

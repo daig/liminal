@@ -59,13 +59,13 @@ public indirect enum SchemaTypeExpression: Equatable, Sendable {
     case enumeration([String])
     case record([SchemaField])
     case variant(discriminator: FieldName, cases: [SchemaVariantCase])
-    /// Sentinel for type expressions the parser/lowerer didn't structure
-    /// in this slice (e.g. `map<T>`, `ref<T>`, `embed<T>`, `enum`,
-    /// `variant` — deferred to a follow-up TypeExpr sub-slice). The
-    /// validator treats `.unknown` as "skip type-shape validation"; field
-    /// presence and `isOptional` are still checked. Removed when the full
-    /// TypeExpr surface lands.
-    case unknown
+    /// Sentinel for type expressions the parser/lowerer hasn't
+    /// structured yet — currently `map<T>`, `ref<T>`, `embed<T>`,
+    /// `enum {…}`, and `variant by … {…}`. The validator treats
+    /// `.deferred` as "skip type-shape validation"; field presence and
+    /// `isOptional` are still enforced. Removed when those forms gain
+    /// structural parsers.
+    case deferred
 }
 
 public struct SchemaField: Equatable, Sendable {
@@ -267,19 +267,19 @@ public enum LiminalPrelude {
 
             // Template control structures (spec §10). Their reserved
             // surface forms are `:::if{test: …}` and `:::for{item: …, in: …}`.
-            // The expression slots use `.unknown` because the value
+            // The expression slots use `.deferred` because the value
             // parser captures `test` / `item` / `in` as bare scalars
             // today; structural template-expression parsing inside
-            // typed-block fields remains future work — `.unknown` keeps
-            // the validator's shape check permissive while still
+            // typed-block fields remains future work — `.deferred`
+            // keeps the validator's shape check permissive while still
             // enforcing field presence (`isOptional: false`).
             type("if", kind: .block, fields: [
-                field("test", .unknown),
+                field("test", .deferred),
                 field("body", .blocks, modifiers: [.content])
             ]),
             type("for", kind: .block, fields: [
-                field("item", .unknown),
-                field("in", .unknown),
+                field("item", .deferred),
+                field("in", .deferred),
                 field("body", .blocks, modifiers: [.content])
             ])
         ]
@@ -815,8 +815,10 @@ public struct SchemaValidator: Sendable {
     }
 
     private func valueMatches(_ value: LiminalValue, type: SchemaTypeExpression) -> Bool {
-        if case .unknown = type {
-            // Deferred TypeExpr form — skip shape validation. (3c.2 sentinel.)
+        if case .deferred = type {
+            // Deferred TypeExpr form — skip shape validation. The
+            // sentinel retires when variant/enum/map/ref/embed gain
+            // structural parsers.
             return true
         }
         switch (value, type) {

@@ -151,7 +151,7 @@ public struct LiminalLowerer: Sendable {
             guard let elementSyntax = syntax.listElementType else {
                 return nil
             }
-            let element = lowerSchemaTypeExpression(elementSyntax) ?? .unknown
+            let element = lowerSchemaTypeExpression(elementSyntax) ?? .deferred
             return .list(element)
         }
         if syntax.isRecord {
@@ -170,11 +170,11 @@ public struct LiminalLowerer: Sendable {
         // both forms uniformly per spec §9.
         let valueTypeSyntax = syntax.valueType
         // Fields whose value type is a deferred TypeExpr form (or otherwise
-        // unparseable) lower to `.unknown` so the validator skips type
+        // unparseable) lower to `.deferred` so the validator skips type
         // shape checks for them while still honouring presence and
         // optionality. Without this, a field declared as `tags: map<str>`
         // would degrade to `.str` and reject every valid value.
-        let valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .unknown
+        let valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
         let typeLevelOptional = valueTypeSyntax?.isOptional ?? false
         let modifiers = syntax.modifiers.compactMap(lowerSchemaModifier)
         return SchemaField(
@@ -208,7 +208,7 @@ public struct LiminalLowerer: Sendable {
         guard let name = syntax.qnameText else { return nil }
         let parameters = syntax.parameters.map { paramSyntax in
             let typeSyntax = paramSyntax.valueType
-            let type = typeSyntax.flatMap(lowerSchemaTypeExpression) ?? .unknown
+            let type = typeSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
             return LiminalTemplateParameter(
                 name: paramSyntax.nameText,
                 type: type,
