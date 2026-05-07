@@ -1381,6 +1381,16 @@ struct SyntaxTests {
         #expect(fields.map(\.name) == ["name", "age"])
     }
 
+    @Test("Phase 3.5 parser diagnoses chained ?? in interpolation")
+    func phase35ParserDiagnosesChainedNullCoalesce() throws {
+        let source = "Hello ${a ?? b ?? c}\n"
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.contains {
+            $0.message == "`??` is not chainable; parenthesize to nest"
+        })
+    }
+
     @Test("Phase 3.5 parser diagnoses unmatched < in deferred TypeExpr forms")
     func phase35ParserDiagnosesUnmatchedDeferredFormDelimiter() throws {
         let source = """

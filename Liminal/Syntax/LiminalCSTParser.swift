@@ -5362,6 +5362,28 @@ private struct LiminalInlineCSTParser {
                     length: 0
                 )
             }
+
+            // 3.5 #3: spec §7.14 caps NullCoalesce at a single `??`. If
+            // a second one appears after the rhs Projection (with optional
+            // intervening whitespace), surface a precise diagnostic so the
+            // user knows to parenthesize. The trailing `??` itself is left
+            // for the existing salvage path; that keeps byte preservation
+            // and the existing chained-`??` test still observes the
+            // unrecognized-token diagnostic.
+            let afterRhs = try emitInterpolationWhitespace(
+                in: bodyText,
+                from: cursor,
+                with: &builder
+            )
+            cursor = afterRhs
+            if isAtNullCoalesceOperator(in: bodyText, at: afterRhs) {
+                appendBodyDiagnostic(
+                    "`??` is not chainable; parenthesize to nest",
+                    at: bodyBaseByteOffset
+                        + bodyText[bodyText.startIndex..<afterRhs].utf8.count,
+                    length: 2
+                )
+            }
         }
         return cursor
     }
