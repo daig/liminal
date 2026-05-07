@@ -4517,11 +4517,24 @@ private struct LiminalInlineCSTParser {
                 with: &builder
             )
             cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
+        } else {
+            try builder.missingNode(.missing)
+            appendMissingInterpolationExpressionDiagnostic(
+                in: bodyText,
+                at: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset
+            )
         }
         if cursor < bodyText.endIndex {
             // Salvage anything we couldn't recognize so byte preservation
             // holds; we keep the legacy `.interpolationText` token kind for
             // exactly this purpose.
+            appendBodyDiagnostic(
+                "unrecognized interpolation expression token",
+                at: bodyBaseByteOffset
+                    + bodyText[bodyText.startIndex..<cursor].utf8.count,
+                length: 0
+            )
             try builder.largeToken(
                 .interpolationText,
                 text: String(bodyText[cursor..<bodyText.endIndex])
@@ -4668,6 +4681,13 @@ private struct LiminalInlineCSTParser {
                     bodyBaseByteOffset: bodyBaseByteOffset,
                     with: &builder
                 )
+            } else {
+                try builder.missingNode(.missing)
+                appendMissingInterpolationExpressionDiagnostic(
+                    in: bodyText,
+                    at: cursor,
+                    bodyBaseByteOffset: bodyBaseByteOffset
+                )
             }
             try builder.finishNode()
             cursor = try emitInterpolationWhitespace(in: bodyText, from: cursor, with: &builder)
@@ -4807,13 +4827,20 @@ private struct LiminalInlineCSTParser {
         }
 
         try builder.missingNode(.missing)
+        return cursor
+    }
+
+    private mutating func appendMissingInterpolationExpressionDiagnostic(
+        in bodyText: String,
+        at cursor: String.Index,
+        bodyBaseByteOffset: Int
+    ) {
         appendBodyDiagnostic(
-            "unrecognized interpolation expression token",
+            "missing interpolation expression",
             at: bodyBaseByteOffset
                 + bodyText[bodyText.startIndex..<cursor].utf8.count,
             length: 0
         )
-        return cursor
     }
 
     private mutating func emitInterpolationWhitespace(
@@ -4849,7 +4876,11 @@ private struct LiminalInlineCSTParser {
     }
 
     private func numericLiteralEnd(in text: String, from start: String.Index) -> String.Index? {
-        guard let intEnd = asciiDigitEnd(in: text, from: start) else { return nil }
+        var literalStart = start
+        if literalStart < text.endIndex, text[literalStart] == "-" {
+            literalStart = text.index(after: literalStart)
+        }
+        guard let intEnd = asciiDigitEnd(in: text, from: literalStart) else { return nil }
         var cursor = intEnd
         if cursor < text.endIndex, text[cursor] == "." {
             let afterDot = text.index(after: cursor)

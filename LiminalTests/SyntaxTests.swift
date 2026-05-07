@@ -844,6 +844,8 @@ struct SyntaxTests {
             (#"Hello ${"literal"}"# + "\n", #""literal""#),
             ("Hello ${42}\n", "42"),
             ("Hello ${1.5}\n", "1.5"),
+            ("Hello ${-1}\n", "-1"),
+            ("Hello ${-1.5}\n", "-1.5"),
             ("Hello ${true}\n", "true"),
             ("Hello ${null}\n", "null"),
             ("Hello ${&ada}\n", "&ada")
@@ -865,6 +867,12 @@ struct SyntaxTests {
                 "missing structured expression for \(testCase.source.debugDescription)"
             )
         }
+
+        let negativeInteger = try LiminalParser().parse("Hello ${-1}\n")
+        #expect(negativeInteger.rootSyntax.firstDescendantToken(kind: .integerLiteral)?.text == "-1")
+
+        let negativeNumber = try LiminalParser().parse("Hello ${-1.5}\n")
+        #expect(negativeNumber.rootSyntax.firstDescendantToken(kind: .numberLiteral)?.text == "-1.5")
     }
 
     @Test("Phase 3c.1 parenthesized expression nests inside outer wrapper")
@@ -903,6 +911,39 @@ struct SyntaxTests {
         #expect(garbageResult.sourceText == garbage)
         #expect(garbageResult.diagnostics.contains {
             $0.message == "unrecognized interpolation expression token"
+        })
+
+        // Trailing garbage after an otherwise valid prefix also diagnoses
+        // while preserving the original bytes.
+        let trailingGarbage = "Hello ${person @@@}\n"
+        let trailingResult = try LiminalParser().parse(trailingGarbage)
+        #expect(trailingResult.sourceText == trailingGarbage)
+        #expect(trailingResult.diagnostics.contains {
+            $0.message == "unrecognized interpolation expression token"
+        })
+
+        // The grammar allows only one `??` operator in this slice; a second
+        // one is salvaged and diagnosed instead of being silently accepted.
+        let repeatedCoalesce = "Hello ${a ?? b ?? c}\n"
+        let repeatedResult = try LiminalParser().parse(repeatedCoalesce)
+        #expect(repeatedResult.sourceText == repeatedCoalesce)
+        #expect(repeatedResult.diagnostics.contains {
+            $0.message == "unrecognized interpolation expression token"
+        })
+
+        // Empty expression bodies are invalid but remain lossless.
+        let empty = "Hello ${}\n"
+        let emptyResult = try LiminalParser().parse(empty)
+        #expect(emptyResult.sourceText == empty)
+        #expect(emptyResult.diagnostics.contains {
+            $0.message == "missing interpolation expression"
+        })
+
+        let emptyParens = "Hello ${()}\n"
+        let emptyParensResult = try LiminalParser().parse(emptyParens)
+        #expect(emptyParensResult.sourceText == emptyParens)
+        #expect(emptyParensResult.diagnostics.contains {
+            $0.message == "missing interpolation expression"
         })
     }
 
