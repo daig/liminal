@@ -1451,8 +1451,8 @@ public struct InterpolationSyntax: LiminalSyntaxNode {
 public struct InterpolationExpressionSyntax: LiminalSyntaxNode {
     /// Nested expression nodes — present when the body contains a
     /// parenthesized sub-expression. (`??` operands are represented as
-    /// flat token sequences in 3c.1; richer accessors come with 3c.4
-    /// when the lowered template-control nodes need them.)
+    /// flat token sequences; semantic expression lowering remains future
+    /// template-execution work.)
     public var subExpressions: [InterpolationExpressionSyntax] {
         childNodes(kind: .interpolationExpression)
             .map(InterpolationExpressionSyntax.init(unchecked:))

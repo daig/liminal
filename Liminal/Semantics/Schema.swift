@@ -483,9 +483,9 @@ public struct SchemaValidator: Sendable {
                 walk(nestedItem, resolver: resolver, diagnostics: &diagnostics)
             }
         case .schema, .directive:
-            // Schema and directive bodies are raw text today; structured
-            // RHS parsing (TypeExpr) lands in Phase 3c. Nothing to validate
-            // yet.
+            // Schema declarations and ::use bodies are already lowered into
+            // resolver inputs. The block/directive shell itself is not a
+            // runtime node, so there is nothing to validate in this walk.
             break
         }
     }
