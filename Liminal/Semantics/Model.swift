@@ -144,15 +144,22 @@ public struct LiminalUserSchemaTypeDeclaration: Equatable, Sendable {
     public var name: QualifiedName
     public var kind: NodeKind?
     public var rawRHS: String
+    /// Structured RHS produced by Phase 3c.2's TypeExpr parser. `nil` when
+    /// the RHS could not be parsed structurally (e.g. forms not yet
+    /// covered, or recovery paths) — the validator falls back to kind-only
+    /// checking in that case.
+    public var definition: SchemaTypeExpression?
 
     public init(
         name: QualifiedName,
         kind: NodeKind?,
-        rawRHS: String
+        rawRHS: String,
+        definition: SchemaTypeExpression? = nil
     ) {
         self.name = name
         self.kind = kind
         self.rawRHS = rawRHS
+        self.definition = definition
     }
 }
 

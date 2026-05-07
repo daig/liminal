@@ -703,8 +703,93 @@ public struct SchemaTypeDeclarationSyntax: LiminalSyntaxNode {
         return identifiers[1].text
     }
 
+    /// The structured RHS produced by Phase 3c.2's TypeExpr parser, when
+    /// the RHS was parseable. Falls back to nil for declarations whose RHS
+    /// could not be structured (e.g. forms not yet supported, or recovery
+    /// paths) — `rhsText` still reflects the source bytes either way.
+    public var definition: SchemaTypeExpressionSyntax? {
+        firstChild(kind: .schemaTypeExpression)
+            .map(SchemaTypeExpressionSyntax.init(unchecked:))
+    }
+
     public var rhsText: String {
-        firstToken(kind: .schemaText)?.text ?? ""
+        if let definition {
+            return definition.sourceText
+        }
+        return firstToken(kind: .schemaText)?.text ?? ""
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaTypeExpression)
+public struct SchemaTypeExpressionSyntax: LiminalSyntaxNode {
+    /// Direct `.qname` token (the type name), present for primitive and
+    /// named types. `nil` for record / list shapes.
+    public var qnameText: String? {
+        firstToken(kind: .qname)?.text
+    }
+
+    /// True when the parser opened a record `{ ... }` here.
+    public var isRecord: Bool {
+        firstToken(kind: .leftBrace) != nil
+    }
+
+    /// True when the parser opened a list `[ T ]` here.
+    public var isList: Bool {
+        firstToken(kind: .leftBracket) != nil
+    }
+
+    /// True when a trailing `?` made the type optional at this level.
+    public var isOptional: Bool {
+        firstToken(kind: .questionMark) != nil
+    }
+
+    /// Fields when this expression is a record. Empty otherwise.
+    public var recordFields: [SchemaFieldSyntax] {
+        childNodes(kind: .schemaField).map(SchemaFieldSyntax.init(unchecked:))
+    }
+
+    /// Element type when this expression is a list. `nil` otherwise.
+    public var listElementType: SchemaTypeExpressionSyntax? {
+        firstChild(kind: .schemaTypeExpression)
+            .map(SchemaTypeExpressionSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaField)
+public struct SchemaFieldSyntax: LiminalSyntaxNode {
+    public var fieldNameText: String {
+        firstToken(kind: .fieldName)?.text ?? ""
+    }
+
+    /// True when the field name carries a `?` marker (`field?: T`),
+    /// making the field optional independently of any type-level `?`.
+    public var isOptional: Bool {
+        firstToken(kind: .questionMark) != nil
+    }
+
+    public var valueType: SchemaTypeExpressionSyntax? {
+        firstChild(kind: .schemaTypeExpression)
+            .map(SchemaTypeExpressionSyntax.init(unchecked:))
+    }
+
+    public var modifiers: [SchemaModifierSyntax] {
+        childNodes(kind: .schemaModifier).map(SchemaModifierSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaModifier)
+public struct SchemaModifierSyntax: LiminalSyntaxNode {
+    /// The identifier after `@`, e.g. `content`, `default`, `surface`.
+    public var modifierName: String {
+        firstToken(kind: .identifier)?.text ?? ""
+    }
+
+    /// Raw text inside `(...)` for arg-carrying modifiers; nil for bare
+    /// markers like `@content` and `@readonly`. Phase 3c.2 captures the
+    /// argument bytes verbatim — semantic decoding (parsing `@default(0)`
+    /// to a `LiminalScalar`) lands in a follow-up.
+    public var argumentsText: String? {
+        firstToken(kind: .schemaText)?.text
     }
 }
 

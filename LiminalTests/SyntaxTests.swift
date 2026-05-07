@@ -947,6 +947,114 @@ struct SyntaxTests {
         })
     }
 
+    @Test("Phase 3c.2 parser structures schema RHS into TypeExpr CST")
+    func phase3c2ParserStructuresSchemaRHS() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str, age?: int @readonly }
+        type Tags : value = [str]
+        type Maybe : value = str?
+        type Card : block = { title: str @content }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+
+        #expect(schema.declarations.count == 4)
+
+        // Person — record with two fields.
+        let person = try #require(schema.declarations[0].definition)
+        #expect(person.isRecord)
+        let personFields = person.recordFields
+        #expect(personFields.map(\.fieldNameText) == ["name", "age"])
+        #expect(personFields[0].valueType?.qnameText == "str")
+        #expect(personFields[0].isOptional == false)
+        #expect(personFields[1].isOptional == true)
+        #expect(personFields[1].valueType?.qnameText == "int")
+        #expect(personFields[1].modifiers.map(\.modifierName) == ["readonly"])
+
+        // Tags — list of str.
+        let tags = try #require(schema.declarations[1].definition)
+        #expect(tags.isList)
+        #expect(tags.listElementType?.qnameText == "str")
+
+        // Maybe — optional str.
+        let maybe = try #require(schema.declarations[2].definition)
+        #expect(maybe.qnameText == "str")
+        #expect(maybe.isOptional)
+
+        // Card — record with @content modifier.
+        let card = try #require(schema.declarations[3].definition)
+        #expect(card.isRecord)
+        let titleField = try #require(card.recordFields.first)
+        #expect(titleField.modifiers.map(\.modifierName) == ["content"])
+    }
+
+    @Test("Phase 3c.2 parser captures modifier arguments as raw text")
+    func phase3c2ParserCapturesModifierArgumentsAsRawText() throws {
+        let source = """
+        :::schema prelude
+        type Greeting : value = { msg: str @default("hello") }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let definition = try #require(schema.declarations.first?.definition)
+        let modifier = try #require(definition.recordFields.first?.modifiers.first)
+        #expect(modifier.modifierName == "default")
+        #expect(modifier.argumentsText == #""hello""#)
+    }
+
+    @Test("Phase 3c.2 parser preserves rhsText source bytes through structuring")
+    func phase3c2ParserPreservesRhsTextBytes() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str, age?: int }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        // rhsText now derives from the structured definition's source text;
+        // it must continue to match the literal RHS bytes the caller wrote.
+        #expect(schema.declarations[0].rhsText == "{ name: str, age?: int }")
+    }
+
+    @Test("Phase 3c.2 parser recovers from a malformed schema RHS")
+    func phase3c2ParserRecoversMalformedSchemaRHS() throws {
+        let source = """
+        :::schema prelude
+        type Foo : value = { name: str
+        type Bar : value = str
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+        // Foo's record never closed — diagnostic surfaces, but Bar still
+        // parses cleanly. Recovery doesn't drop the next declaration.
+        #expect(result.diagnostics.contains { $0.message.contains("missing `}`") })
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let names = schema.declarations.map(\.qnameText)
+        #expect(names.contains("Bar"))
+    }
+
     @Test("Phase 3c.1 parser keeps slice 7 expressionText contract")
     func phase3c1ParserPreservesSlice7ExpressionTextContract() throws {
         // Re-runs the slice 7 wikilink+interpolation source verbatim and

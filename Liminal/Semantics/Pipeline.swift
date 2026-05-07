@@ -122,7 +122,8 @@ public struct LiminalLowerer: Sendable {
             declarations.append(LiminalUserSchemaTypeDeclaration(
                 name: QualifiedName(decl.qnameText),
                 kind: NodeKind(rawValue: decl.nodeKindText),
-                rawRHS: decl.rhsText
+                rawRHS: decl.rhsText,
+                definition: decl.definition.flatMap(lowerSchemaTypeExpression)
             ))
         }
         for decl in schema.templateDeclarations {
@@ -138,6 +139,81 @@ public struct LiminalLowerer: Sendable {
             declarations: declarations,
             source: surface("schemaBlock", schema.syntax)
         )
+    }
+
+    private func lowerSchemaTypeExpression(
+        _ syntax: SchemaTypeExpressionSyntax
+    ) -> SchemaTypeExpression? {
+        if syntax.isList {
+            // List type — recurse into the element type.
+            guard let element = syntax.listElementType.flatMap(lowerSchemaTypeExpression)
+            else {
+                return nil
+            }
+            return .list(element)
+        }
+        if syntax.isRecord {
+            let fields = syntax.recordFields.map(lowerSchemaField)
+            return .record(fields)
+        }
+        if let qname = syntax.qnameText {
+            return primitiveType(named: qname) ?? .named(QualifiedName(qname))
+        }
+        return nil
+    }
+
+    private func lowerSchemaField(_ syntax: SchemaFieldSyntax) -> SchemaField {
+        // The field is optional iff the field name carries `?` OR the
+        // value type itself is optional (`field: T?`). Validation treats
+        // both forms uniformly per spec §9.
+        let valueTypeSyntax = syntax.valueType
+        let valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .str
+        let typeLevelOptional = valueTypeSyntax?.isOptional ?? false
+        let modifiers = syntax.modifiers.compactMap(lowerSchemaModifier)
+        return SchemaField(
+            name: FieldName(syntax.fieldNameText),
+            type: valueType,
+            isOptional: syntax.isOptional || typeLevelOptional,
+            modifiers: modifiers
+        )
+    }
+
+    private func lowerSchemaModifier(_ syntax: SchemaModifierSyntax) -> SchemaModifier? {
+        // Phase 3c.2 only resolves the no-arg modifiers semantically. Args
+        // for `@default` / `@surface` / `@deprecated` are captured in the
+        // CST as raw text and decoded in a follow-up slice.
+        switch syntax.modifierName {
+        case "content":
+            return .content
+        case "readonly":
+            return .readonly
+        default:
+            return nil
+        }
+    }
+
+    private func primitiveType(named text: String) -> SchemaTypeExpression? {
+        switch text {
+        case "str": return .str
+        case "bool": return .bool
+        case "int": return .int
+        case "num": return .num
+        case "decimal": return .decimal
+        case "date": return .date
+        case "time": return .time
+        case "datetime": return .datetime
+        case "uri": return .uri
+        case "id": return .id
+        case "target": return .target
+        case "type": return .type
+        case "inline": return .inline
+        case "block": return .block
+        case "blocks": return .blocks
+        case "value": return .value
+        case "template": return .template
+        default:
+            return nil
+        }
     }
 
     private func lowerParagraph(_ paragraph: ParagraphSyntax) -> LiminalNode? {

@@ -854,19 +854,331 @@ struct LiminalCSTParser {
         // .newline trivia immediately after.
         let lastLine = bodyLines[rhsLineRange.upperBound - 1]
         let rhsText = String(bodySource[cursor..<lastLine.contentEnd])
-        if !rhsText.isEmpty {
-            try builder.largeToken(.schemaText, text: rhsText)
-        } else {
+        if rhsText.isEmpty {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
                 "expected RHS after `=`",
                 at: openerLine.byteOffset(of: cursor),
                 length: 0
             )
+        } else if nodeKind == .schemaTemplateTypeDeclaration {
+            // Template signatures parse structurally in Phase 3c.3; for now
+            // they ride as a single `.schemaText` payload.
+            try builder.largeToken(.schemaText, text: rhsText)
+        } else {
+            let rhsBaseByteOffset = openerLine.byteOffset(of: cursor)
+            try emitSchemaTypeExpressionPayload(
+                in: rhsText,
+                bodyBaseByteOffset: rhsBaseByteOffset,
+                with: &builder
+            )
         }
 
         try emitNewline(lastLine.newlineText, with: &builder)
         try builder.finishNode()
+    }
+
+    private mutating func emitSchemaTypeExpressionPayload(
+        in text: String,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        var cursor = text.startIndex
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+        if cursor < text.endIndex {
+            cursor = try parseSchemaTypeExpression(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+        }
+        if cursor < text.endIndex {
+            // Salvage anything we couldn't structurally consume so byte
+            // preservation holds even when the RHS contains type-expression
+            // forms 3c.2 doesn't yet cover (variant/enum/map/ref/embed).
+            try builder.largeToken(
+                .schemaText,
+                text: String(text[cursor..<text.endIndex])
+            )
+        }
+    }
+
+    private mutating func parseSchemaTypeExpression(
+        in text: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        builder.startNode(.schemaTypeExpression)
+        var cursor = cursor
+        if cursor < text.endIndex {
+            let ch = text[cursor]
+            if ch == "{" {
+                cursor = try parseSchemaRecordType(
+                    in: text,
+                    from: cursor,
+                    bodyBaseByteOffset: bodyBaseByteOffset,
+                    with: &builder
+                )
+            } else if ch == "[" {
+                cursor = try parseSchemaListType(
+                    in: text,
+                    from: cursor,
+                    bodyBaseByteOffset: bodyBaseByteOffset,
+                    with: &builder
+                )
+            } else if let qnameEnd = LiminalStructuredScanner(source: text).qnameEnd(from: cursor) {
+                try builder.token(.qname, text: String(text[cursor..<qnameEnd]))
+                cursor = qnameEnd
+            } else {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "expected schema type expression",
+                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+        }
+        // Trailing optional `?` (TypeExpr "?"). Strict adjacency — no
+        // intervening whitespace; field-level optional `field?: T` is
+        // captured at the field level instead.
+        if cursor < text.endIndex, text[cursor] == "?" {
+            try builder.staticToken(.questionMark)
+            cursor = text.index(after: cursor)
+        }
+        try builder.finishNode()
+        return cursor
+    }
+
+    private mutating func parseSchemaRecordType(
+        in text: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        try builder.staticToken(.leftBrace)
+        cursor = text.index(after: cursor)
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        while cursor < text.endIndex, text[cursor] != "}" {
+            guard let fieldNameEnd = identifierEnd(in: text, from: cursor) else {
+                break
+            }
+            builder.startNode(.schemaField)
+            try builder.token(.fieldName, text: String(text[cursor..<fieldNameEnd]))
+            cursor = fieldNameEnd
+
+            cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+            if cursor < text.endIndex, text[cursor] == "?" {
+                try builder.staticToken(.questionMark)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+            }
+
+            if cursor < text.endIndex, text[cursor] == ":" {
+                try builder.staticToken(.colon)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            } else {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "expected `:` in schema field",
+                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+                try builder.finishNode()
+                break
+            }
+
+            cursor = try parseSchemaTypeExpression(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            cursor = try parseSchemaModifiers(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            try builder.finishNode()
+
+            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            if cursor < text.endIndex, text[cursor] == "," {
+                try builder.staticToken(.comma)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            }
+        }
+
+        if cursor < text.endIndex, text[cursor] == "}" {
+            try builder.staticToken(.rightBrace)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing `}` in record schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        return cursor
+    }
+
+    private mutating func parseSchemaListType(
+        in text: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        try builder.staticToken(.leftBracket)
+        cursor = text.index(after: cursor)
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+        if cursor < text.endIndex, text[cursor] != "]" {
+            cursor = try parseSchemaTypeExpression(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+        }
+        if cursor < text.endIndex, text[cursor] == "]" {
+            try builder.staticToken(.rightBracket)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing `]` in list schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        return cursor
+    }
+
+    private mutating func parseSchemaModifiers(
+        in text: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        while true {
+            var peek = cursor
+            while peek < text.endIndex, text[peek].isHorizontalWhitespace {
+                peek = text.index(after: peek)
+            }
+            guard peek < text.endIndex, text[peek] == "@" else {
+                return cursor
+            }
+            if peek > cursor {
+                try emitWhitespace(String(text[cursor..<peek]), with: &builder)
+            }
+            cursor = peek
+            builder.startNode(.schemaModifier)
+            try builder.staticToken(.atSign)
+            cursor = text.index(after: cursor)
+            if let identEnd = identifierEnd(in: text, from: cursor) {
+                try builder.token(.identifier, text: String(text[cursor..<identEnd]))
+                cursor = identEnd
+            } else {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "expected modifier name after `@`",
+                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+            if cursor < text.endIndex, text[cursor] == "(" {
+                try builder.staticToken(.leftParen)
+                cursor = text.index(after: cursor)
+                let argsStart = cursor
+                var depth = 1
+                while cursor < text.endIndex, depth > 0 {
+                    let ch = text[cursor]
+                    if ch == "(" {
+                        depth += 1
+                    } else if ch == ")" {
+                        depth -= 1
+                        if depth == 0 { break }
+                    } else if ch.isNewlineStart {
+                        break
+                    }
+                    cursor = text.index(after: cursor)
+                }
+                if argsStart < cursor {
+                    try builder.token(.schemaText, text: String(text[argsStart..<cursor]))
+                }
+                if cursor < text.endIndex, text[cursor] == ")" {
+                    try builder.staticToken(.rightParen)
+                    cursor = text.index(after: cursor)
+                } else {
+                    try builder.missingNode(.missing)
+                    appendSchemaBodyDiagnostic(
+                        "missing `)` in modifier arguments",
+                        at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                }
+            }
+            try builder.finishNode()
+        }
+    }
+
+    private mutating func emitSchemaPayloadTrivia(
+        in text: String,
+        from cursor: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        while cursor < text.endIndex {
+            if text[cursor].isHorizontalWhitespace {
+                let start = cursor
+                while cursor < text.endIndex, text[cursor].isHorizontalWhitespace {
+                    cursor = text.index(after: cursor)
+                }
+                try emitWhitespace(String(text[start..<cursor]), with: &builder)
+            } else if let nlEnd = newlineEndIn(text, at: cursor) {
+                try emitNewline(String(text[cursor..<nlEnd]), with: &builder)
+                cursor = nlEnd
+            } else {
+                break
+            }
+        }
+        return cursor
+    }
+
+    private mutating func emitSchemaInlineTrivia(
+        in text: String,
+        from cursor: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var end = cursor
+        while end < text.endIndex, text[end].isHorizontalWhitespace {
+            end = text.index(after: end)
+        }
+        if cursor != end {
+            try emitWhitespace(String(text[cursor..<end]), with: &builder)
+        }
+        return end
+    }
+
+    private func newlineEndIn(_ text: String, at start: String.Index) -> String.Index? {
+        guard start < text.endIndex, text[start].isNewlineStart else { return nil }
+        if text[start] == "\r" {
+            let next = text.index(after: start)
+            if next < text.endIndex, text[next] == "\n" {
+                return text.index(after: next)
+            }
+            return next
+        }
+        return text.index(after: start)
     }
 
     private mutating func skipAndEmitWhitespace(

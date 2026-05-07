@@ -292,7 +292,11 @@ public enum LiminalPrelude {
 public struct LiminalSchemaResolver: Sendable {
     public enum Resolution: Equatable, Sendable {
         case prelude(SchemaTypeDeclaration)
-        case userDeclared(name: QualifiedName, kind: NodeKind?)
+        case userDeclared(
+            name: QualifiedName,
+            kind: NodeKind?,
+            definition: SchemaTypeExpression?
+        )
         case importedNamespace(alias: String)
         case unresolved
     }
@@ -392,7 +396,11 @@ public struct LiminalSchemaResolver: Sendable {
             return .prelude(declaration)
         }
         if let declaration = userIndex[name] {
-            return .userDeclared(name: declaration.name, kind: declaration.kind)
+            return .userDeclared(
+                name: declaration.name,
+                kind: declaration.kind,
+                definition: declaration.definition
+            )
         }
         // Alias-qualified type lookup: `@ext.Person` against `::use type
         // ... as ext`. Requires at least one segment past the alias (a
@@ -486,16 +494,28 @@ public struct SchemaValidator: Sendable {
 
             recurse(into: node, resolver: resolver, diagnostics: &diagnostics)
 
-        case .userDeclared(_, let kind):
-            // RHS shape is still raw text in 3b.3 — kind-check only, recurse
-            // so nested known types still validate. Field/content validation
-            // lands when 3c parses TypeExpr.
+        case .userDeclared(_, let kind, let definition):
+            // Kind check first.
             if let kind, kind != node.kind {
                 diagnostics.append(diagnostic(
                     .error,
                     "type '\(typeName.rawValue)' expects kind '\(kind.rawValue)' but node has kind '\(node.kind.rawValue)'",
                     node: node
                 ))
+            }
+            // Phase 3c.2: when the user-declared RHS parsed as a record,
+            // validate fields against it the same way prelude records are
+            // checked. RHS forms the parser doesn't yet structurally cover
+            // (variant/enum/map/ref/embed) leave `definition == nil` and
+            // fall through to kind-only checking.
+            if case .record(let declaredFields) = definition {
+                validate(
+                    fields: node.fields,
+                    against: declaredFields,
+                    onType: typeName,
+                    node: node,
+                    diagnostics: &diagnostics
+                )
             }
             recurse(into: node, resolver: resolver, diagnostics: &diagnostics)
 

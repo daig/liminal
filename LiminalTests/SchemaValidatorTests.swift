@@ -566,4 +566,63 @@ struct SchemaValidatorTests {
         #expect(shadow.count == 1)
         #expect(duplicate.count == 1)
     }
+
+    @Test("Phase 3c.2 validator catches missing required field on user-declared type")
+    func phase3c2UserDeclaredRecordMissingFieldIsFlagged() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str }
+        :::
+        @Person{}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message == "missing required field 'name' on type 'Person'"
+        })
+    }
+
+    @Test("Phase 3c.2 validator accepts a complete user-declared record")
+    func phase3c2UserDeclaredRecordWithAllRequiredFieldsValidates() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str, age?: int }
+        :::
+        @Person{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        // No missing-field, no unknown-field, no kind-mismatch, no
+        // unresolved-type diagnostics.
+        let added = Array(validated.diagnostics.dropFirst(document.diagnostics.count))
+        #expect(added.allSatisfy { diag in
+            !diag.message.contains("missing required field") &&
+            !diag.message.contains("unknown field") &&
+            !diag.message.contains("expects kind") &&
+            !diag.message.contains("unresolved type")
+        })
+    }
+
+    @Test("Phase 3c.2 validator flags unknown field on user-declared type")
+    func phase3c2UserDeclaredRecordUnknownFieldIsFlagged() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str }
+        :::
+        @Person{name: "Ada", extra: "x"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unknown field 'extra' on type 'Person'"
+        })
+    }
 }
