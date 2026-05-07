@@ -474,12 +474,11 @@ public struct SchemaValidator: Sendable {
         case .block(.node(let node)), .value(let node):
             validate(node: node, resolver: resolver, diagnostics: &diagnostics)
         case .template(let template):
-            // Template signature and shell are deferred to Phase 3c structured
-            // parsing. The body items, however, are normal lowered document
-            // items and should be validated so unresolved or malformed nodes
-            // inside templates are reported. (`:::if` / `:::for` lower as
-            // generic typed blocks today and will surface as unresolved-type
-            // warnings until Phase 3c specializes them.)
+            // Template shell validation is deferred. The body items, however,
+            // are normal lowered document items and should be validated so
+            // unresolved or malformed nodes inside templates are reported.
+            // `:::if` / `:::for` lower as generic typed blocks today and
+            // resolve through the prelude until specialized lowering lands.
             for nestedItem in template.items {
                 walk(nestedItem, resolver: resolver, diagnostics: &diagnostics)
             }
