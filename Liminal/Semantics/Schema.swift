@@ -289,6 +289,89 @@ public enum LiminalPrelude {
     }
 }
 
+public struct LiminalSchemaResolver: Sendable {
+    public enum Resolution: Equatable, Sendable {
+        case prelude(SchemaTypeDeclaration)
+        case userDeclared(name: QualifiedName, kind: NodeKind?)
+        case importedNamespace(alias: String)
+        case unresolved
+    }
+
+    public let prelude: LiminalSchema
+    public let diagnostics: [LiminalDiagnostic]
+
+    private let preludeIndex: [QualifiedName: SchemaTypeDeclaration]
+    private let userIndex: [QualifiedName: LiminalUserSchemaTypeDeclaration]
+    private let importedAliases: Set<String>
+
+    public init(prelude: LiminalSchema, document: LiminalDocument) {
+        self.prelude = prelude
+        var preludeIndex: [QualifiedName: SchemaTypeDeclaration] = [:]
+        for declaration in prelude.types {
+            preludeIndex[declaration.name] = declaration
+        }
+
+        var userIndex: [QualifiedName: LiminalUserSchemaTypeDeclaration] = [:]
+        var importedAliases: Set<String> = []
+        var diagnostics: [LiminalDiagnostic] = []
+        var reportedCollisions: Set<QualifiedName> = []
+
+        for item in document.items {
+            switch item {
+            case .schema(let block):
+                for declaration in block.declarations {
+                    if preludeIndex[declaration.name] != nil {
+                        if reportedCollisions.insert(declaration.name).inserted {
+                            diagnostics.append(LiminalDiagnostic(
+                                severity: .warning,
+                                message: "user-declared type '\(declaration.name.rawValue)' shadows prelude type; prelude shape will be used",
+                                range: block.source?.range ?? .empty
+                            ))
+                        }
+                        continue
+                    }
+                    if userIndex[declaration.name] != nil {
+                        if reportedCollisions.insert(declaration.name).inserted {
+                            diagnostics.append(LiminalDiagnostic(
+                                severity: .warning,
+                                message: "duplicate user-declared type '\(declaration.name.rawValue)'; first declaration will be used",
+                                range: block.source?.range ?? .empty
+                            ))
+                        }
+                        continue
+                    }
+                    userIndex[declaration.name] = declaration
+                }
+            case .directive(let directive):
+                guard directive.name == "use", let alias = directive.alias else {
+                    continue
+                }
+                importedAliases.insert(alias)
+            case .block, .value, .template:
+                continue
+            }
+        }
+
+        self.preludeIndex = preludeIndex
+        self.userIndex = userIndex
+        self.importedAliases = importedAliases
+        self.diagnostics = diagnostics
+    }
+
+    public func resolve(_ name: QualifiedName) -> Resolution {
+        if let declaration = preludeIndex[name] {
+            return .prelude(declaration)
+        }
+        if let declaration = userIndex[name] {
+            return .userDeclared(name: declaration.name, kind: declaration.kind)
+        }
+        if let prefix = name.parts.first, importedAliases.contains(prefix) {
+            return .importedNamespace(alias: prefix)
+        }
+        return .unresolved
+    }
+}
+
 public struct SchemaValidator: Sendable {
     public init() {}
 
@@ -296,9 +379,11 @@ public struct SchemaValidator: Sendable {
         _ document: LiminalDocument,
         against schema: LiminalSchema
     ) -> LiminalDocument {
+        let resolver = LiminalSchemaResolver(prelude: schema, document: document)
         var diagnostics = document.diagnostics
+        diagnostics.append(contentsOf: resolver.diagnostics)
         for item in document.items {
-            walk(item, schema: schema, diagnostics: &diagnostics)
+            walk(item, resolver: resolver, diagnostics: &diagnostics)
         }
         return LiminalDocument(
             syntaxTree: document.syntaxTree,
@@ -309,12 +394,12 @@ public struct SchemaValidator: Sendable {
 
     private func walk(
         _ item: LiminalDocumentItem,
-        schema: LiminalSchema,
+        resolver: LiminalSchemaResolver,
         diagnostics: inout [LiminalDiagnostic]
     ) {
         switch item {
         case .block(.node(let node)), .value(let node):
-            validate(node: node, schema: schema, diagnostics: &diagnostics)
+            validate(node: node, resolver: resolver, diagnostics: &diagnostics)
         case .template(let template):
             // Template signature and shell are deferred to Phase 3c structured
             // parsing. The body items, however, are normal lowered document
@@ -323,51 +408,72 @@ public struct SchemaValidator: Sendable {
             // generic typed blocks today and will surface as unresolved-type
             // warnings until Phase 3c specializes them.)
             for nestedItem in template.items {
-                walk(nestedItem, schema: schema, diagnostics: &diagnostics)
+                walk(nestedItem, resolver: resolver, diagnostics: &diagnostics)
             }
         case .schema, .directive:
             // Schema and directive bodies are raw text today; structured
-            // parsing lands in Phase 3b. Nothing to validate yet.
+            // RHS parsing (TypeExpr) lands in Phase 3c. Nothing to validate
+            // yet.
             break
         }
     }
 
     private func validate(
         node: LiminalNode,
-        schema: LiminalSchema,
+        resolver: LiminalSchemaResolver,
         diagnostics: inout [LiminalDiagnostic]
     ) {
         let typeName = node.type
-        guard let declaration = schema.type(named: typeName) else {
+        switch resolver.resolve(typeName) {
+        case .prelude(let declaration):
+            if declaration.kind != node.kind {
+                diagnostics.append(diagnostic(
+                    .error,
+                    "type '\(typeName.rawValue)' expects kind '\(declaration.kind.rawValue)' but node has kind '\(node.kind.rawValue)'",
+                    node: node
+                ))
+            }
+
+            if case .record(let declaredFields) = declaration.definition {
+                validate(
+                    fields: node.fields,
+                    against: declaredFields,
+                    onType: typeName,
+                    node: node,
+                    diagnostics: &diagnostics
+                )
+            }
+
+            recurse(into: node, resolver: resolver, diagnostics: &diagnostics)
+
+        case .userDeclared(_, let kind):
+            // RHS shape is still raw text in 3b.3 — kind-check only, recurse
+            // so nested known types still validate. Field/content validation
+            // lands when 3c parses TypeExpr.
+            if let kind, kind != node.kind {
+                diagnostics.append(diagnostic(
+                    .error,
+                    "type '\(typeName.rawValue)' expects kind '\(kind.rawValue)' but node has kind '\(node.kind.rawValue)'",
+                    node: node
+                ))
+            }
+            recurse(into: node, resolver: resolver, diagnostics: &diagnostics)
+
+        case .importedNamespace:
+            // External alias prefix is recognized; actual type shape isn't
+            // loaded (workspace concern). Skip validation, but recurse so any
+            // nested local types still validate.
+            recurse(into: node, resolver: resolver, diagnostics: &diagnostics)
+
+        case .unresolved:
             diagnostics.append(diagnostic(
                 .warning,
                 "unresolved type '\(typeName.rawValue)'",
                 node: node
             ))
             // Still recurse: nested constructs may use known types.
-            recurse(into: node, schema: schema, diagnostics: &diagnostics)
-            return
+            recurse(into: node, resolver: resolver, diagnostics: &diagnostics)
         }
-
-        if declaration.kind != node.kind {
-            diagnostics.append(diagnostic(
-                .error,
-                "type '\(typeName.rawValue)' expects kind '\(declaration.kind.rawValue)' but node has kind '\(node.kind.rawValue)'",
-                node: node
-            ))
-        }
-
-        if case .record(let declaredFields) = declaration.definition {
-            validate(
-                fields: node.fields,
-                against: declaredFields,
-                onType: typeName,
-                node: node,
-                diagnostics: &diagnostics
-            )
-        }
-
-        recurse(into: node, schema: schema, diagnostics: &diagnostics)
     }
 
     private func validate(
@@ -675,50 +781,50 @@ public struct SchemaValidator: Sendable {
 
     private func recurse(
         into node: LiminalNode,
-        schema: LiminalSchema,
+        resolver: LiminalSchemaResolver,
         diagnostics: inout [LiminalDiagnostic]
     ) {
         switch node.content {
         case .inline(let inlines):
-            recurse(into: inlines, schema: schema, diagnostics: &diagnostics)
+            recurse(into: inlines, resolver: resolver, diagnostics: &diagnostics)
         case .blocks(let blocks):
-            recurse(into: blocks, schema: schema, diagnostics: &diagnostics)
+            recurse(into: blocks, resolver: resolver, diagnostics: &diagnostics)
         case nil:
             break
         }
 
         for field in node.fields {
-            recurse(into: field.value, schema: schema, diagnostics: &diagnostics)
+            recurse(into: field.value, resolver: resolver, diagnostics: &diagnostics)
         }
     }
 
     private func recurse(
         into inlines: [LiminalInline],
-        schema: LiminalSchema,
+        resolver: LiminalSchemaResolver,
         diagnostics: inout [LiminalDiagnostic]
     ) {
         for inline in inlines {
             if case .node(let nested) = inline {
-                validate(node: nested, schema: schema, diagnostics: &diagnostics)
+                validate(node: nested, resolver: resolver, diagnostics: &diagnostics)
             }
         }
     }
 
     private func recurse(
         into blocks: [LiminalBlock],
-        schema: LiminalSchema,
+        resolver: LiminalSchemaResolver,
         diagnostics: inout [LiminalDiagnostic]
     ) {
         for block in blocks {
             if case .node(let nested) = block {
-                validate(node: nested, schema: schema, diagnostics: &diagnostics)
+                validate(node: nested, resolver: resolver, diagnostics: &diagnostics)
             }
         }
     }
 
     private func recurse(
         into value: LiminalValue,
-        schema: LiminalSchema,
+        resolver: LiminalSchemaResolver,
         diagnostics: inout [LiminalDiagnostic]
     ) {
         switch value {
@@ -726,18 +832,18 @@ public struct SchemaValidator: Sendable {
             break
         case .list(let values):
             for nested in values {
-                recurse(into: nested, schema: schema, diagnostics: &diagnostics)
+                recurse(into: nested, resolver: resolver, diagnostics: &diagnostics)
             }
         case .record(let fields):
             for field in fields {
-                recurse(into: field.value, schema: schema, diagnostics: &diagnostics)
+                recurse(into: field.value, resolver: resolver, diagnostics: &diagnostics)
             }
         case .node(let nested):
-            validate(node: nested, schema: schema, diagnostics: &diagnostics)
+            validate(node: nested, resolver: resolver, diagnostics: &diagnostics)
         case .inlineLiteral(let inlines):
-            recurse(into: inlines, schema: schema, diagnostics: &diagnostics)
+            recurse(into: inlines, resolver: resolver, diagnostics: &diagnostics)
         case .blockLiteral(let blocks):
-            recurse(into: blocks, schema: schema, diagnostics: &diagnostics)
+            recurse(into: blocks, resolver: resolver, diagnostics: &diagnostics)
         }
     }
 

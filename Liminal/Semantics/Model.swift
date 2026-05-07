@@ -101,34 +101,73 @@ public indirect enum LiminalDocumentItem: Equatable, Sendable {
     case directive(LiminalDirective)
 }
 
+public enum LiminalUseKind: String, Equatable, Sendable {
+    case type
+    case data
+}
+
 public struct LiminalDirective: Equatable, Sendable {
     public var name: String
     public var rawText: String
+    public var useKind: LiminalUseKind?
+    public var targetText: String
+    public var targetIsQuoted: Bool
+    public var filterQNames: [QualifiedName]
+    public var alias: String?
     public var source: SurfaceForm?
 
     public init(
         name: String,
         rawText: String,
+        useKind: LiminalUseKind? = nil,
+        targetText: String = "",
+        targetIsQuoted: Bool = false,
+        filterQNames: [QualifiedName] = [],
+        alias: String? = nil,
         source: SurfaceForm? = nil
     ) {
         self.name = name
         self.rawText = rawText
+        self.useKind = useKind
+        self.targetText = targetText
+        self.targetIsQuoted = targetIsQuoted
+        self.filterQNames = filterQNames
+        self.alias = alias
         self.source = source
+    }
+}
+
+public struct LiminalUserSchemaTypeDeclaration: Equatable, Sendable {
+    public var name: QualifiedName
+    public var kind: NodeKind?
+    public var rawRHS: String
+
+    public init(
+        name: QualifiedName,
+        kind: NodeKind?,
+        rawRHS: String
+    ) {
+        self.name = name
+        self.kind = kind
+        self.rawRHS = rawRHS
     }
 }
 
 public struct LiminalSchemaBlock: Equatable, Sendable {
     public var name: String?
     public var rawText: String
+    public var declarations: [LiminalUserSchemaTypeDeclaration]
     public var source: SurfaceForm?
 
     public init(
         name: String? = nil,
         rawText: String,
+        declarations: [LiminalUserSchemaTypeDeclaration] = [],
         source: SurfaceForm? = nil
     ) {
         self.name = name
         self.rawText = rawText
+        self.declarations = declarations
         self.source = source
     }
 }

@@ -28,17 +28,9 @@ public struct LiminalLowerer: Sendable {
                 source: surface("frontmatter", frontmatter.syntax)
             ))
         case .directive(let directive):
-            .directive(LiminalDirective(
-                name: directive.keywordText,
-                rawText: directive.bodyText,
-                source: surface("directive", directive.syntax)
-            ))
+            .directive(lowerDirective(directive))
         case .schemaBlock(let schema):
-            .schema(LiminalSchemaBlock(
-                name: schema.nameText,
-                rawText: schema.rawText,
-                source: surface("schemaBlock", schema.syntax)
-            ))
+            .schema(lowerSchemaBlock(schema))
         case .templateBlock(let template):
             .template(LiminalTemplateBlock(
                 signature: template.signatureText,
@@ -98,6 +90,49 @@ public struct LiminalLowerer: Sendable {
         case .wikiEmbedBlock(let embed):
             .block(.node(lowerWikiEmbedBlock(embed)))
         }
+    }
+
+    private func lowerDirective(_ directive: DirectiveSyntax) -> LiminalDirective {
+        let useDirective = directive.useDirective
+        let useKind = useDirective?.kindText.flatMap(LiminalUseKind.init(rawValue:))
+        let targetText = useDirective?.targetText ?? ""
+        let targetIsQuoted = useDirective?.targetIsQuoted ?? false
+        let filterQNames = useDirective?.filterQNames.map { QualifiedName($0) } ?? []
+        let alias = useDirective?.aliasText
+        return LiminalDirective(
+            name: directive.keywordText,
+            rawText: directive.bodyText,
+            useKind: useKind,
+            targetText: targetText,
+            targetIsQuoted: targetIsQuoted,
+            filterQNames: filterQNames,
+            alias: alias,
+            source: surface("directive", directive.syntax)
+        )
+    }
+
+    private func lowerSchemaBlock(_ schema: SchemaBlockSyntax) -> LiminalSchemaBlock {
+        var declarations: [LiminalUserSchemaTypeDeclaration] = []
+        for decl in schema.declarations {
+            declarations.append(LiminalUserSchemaTypeDeclaration(
+                name: QualifiedName(decl.qnameText),
+                kind: NodeKind(rawValue: decl.nodeKindText),
+                rawRHS: decl.rhsText
+            ))
+        }
+        for decl in schema.templateDeclarations {
+            declarations.append(LiminalUserSchemaTypeDeclaration(
+                name: QualifiedName(decl.qnameText),
+                kind: .template,
+                rawRHS: decl.signatureText
+            ))
+        }
+        return LiminalSchemaBlock(
+            name: schema.nameText,
+            rawText: schema.rawText,
+            declarations: declarations,
+            source: surface("schemaBlock", schema.syntax)
+        )
     }
 
     private func lowerParagraph(_ paragraph: ParagraphSyntax) -> LiminalNode? {

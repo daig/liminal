@@ -692,6 +692,40 @@ struct SemanticModelTests {
             .reference(.external("./people.lim#ada"))
         ])
     }
+
+    @Test("Phase 3b.3 lowerer enriches schema blocks and ::use directives")
+    func phase3b3LowererEnrichesSchemaAndDirective() throws {
+        let source = """
+        ::use type "./schema.lim" only { Person, Card } as ext
+        :::schema prelude
+        type Person : value = { name: str }
+        type Card : block = { title: str }
+        :::
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        guard case .directive(let directive) = document.items.first else {
+            Issue.record("expected directive document item")
+            return
+        }
+        #expect(directive.name == "use")
+        #expect(directive.useKind == .type)
+        #expect(directive.targetText == "./schema.lim")
+        #expect(directive.targetIsQuoted)
+        #expect(directive.filterQNames.map(\.rawValue) == ["Person", "Card"])
+        #expect(directive.alias == "ext")
+
+        guard case .schema(let schema) = document.items[1] else {
+            Issue.record("expected schema document item")
+            return
+        }
+        #expect(schema.declarations.count == 2)
+        #expect(schema.declarations[0].name.rawValue == "Person")
+        #expect(schema.declarations[0].kind == .value)
+        #expect(schema.declarations[0].rawRHS.contains("name: str"))
+        #expect(schema.declarations[1].name.rawValue == "Card")
+        #expect(schema.declarations[1].kind == .block)
+    }
 }
 
 private extension LiminalBlock {

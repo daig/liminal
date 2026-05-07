@@ -385,4 +385,89 @@ struct SchemaValidatorTests {
         // Range should be non-empty and equal to the lowered node's source range.
         #expect(unresolved.range != .empty)
     }
+
+    @Test("Phase 3b.3 user-declared type validates without unresolved warning")
+    func phase3b3UserDeclaredTypeValidatesWithoutWarning() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str }
+        :::
+        @Person{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(!validated.diagnostics.contains { diag in
+            diag.message.contains("unresolved type 'Person'")
+        })
+    }
+
+    @Test("Phase 3b.3 user-declared type kind mismatch is still flagged")
+    func phase3b3UserDeclaredTypeKindMismatchStillFlagged() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str }
+        :::
+        :::Person
+        body
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message.contains("'Person'") &&
+            diag.message.contains("'value'") &&
+            diag.message.contains("'block'")
+        })
+    }
+
+    @Test("Phase 3b.3 imported alias namespace skips unresolved warning")
+    func phase3b3ImportedAliasNamespaceSkipsUnresolvedWarning() throws {
+        let source = """
+        ::use type "./schema.lim" as ext
+        @ext.Person{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(!validated.diagnostics.contains { diag in
+            diag.message.contains("unresolved type 'ext.Person'")
+        })
+    }
+
+    @Test("Phase 3b.3 unaliased external reference still warns")
+    func phase3b3UnaliasedExternalReferenceStillWarns() throws {
+        let source = "@unknown.Whatever{}\n"
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message == "unresolved type 'unknown.Whatever'"
+        })
+    }
+
+    @Test("Phase 3b.3 user declaration colliding with prelude is diagnosed")
+    func phase3b3UserDeclarationCollisionWithPreludeIsDiagnosed() throws {
+        let source = """
+        :::schema prelude
+        type Document : document = { foo: str }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .warning &&
+            diag.message.contains("shadows prelude type") &&
+            diag.message.contains("'Document'")
+        })
+    }
 }
