@@ -632,6 +632,56 @@ struct SchemaValidatorTests {
         })
     }
 
+    @Test("Phase 3c.2 validator preserves list shape around deferred element types")
+    func phase3c2ValidatorPreservesListShapeAroundDeferredElementTypes() throws {
+        let validSource = """
+        :::schema prelude
+        type Item : value = { tags: [map<str>] }
+        :::
+        @Item{tags: ["a", "b"]}
+        """
+        let validParsed = try LiminalParser().parse(validSource)
+        let validDocument = LiminalLowerer().lower(validParsed)
+        let valid = SchemaValidator().validate(validDocument, against: LiminalPrelude.schema)
+
+        let validAdded = Array(valid.diagnostics.dropFirst(validDocument.diagnostics.count))
+        #expect(validAdded.allSatisfy { diag in
+            !diag.message.contains("wrong shape")
+        })
+
+        let invalidSource = """
+        :::schema prelude
+        type Item : value = { tags: [map<str>] }
+        :::
+        @Item{tags: "not-list"}
+        """
+        let invalidParsed = try LiminalParser().parse(invalidSource)
+        let invalidDocument = LiminalLowerer().lower(invalidParsed)
+        let invalid = SchemaValidator().validate(invalidDocument, against: LiminalPrelude.schema)
+
+        #expect(invalid.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message == "field 'tags' on type 'Item' has the wrong shape for declared type"
+        })
+    }
+
+    @Test("Phase 3c.2 validator respects optional deferred field types")
+    func phase3c2ValidatorRespectsOptionalDeferredFieldTypes() throws {
+        let source = """
+        :::schema prelude
+        type Item : value = { name: str, tags: map<str>? }
+        :::
+        @Item{name: "Ada"}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(!validated.diagnostics.contains { diag in
+            diag.message == "missing required field 'tags' on type 'Item'"
+        })
+    }
+
     @Test("Phase 3c.2 validator flags unknown field on user-declared type")
     func phase3c2UserDeclaredRecordUnknownFieldIsFlagged() throws {
         let source = """

@@ -149,18 +149,59 @@ public struct LiminalUserSchemaTypeDeclaration: Equatable, Sendable {
     /// covered, or recovery paths) — the validator falls back to kind-only
     /// checking in that case.
     public var definition: SchemaTypeExpression?
+    /// Phase 3c.3: parsed signature for `type Q : template = …` decls.
+    /// `nil` for non-template declarations and for recovery paths.
+    public var templateSignature: LiminalTemplateSignature?
 
     public init(
         name: QualifiedName,
         kind: NodeKind?,
         rawRHS: String,
-        definition: SchemaTypeExpression? = nil
+        definition: SchemaTypeExpression? = nil,
+        templateSignature: LiminalTemplateSignature? = nil
     ) {
         self.name = name
         self.kind = kind
         self.rawRHS = rawRHS
         self.definition = definition
+        self.templateSignature = templateSignature
     }
+}
+
+public struct LiminalTemplateSignature: Equatable, Sendable {
+    public var name: QualifiedName
+    public var parameters: [LiminalTemplateParameter]
+    /// `nil` when the parser couldn't recover the result keyword or when
+    /// the keyword fell outside the spec set ({value, inline, blocks}).
+    public var result: LiminalTemplateResult?
+
+    public init(
+        name: QualifiedName,
+        parameters: [LiminalTemplateParameter] = [],
+        result: LiminalTemplateResult? = nil
+    ) {
+        self.name = name
+        self.parameters = parameters
+        self.result = result
+    }
+}
+
+public struct LiminalTemplateParameter: Equatable, Sendable {
+    public var name: String
+    /// Param value-type, `.unknown` for deferred TypeExpr forms (mirrors
+    /// `lowerSchemaField`'s sentinel behaviour).
+    public var type: SchemaTypeExpression
+
+    public init(name: String, type: SchemaTypeExpression) {
+        self.name = name
+        self.type = type
+    }
+}
+
+public enum LiminalTemplateResult: String, Equatable, Sendable {
+    case value
+    case inline
+    case blocks
 }
 
 public struct LiminalSchemaBlock: Equatable, Sendable {
@@ -184,17 +225,24 @@ public struct LiminalSchemaBlock: Equatable, Sendable {
 
 public struct LiminalTemplateBlock: Equatable, Sendable {
     public var signature: String
+    /// Phase 3c.3: structured signature parsed from the `:::template`
+    /// opener. Populated when the parser produced a usable signature
+    /// (at least a name); `nil` otherwise so consumers can detect
+    /// recovery paths and fall back to `signature` raw text.
+    public var parsedSignature: LiminalTemplateSignature?
     public var rawBodyText: String
     public var items: [LiminalDocumentItem]
     public var source: SurfaceForm?
 
     public init(
         signature: String,
+        parsedSignature: LiminalTemplateSignature? = nil,
         rawBodyText: String,
         items: [LiminalDocumentItem] = [],
         source: SurfaceForm? = nil
     ) {
         self.signature = signature
+        self.parsedSignature = parsedSignature
         self.rawBodyText = rawBodyText
         self.items = items
         self.source = source

@@ -862,9 +862,19 @@ struct LiminalCSTParser {
                 length: 0
             )
         } else if nodeKind == .schemaTemplateTypeDeclaration {
-            // Template signatures parse structurally in Phase 3c.3; for now
-            // they ride as a single `.schemaText` payload.
-            try builder.largeToken(.schemaText, text: rhsText)
+            // 3c.3: structurally parse the template signature on the
+            // schema side using the same emitter as the `:::template`
+            // block opener. The wrapper is `.templateSignature` so
+            // `SchemaTemplateTypeDeclarationSyntax.signature` mirrors
+            // `TemplateBlockSyntax.signature`.
+            let rhsBaseByteOffset = openerLine.byteOffset(of: cursor)
+            builder.startNode(.templateSignature)
+            try emitTemplateSignaturePayload(
+                in: rhsText,
+                bodyBaseByteOffset: rhsBaseByteOffset,
+                with: &builder
+            )
+            try builder.finishNode()
         } else {
             let rhsBaseByteOffset = openerLine.byteOffset(of: cursor)
             try emitSchemaTypeExpressionPayload(
@@ -915,27 +925,18 @@ struct LiminalCSTParser {
         var cursor = cursor
         // Detect TypeExpr forms 3c.2 hasn't structured yet
         // (`map<T>` / `ref<T>` / `embed<T>` / `enum {...}` / `variant ...`).
-        // Salvage the entire form as `.schemaText` inside the wrapper so
-        // `qnameText` / `isRecord` / `isList` accessors all return false
-        // and lowering yields nil → field-level paths fall back to the
-        // `.unknown` sentinel; top-level paths get kind-only validation.
-        if let identEnd = identifierEnd(in: text, from: cursor) {
-            let firstIdent = String(text[cursor..<identEnd])
-            if isDeferredSchemaTypeKeyword(firstIdent) {
-                let formEnd = scanDeferredSchemaTypeFormEnd(in: text, from: cursor)
-                if cursor < formEnd {
-                    try builder.largeToken(
-                        .schemaText,
-                        text: String(text[cursor..<formEnd])
-                    )
-                }
-                cursor = formEnd
-                try builder.finishNode()
-                return cursor
+        // Salvage only the deferred form itself as `.schemaText` inside the
+        // wrapper, then continue through the shared optional suffix path so
+        // `map<str>? @readonly` keeps both the `?` and field modifiers.
+        if let formEnd = deferredSchemaTypeFormEnd(in: text, from: cursor) {
+            if cursor < formEnd {
+                try builder.largeToken(
+                    .schemaText,
+                    text: String(text[cursor..<formEnd])
+                )
             }
-        }
-
-        if cursor < text.endIndex {
+            cursor = formEnd
+        } else if cursor < text.endIndex {
             let ch = text[cursor]
             if ch == "{" {
                 cursor = try parseSchemaRecordType(
@@ -974,25 +975,81 @@ struct LiminalCSTParser {
         return cursor
     }
 
-    private func isDeferredSchemaTypeKeyword(_ text: String) -> Bool {
-        switch text {
-        case "map", "ref", "embed", "enum", "variant":
-            return true
+    private func deferredSchemaTypeFormEnd(
+        in text: String,
+        from start: String.Index
+    ) -> String.Index? {
+        guard let identEnd = identifierEnd(in: text, from: start) else {
+            return nil
+        }
+        let firstIdent = String(text[start..<identEnd])
+        var cursor = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
+
+        switch firstIdent {
+        case "map", "ref", "embed":
+            guard cursor < text.endIndex, text[cursor] == "<" else {
+                return nil
+            }
+            return scanBalancedSchemaFormEnd(in: text, from: cursor)
+
+        case "enum":
+            guard cursor < text.endIndex, text[cursor] == "{" else {
+                return nil
+            }
+            return scanBalancedSchemaFormEnd(in: text, from: cursor)
+
+        case "variant":
+            guard let byEnd = schemaKeywordEnd("by", in: text, from: cursor) else {
+                return nil
+            }
+            cursor = schemaHorizontalWhitespaceEnd(in: text, from: byEnd)
+            guard let fieldEnd = identifierEnd(in: text, from: cursor) else {
+                return nil
+            }
+            cursor = schemaHorizontalWhitespaceEnd(in: text, from: fieldEnd)
+            guard cursor < text.endIndex, text[cursor] == "{" else {
+                return nil
+            }
+            return scanBalancedSchemaFormEnd(in: text, from: cursor)
+
         default:
-            return false
+            return nil
         }
     }
 
-    private func scanDeferredSchemaTypeFormEnd(
+    private func schemaHorizontalWhitespaceEnd(
         in text: String,
         from start: String.Index
     ) -> String.Index {
-        // Walks forward through balanced `{} [] <> ()` (with quoted-string
-        // awareness) and stops at the next top-level field separator (`,`,
-        // `}`, `]`) or end of body. Used to capture the byte range of a
-        // deferred TypeExpr form so it can be emitted as a single
-        // `.schemaText` salvage token inside the `.schemaTypeExpression`
-        // wrapper without disturbing the surrounding record or RHS.
+        var cursor = start
+        while cursor < text.endIndex, text[cursor].isHorizontalWhitespace {
+            cursor = text.index(after: cursor)
+        }
+        return cursor
+    }
+
+    private func schemaKeywordEnd(
+        _ keyword: String,
+        in text: String,
+        from start: String.Index
+    ) -> String.Index? {
+        guard let end = identifierEnd(in: text, from: start),
+              String(text[start..<end]) == keyword
+        else {
+            return nil
+        }
+        return end
+    }
+
+    private func scanBalancedSchemaFormEnd(
+        in text: String,
+        from start: String.Index
+    ) -> String.Index? {
+        // Walks one balanced `{} [] <> ()` form with quoted-string
+        // awareness and returns the index immediately after the matching
+        // closer. Used for deferred TypeExpr forms so field suffixes and
+        // modifiers stay outside the salvage token.
+        guard start < text.endIndex else { return nil }
         var cursor = start
         var depth = 0
         var inString = false
@@ -1014,19 +1071,19 @@ struct LiminalCSTParser {
                 cursor = text.index(after: cursor)
                 continue
             }
-            if depth == 0 {
-                if ch == "," || ch == "}" || ch == "]" {
-                    return cursor
-                }
-            }
             if ch == "{" || ch == "[" || ch == "<" || ch == "(" {
                 depth += 1
             } else if ch == "}" || ch == "]" || ch == ">" || ch == ")" {
                 depth = Swift.max(0, depth - 1)
+                cursor = text.index(after: cursor)
+                if depth == 0 {
+                    return cursor
+                }
+                continue
             }
             cursor = text.index(after: cursor)
         }
-        return cursor
+        return nil
     }
 
     private mutating func parseSchemaRecordType(
@@ -1271,6 +1328,184 @@ struct LiminalCSTParser {
         return text.index(after: start)
     }
 
+    /// Parses a `TemplateSignature` (spec §10) inside the body substring
+    /// `text`, emitting structured tokens / nodes into `builder`. Used by
+    /// both the `:::template` block opener and the schema-side
+    /// `type … : template = …` declaration. Recovery emits `.missing`
+    /// sentinels with diagnostics and salvages any unparseable trailing
+    /// bytes as a single `.templateText` token so round-trip stays
+    /// lossless.
+    private mutating func emitTemplateSignaturePayload(
+        in text: String,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        var cursor = text.startIndex
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        if cursor == text.endIndex {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing template signature",
+                at: bodyBaseByteOffset
+                    + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+            return
+        }
+
+        // Template name (QName).
+        if let qnameEnd = LiminalStructuredScanner(source: text).qnameEnd(from: cursor) {
+            try builder.token(.qname, text: String(text[cursor..<qnameEnd]))
+            cursor = qnameEnd
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected template signature name",
+                at: bodyBaseByteOffset
+                    + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // `(`
+        if cursor < text.endIndex, text[cursor] == "(" {
+            try builder.staticToken(.leftParen)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing `(` in template signature",
+                at: bodyBaseByteOffset
+                    + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // ParamList
+        while cursor < text.endIndex, text[cursor] != ")" {
+            guard let nameEnd = identifierEnd(in: text, from: cursor) else {
+                break
+            }
+            builder.startNode(.templateParameter)
+            try builder.token(.identifier, text: String(text[cursor..<nameEnd]))
+            cursor = nameEnd
+
+            cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+            if cursor < text.endIndex, text[cursor] == ":" {
+                try builder.staticToken(.colon)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+                cursor = try parseSchemaTypeExpression(
+                    in: text,
+                    from: cursor,
+                    bodyBaseByteOffset: bodyBaseByteOffset,
+                    with: &builder
+                )
+            } else {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "expected `:` in template parameter",
+                    at: bodyBaseByteOffset
+                        + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+                try builder.finishNode()
+                break
+            }
+            try builder.finishNode()
+
+            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            if cursor < text.endIndex, text[cursor] == "," {
+                try builder.staticToken(.comma)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            }
+        }
+
+        // `)`
+        if cursor < text.endIndex, text[cursor] == ")" {
+            try builder.staticToken(.rightParen)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing `)` in template signature",
+                at: bodyBaseByteOffset
+                    + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // `->`
+        let arrowStart = cursor
+        if cursor < text.endIndex, text[cursor] == "-" {
+            let afterDash = text.index(after: cursor)
+            if afterDash < text.endIndex, text[afterDash] == ">" {
+                try builder.staticToken(.dash)
+                try builder.staticToken(.greaterThan)
+                cursor = text.index(after: afterDash)
+            } else {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "missing `->` in template signature",
+                    at: bodyBaseByteOffset
+                        + text[text.startIndex..<arrowStart].utf8.count,
+                    length: 0
+                )
+            }
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing `->` in template signature",
+                at: bodyBaseByteOffset
+                    + text[text.startIndex..<arrowStart].utf8.count,
+                length: 0
+            )
+        }
+
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // TemplateResult keyword.
+        if let resultEnd = identifierEnd(in: text, from: cursor) {
+            let resultText = String(text[cursor..<resultEnd])
+            try builder.token(.identifier, text: resultText)
+            if !["value", "inline", "blocks"].contains(resultText) {
+                appendSchemaBodyDiagnostic(
+                    "unknown template result '\(resultText)'",
+                    at: bodyBaseByteOffset
+                        + text[text.startIndex..<cursor].utf8.count,
+                    length: text[cursor..<resultEnd].utf8.count
+                )
+            }
+            cursor = resultEnd
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing template result keyword",
+                at: bodyBaseByteOffset
+                    + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // Salvage anything left so byte preservation holds.
+        if cursor < text.endIndex {
+            try builder.largeToken(
+                .templateText,
+                text: String(text[cursor..<text.endIndex])
+            )
+        }
+    }
+
     private mutating func skipAndEmitWhitespace(
         in content: Substring,
         from cursor: String.Index,
@@ -1385,12 +1620,28 @@ struct LiminalCSTParser {
         try emitWhitespace(block.indentText, with: &builder)
         try builder.token(.colonRun, text: block.colonRunText)
         try builder.token(.identifier, text: block.qnameText)
+        // Split the suffix into leading horizontal whitespace (emitted as
+        // a sibling of the wrapper, matching the schema-side flow which
+        // pre-emits the gap before `=`) and the signature payload itself,
+        // so `TemplateSignatureSyntax.sourceText` doesn't include the
+        // pre-signature gap and `signatureText` keeps its slice 7 bytes.
+        let suffix = block.suffixText
+        var payloadStart = suffix.startIndex
+        while payloadStart < suffix.endIndex,
+              suffix[payloadStart].isHorizontalWhitespace
+        {
+            payloadStart = suffix.index(after: payloadStart)
+        }
+        if payloadStart > suffix.startIndex {
+            try emitWhitespace(String(suffix[..<payloadStart]), with: &builder)
+        }
+        let payload = String(suffix[payloadStart...])
+        let signatureBaseByteOffset = openerLine.byteOffset(of: block.suffixStart)
+            + suffix[..<payloadStart].utf8.count
         builder.startNode(.templateSignature)
-        try emitHeaderPayload(
-            block.suffixText,
-            tokenKind: .templateText,
-            missingMessage: "missing template signature",
-            diagnosticIndex: openerLine.contentEnd,
+        try emitTemplateSignaturePayload(
+            in: payload,
+            bodyBaseByteOffset: signatureBaseByteOffset,
             with: &builder
         )
         try builder.finishNode()

@@ -1143,6 +1143,60 @@ struct SyntaxTests {
         #expect(tagsType.isList == false)
     }
 
+    @Test("Phase 3c.2 deferred TypeExpr field suffixes stay structural")
+    func phase3c2DeferredTypeExprFieldSuffixesStayStructural() throws {
+        let source = """
+        :::schema prelude
+        type Item : value = { tags: map<str>? @readonly, body: ref<Block> @content }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let definition = try #require(schema.declarations.first?.definition)
+        let fields = definition.recordFields
+        #expect(fields.map(\.fieldNameText) == ["tags", "body"])
+
+        let tagsType = try #require(fields[0].valueType)
+        #expect(tagsType.qnameText == nil)
+        #expect(tagsType.isOptional)
+        #expect(fields[0].modifiers.map(\.modifierName) == ["readonly"])
+
+        let bodyType = try #require(fields[1].valueType)
+        #expect(bodyType.qnameText == nil)
+        #expect(bodyType.isOptional == false)
+        #expect(fields[1].modifiers.map(\.modifierName) == ["content"])
+    }
+
+    @Test("Phase 3c.2 keyword-prefixed named types remain QNames")
+    func phase3c2KeywordPrefixedNamedTypesRemainQNames() throws {
+        let source = """
+        :::schema prelude
+        type Item : value = { a: map.Foo, b: enum.Value, c: ref.Target, d: map }
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let definition = try #require(schema.declarations.first?.definition)
+        let fields = definition.recordFields
+        #expect(fields.map(\.fieldNameText) == ["a", "b", "c", "d"])
+        #expect(fields.map { $0.valueType?.qnameText } == [
+            "map.Foo",
+            "enum.Value",
+            "ref.Target",
+            "map"
+        ])
+    }
+
     @Test("Phase 3c.2 rhsText preserves trailing modifier salvage bytes")
     func phase3c2RhsTextPreservesTrailingSalvageBytes() throws {
         let source = """
@@ -1160,6 +1214,107 @@ struct SyntaxTests {
         // returned only `str` because the structured wrapper stopped at
         // the TypeExpr.
         #expect(schema.declarations[0].rhsText == #"str @deprecated("old")"#)
+    }
+
+    @Test("Phase 3c.3 parser structures :::template block signatures")
+    func phase3c3ParserStructuresTemplateBlockSignature() throws {
+        let source = """
+        :::template Card(person: Person, count: int) -> blocks
+        body
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+
+        guard case .templateBlock(let template) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected template block")
+            return
+        }
+        let signature = try #require(template.signature)
+        #expect(signature.qnameText == "Card")
+        #expect(signature.resultText == "blocks")
+        #expect(signature.parameters.map(\.nameText) == ["person", "count"])
+        #expect(signature.parameters[0].valueType?.qnameText == "Person")
+        #expect(signature.parameters[1].valueType?.qnameText == "int")
+    }
+
+    @Test("Phase 3c.3 parser structures schema template-decl signatures")
+    func phase3c3ParserStructuresSchemaTemplateDeclSignature() throws {
+        let source = """
+        :::schema prelude
+        type Render : template = Render(p: Person) -> inline
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+
+        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected schema block")
+            return
+        }
+        let decl = try #require(schema.templateDeclarations.first)
+        let signature = try #require(decl.signature)
+        #expect(signature.qnameText == "Render")
+        #expect(signature.resultText == "inline")
+        #expect(signature.parameters.map(\.nameText) == ["p"])
+        #expect(signature.parameters[0].valueType?.qnameText == "Person")
+        // Byte-stable contract: `signatureText` still returns the raw RHS.
+        #expect(decl.signatureText == "Render(p: Person) -> inline")
+    }
+
+    @Test("Phase 3c.3 parser preserves slice 7 template signatureText bytes")
+    func phase3c3ParserPreservesTemplateSignatureText() throws {
+        let source = """
+        :::template PersonCard(person: Person) -> blocks
+        Bio ${person.bio}
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        guard case .templateBlock(let template) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected template block")
+            return
+        }
+        #expect(template.signatureText == "PersonCard(person: Person) -> blocks")
+    }
+
+    @Test("Phase 3c.3 parser recovers from malformed template signatures")
+    func phase3c3ParserRecoversMalformedTemplateSignature() throws {
+        // Missing `)` and missing `->`/result. We expect each to surface
+        // a matching diagnostic and keep round-trip lossless.
+        let missingClose = """
+        :::template Card(p: Person -> blocks
+        body
+        :::
+        """
+        let missingCloseResult = try LiminalParser().parse(missingClose)
+        #expect(missingCloseResult.sourceText == missingClose)
+        #expect(missingCloseResult.diagnostics.contains {
+            $0.message.contains("missing `)` in template signature")
+        })
+
+        let missingArrow = """
+        :::template Card() blocks
+        body
+        :::
+        """
+        let missingArrowResult = try LiminalParser().parse(missingArrow)
+        #expect(missingArrowResult.sourceText == missingArrow)
+        #expect(missingArrowResult.diagnostics.contains {
+            $0.message.contains("missing `->` in template signature")
+        })
+
+        let unknownResult = """
+        :::template Card() -> stream
+        body
+        :::
+        """
+        let unknownResultResult = try LiminalParser().parse(unknownResult)
+        #expect(unknownResultResult.sourceText == unknownResult)
+        #expect(unknownResultResult.diagnostics.contains {
+            $0.message.contains("unknown template result 'stream'")
+        })
     }
 
     @Test("Phase 3c.1 parser keeps slice 7 expressionText contract")

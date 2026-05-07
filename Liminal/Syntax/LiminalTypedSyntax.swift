@@ -838,10 +838,24 @@ public struct SchemaTemplateTypeDeclarationSyntax: LiminalSyntaxNode {
         return identifiers[1].text
     }
 
-    /// Same accessor as `SchemaTypeDeclarationSyntax.rhsText` but named
-    /// for the template surface where the RHS is the template signature.
+    /// The structured template signature produced by Phase 3c.3, when
+    /// the schema-side RHS parsed cleanly. Mirrors
+    /// `TemplateBlockSyntax.signature` so consumers can share code
+    /// between the two surfaces.
+    public var signature: TemplateSignatureSyntax? {
+        firstChild(kind: .templateSignature)
+            .map(TemplateSignatureSyntax.init(unchecked:))
+    }
+
+    /// Source bytes of the signature RHS. Prefers the structured wrapper
+    /// (`signature.sourceText`) so the byte-stable contract holds; falls
+    /// back to the legacy `.schemaText` salvage token for recovery paths
+    /// where the parser couldn't open the structured wrapper.
     public var signatureText: String {
-        firstToken(kind: .schemaText)?.text ?? ""
+        if let signature {
+            return signature.sourceText
+        }
+        return firstToken(kind: .schemaText)?.text ?? ""
     }
 }
 
@@ -870,8 +884,51 @@ public struct TemplateBlockSyntax: LiminalSyntaxNode {
 
 @CambiumSyntaxNode(LiminalKind.self, for: .templateSignature)
 public struct TemplateSignatureSyntax: LiminalSyntaxNode {
+    /// Source text of the entire signature payload (between the
+    /// `template` keyword / `=` and the trailing newline). Derived from
+    /// `sourceText` so the byte-stable contract holds across both the
+    /// `:::template` opener and the schema template-decl RHS, with a
+    /// legacy fallback to a `.templateText` salvage token if the parser
+    /// emitted nothing structured (recovery only).
     public var rawText: String {
-        firstToken(kind: .templateText)?.text ?? ""
+        let text = sourceText
+        if !text.isEmpty {
+            return text
+        }
+        return firstToken(kind: .templateText)?.text ?? ""
+    }
+
+    /// Template name (`Card` in `Card(person: Person) -> blocks`).
+    /// `nil` when the parser emitted a `.missing` sentinel for the name.
+    public var qnameText: String? {
+        firstToken(kind: .qname)?.text
+    }
+
+    /// Parameters in declaration order.
+    public var parameters: [TemplateParameterSyntax] {
+        childNodes(kind: .templateParameter)
+            .map(TemplateParameterSyntax.init(unchecked:))
+    }
+
+    /// The result keyword after `->` (`value` / `inline` / `blocks`).
+    /// `nil` when the parser couldn't recover one. Note: the keyword
+    /// is the only direct `.identifier` token at the signature level
+    /// (param-name identifiers live inside `.templateParameter`
+    /// children, not as direct tokens of the signature).
+    public var resultText: String? {
+        firstToken(kind: .identifier)?.text
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .templateParameter)
+public struct TemplateParameterSyntax: LiminalSyntaxNode {
+    public var nameText: String {
+        firstToken(kind: .identifier)?.text ?? ""
+    }
+
+    public var valueType: SchemaTypeExpressionSyntax? {
+        firstChild(kind: .schemaTypeExpression)
+            .map(SchemaTypeExpressionSyntax.init(unchecked:))
     }
 }
 

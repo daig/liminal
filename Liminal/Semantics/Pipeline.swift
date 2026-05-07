@@ -34,6 +34,7 @@ public struct LiminalLowerer: Sendable {
         case .templateBlock(let template):
             .template(LiminalTemplateBlock(
                 signature: template.signatureText,
+                parsedSignature: template.signature.flatMap(lowerTemplateSignature),
                 rawBodyText: template.rawBodyText,
                 items: template.documentItems.compactMap(lowerDocumentItem),
                 source: surface("templateBlock", template.syntax)
@@ -130,7 +131,8 @@ public struct LiminalLowerer: Sendable {
             declarations.append(LiminalUserSchemaTypeDeclaration(
                 name: QualifiedName(decl.qnameText),
                 kind: .template,
-                rawRHS: decl.signatureText
+                rawRHS: decl.signatureText,
+                templateSignature: decl.signature.flatMap(lowerTemplateSignature)
             ))
         }
         return LiminalSchemaBlock(
@@ -146,10 +148,10 @@ public struct LiminalLowerer: Sendable {
     ) -> SchemaTypeExpression? {
         if syntax.isList {
             // List type — recurse into the element type.
-            guard let element = syntax.listElementType.flatMap(lowerSchemaTypeExpression)
-            else {
+            guard let elementSyntax = syntax.listElementType else {
                 return nil
             }
+            let element = lowerSchemaTypeExpression(elementSyntax) ?? .unknown
             return .list(element)
         }
         if syntax.isRecord {
@@ -195,6 +197,29 @@ public struct LiminalLowerer: Sendable {
         default:
             return nil
         }
+    }
+
+    private func lowerTemplateSignature(
+        _ syntax: TemplateSignatureSyntax
+    ) -> LiminalTemplateSignature? {
+        // The signature must at least have a name to be useful; recovery
+        // paths emit `.missing` for the name and we treat those as nil so
+        // consumers can detect them.
+        guard let name = syntax.qnameText else { return nil }
+        let parameters = syntax.parameters.map { paramSyntax in
+            let typeSyntax = paramSyntax.valueType
+            let type = typeSyntax.flatMap(lowerSchemaTypeExpression) ?? .unknown
+            return LiminalTemplateParameter(
+                name: paramSyntax.nameText,
+                type: type
+            )
+        }
+        let result = syntax.resultText.flatMap(LiminalTemplateResult.init(rawValue:))
+        return LiminalTemplateSignature(
+            name: QualifiedName(name),
+            parameters: parameters,
+            result: result
+        )
     }
 
     private func primitiveType(named text: String) -> SchemaTypeExpression? {

@@ -726,6 +726,48 @@ struct SemanticModelTests {
         #expect(schema.declarations[1].name.rawValue == "Card")
         #expect(schema.declarations[1].kind == .block)
     }
+
+    @Test("Phase 3c.3 lowerer produces parsed template signatures (block + schema decl)")
+    func phase3c3LowererProducesParsedTemplateSignature() throws {
+        let source = """
+        :::schema prelude
+        type Person : value = { name: str }
+        type Render : template = Render(p: Person) -> inline
+        :::
+        :::template PersonCard(person: Person) -> blocks
+        Bio
+        :::
+        """
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        // Schema side: template-kind decl carries a structured signature;
+        // value-kind decl does not.
+        guard case .schema(let schema) = document.items.first else {
+            Issue.record("expected schema document item")
+            return
+        }
+        let person = try #require(schema.declarations.first { $0.name.rawValue == "Person" })
+        #expect(person.templateSignature == nil)
+
+        let render = try #require(schema.declarations.first { $0.name.rawValue == "Render" })
+        let renderSig = try #require(render.templateSignature)
+        #expect(renderSig.name.rawValue == "Render")
+        #expect(renderSig.parameters.map(\.name) == ["p"])
+        #expect(renderSig.parameters[0].type == .named("Person"))
+        #expect(renderSig.result == .inline)
+
+        // Template-block side: parsedSignature mirrors the schema-side
+        // shape and pulls the result through the spec keyword set.
+        guard case .template(let template) = document.items[1] else {
+            Issue.record("expected template document item")
+            return
+        }
+        let blockSig = try #require(template.parsedSignature)
+        #expect(blockSig.name.rawValue == "PersonCard")
+        #expect(blockSig.parameters.map(\.name) == ["person"])
+        #expect(blockSig.parameters[0].type == .named("Person"))
+        #expect(blockSig.result == .blocks)
+    }
 }
 
 private extension LiminalBlock {
