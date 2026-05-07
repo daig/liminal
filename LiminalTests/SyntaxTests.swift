@@ -1381,6 +1381,20 @@ struct SyntaxTests {
         #expect(fields.map(\.name) == ["name", "age"])
     }
 
+    @Test("Phase 3.5 parser diagnoses unmatched < in deferred TypeExpr forms")
+    func phase35ParserDiagnosesUnmatchedDeferredFormDelimiter() throws {
+        let source = """
+        :::schema prelude
+        type Bad : value = map<str
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.contains {
+            $0.message == "unmatched `<` in `map` form"
+        })
+    }
+
     @Test("Phase 3c.1 parser keeps slice 7 expressionText contract")
     func phase3c1ParserPreservesSlice7ExpressionTextContract() throws {
         // Re-runs the slice 7 wikilink+interpolation source verbatim and

@@ -936,32 +936,47 @@ struct LiminalCSTParser {
                 )
             }
             cursor = formEnd
-        } else if cursor < text.endIndex {
-            let ch = text[cursor]
-            if ch == "{" {
-                cursor = try parseSchemaRecordType(
-                    in: text,
-                    from: cursor,
-                    bodyBaseByteOffset: bodyBaseByteOffset,
-                    with: &builder
-                )
-            } else if ch == "[" {
-                cursor = try parseSchemaListType(
-                    in: text,
-                    from: cursor,
-                    bodyBaseByteOffset: bodyBaseByteOffset,
-                    with: &builder
-                )
-            } else if let qnameEnd = LiminalStructuredScanner(source: text).qnameEnd(from: cursor) {
-                try builder.token(.qname, text: String(text[cursor..<qnameEnd]))
-                cursor = qnameEnd
-            } else {
-                try builder.missingNode(.missing)
+        } else {
+            // 3.5 #2: a deferred-form keyword (`map`/`ref`/`embed`) opened
+            // a `<…>` that never balanced. Surface a diagnostic so the
+            // user knows the form is malformed; the qname fallthrough
+            // below still captures `map` as a `.qname` token so the rest
+            // of the declaration keeps parsing.
+            if let unmatched = unmatchedDeferredFormStart(in: text, from: cursor) {
                 appendSchemaBodyDiagnostic(
-                    "expected schema type expression",
-                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    "unmatched `<` in `\(unmatched.keyword)` form",
+                    at: bodyBaseByteOffset
+                        + text[text.startIndex..<unmatched.openerIndex].utf8.count,
                     length: 0
                 )
+            }
+            if cursor < text.endIndex {
+                let ch = text[cursor]
+                if ch == "{" {
+                    cursor = try parseSchemaRecordType(
+                        in: text,
+                        from: cursor,
+                        bodyBaseByteOffset: bodyBaseByteOffset,
+                        with: &builder
+                    )
+                } else if ch == "[" {
+                    cursor = try parseSchemaListType(
+                        in: text,
+                        from: cursor,
+                        bodyBaseByteOffset: bodyBaseByteOffset,
+                        with: &builder
+                    )
+                } else if let qnameEnd = LiminalStructuredScanner(source: text).qnameEnd(from: cursor) {
+                    try builder.token(.qname, text: String(text[cursor..<qnameEnd]))
+                    cursor = qnameEnd
+                } else {
+                    try builder.missingNode(.missing)
+                    appendSchemaBodyDiagnostic(
+                        "expected schema type expression",
+                        at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                }
             }
         }
         // Trailing optional `?` (TypeExpr "?"). Strict adjacency — no
@@ -973,6 +988,33 @@ struct LiminalCSTParser {
         }
         try builder.finishNode()
         return cursor
+    }
+
+    /// Returns the keyword + `<` opener index when the lookahead position
+    /// holds an unbalanced `map<…` / `ref<…` / `embed<…` form (3.5 #2).
+    /// `enum` and `variant` aren't included — their `{ … }` forms are
+    /// already detected by the existing record-type recovery path.
+    private func unmatchedDeferredFormStart(
+        in text: String,
+        from start: String.Index
+    ) -> (keyword: String, openerIndex: String.Index)? {
+        guard let identEnd = identifierEnd(in: text, from: start) else {
+            return nil
+        }
+        let keyword = String(text[start..<identEnd])
+        switch keyword {
+        case "map", "ref", "embed":
+            break
+        default:
+            return nil
+        }
+        let openerIndex = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
+        guard openerIndex < text.endIndex, text[openerIndex] == "<" else {
+            return nil
+        }
+        // The balanced scan failed (otherwise deferredSchemaTypeFormEnd
+        // would have matched). Surface the opener position to the caller.
+        return (keyword, openerIndex)
     }
 
     private func deferredSchemaTypeFormEnd(
