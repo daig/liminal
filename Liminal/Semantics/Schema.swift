@@ -343,6 +343,13 @@ public struct LiminalSchemaResolver: Sendable {
     private let userIndex: [QualifiedName: LiminalUserSchemaTypeDeclaration]
     private let typeImports: [String: AliasedTypeImport]
 
+    /// Spec §10's `:::if` / `:::for` are reserved template-control names.
+    /// Phase 3.5 #4 elevates user redeclaration of these from a generic
+    /// "shadows prelude type" warning to a specific error so the user
+    /// gets the right signal. Other prelude shadow cases keep the
+    /// existing warning.
+    private static let reservedSchemaTypeNames: Set<String> = ["if", "for"]
+
     public init(prelude: LiminalSchema, document: LiminalDocument) {
         self.prelude = prelude
         var preludeIndex: [QualifiedName: SchemaTypeDeclaration] = [:]
@@ -355,6 +362,7 @@ public struct LiminalSchemaResolver: Sendable {
         var diagnostics: [LiminalDiagnostic] = []
         var reportedShadows: Set<QualifiedName> = []
         var reportedDuplicates: Set<QualifiedName> = []
+        var reportedReserved: Set<QualifiedName> = []
         // Track every qname seen in any user `:::schema` block, even when
         // shadowed. Without this, a doubly-declared shadowed name would
         // emit only the shadow warning since the second occurrence never
@@ -365,9 +373,24 @@ public struct LiminalSchemaResolver: Sendable {
             switch item {
             case .schema(let block):
                 for declaration in block.declarations {
+                    let isReserved = Self.reservedSchemaTypeNames
+                        .contains(declaration.name.rawValue)
                     let isPreludeShadow = preludeIndex[declaration.name] != nil
                     let isUserDuplicate = !seenUserDeclarations.insert(declaration.name).inserted
 
+                    if isReserved {
+                        if reportedReserved.insert(declaration.name).inserted {
+                            diagnostics.append(LiminalDiagnostic(
+                                severity: .error,
+                                message: "type '\(declaration.name.rawValue)' is reserved by the prelude and cannot be redeclared",
+                                range: block.source?.range ?? .empty
+                            ))
+                        }
+                        // The reserved name takes precedence — the prelude
+                        // entry continues to win for resolution and we
+                        // don't double-emit the generic shadow warning.
+                        continue
+                    }
                     if isPreludeShadow,
                        reportedShadows.insert(declaration.name).inserted
                     {

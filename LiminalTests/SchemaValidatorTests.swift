@@ -778,4 +778,39 @@ struct SchemaValidatorTests {
             diag.message == "unknown field 'extra' on type 'if'"
         })
     }
+
+    @Test("Phase 3.5 user redeclaration of reserved type names is an error")
+    func phase35ReservedTypeNameRedeclarationIsAnError() throws {
+        let source = """
+        :::schema prelude
+        type if : value = { x: str }
+        :::
+        :::template Card() -> blocks
+        :::if{test: ok}
+        body
+        :::
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message.contains("reserved") &&
+            diag.message.contains("'if'")
+        })
+        // The user redeclared `if` as a value, but the reserved-name
+        // rule skips both the shadow warning and the user-index update,
+        // so the prelude `if` (kind: .block) continues to win for
+        // resolution: the `:::if{test: ok}` inside the template body
+        // does not produce an "unresolved type" or kind-mismatch error.
+        #expect(!validated.diagnostics.contains { diag in
+            diag.message.contains("unresolved type 'if'")
+        })
+        #expect(!validated.diagnostics.contains { diag in
+            diag.message.contains("shadows prelude type") &&
+            diag.message.contains("'if'")
+        })
+    }
 }
