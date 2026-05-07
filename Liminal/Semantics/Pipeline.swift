@@ -211,7 +211,8 @@ public struct LiminalLowerer: Sendable {
             let type = typeSyntax.flatMap(lowerSchemaTypeExpression) ?? .unknown
             return LiminalTemplateParameter(
                 name: paramSyntax.nameText,
-                type: type
+                type: type,
+                isOptional: typeSyntax?.isOptional ?? false
             )
         }
         let result = syntax.resultText.flatMap(LiminalTemplateResult.init(rawValue:))

@@ -191,10 +191,17 @@ public struct LiminalTemplateParameter: Equatable, Sendable {
     /// Param value-type, `.unknown` for deferred TypeExpr forms (mirrors
     /// `lowerSchemaField`'s sentinel behaviour).
     public var type: SchemaTypeExpression
+    /// True when the parameter's declared TypeExpr carries a trailing `?`.
+    public var isOptional: Bool
 
-    public init(name: String, type: SchemaTypeExpression) {
+    public init(
+        name: String,
+        type: SchemaTypeExpression,
+        isOptional: Bool = false
+    ) {
         self.name = name
         self.type = type
+        self.isOptional = isOptional
     }
 }
 

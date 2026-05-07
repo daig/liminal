@@ -1279,6 +1279,29 @@ struct SyntaxTests {
         #expect(template.signatureText == "PersonCard(person: Person) -> blocks")
     }
 
+    @Test("Phase 3c.3 parser recovers missing comma between template parameters")
+    func phase3c3ParserRecoversMissingTemplateParameterComma() throws {
+        let source = """
+        :::template Card(person: Person count: int) -> blocks
+        body
+        :::
+        """
+        let result = try LiminalParser().parse(source)
+        #expect(result.sourceText == source)
+        #expect(result.diagnostics.contains {
+            $0.message.contains("missing `,` between template parameters")
+        })
+
+        guard case .templateBlock(let template) = result.rootSyntax.documentItems.first else {
+            Issue.record("expected template block")
+            return
+        }
+        let signature = try #require(template.signature)
+        #expect(signature.parameters.map(\.nameText) == ["person", "count"])
+        #expect(signature.parameters[0].valueType?.qnameText == "Person")
+        #expect(signature.parameters[1].valueType?.qnameText == "int")
+    }
+
     @Test("Phase 3c.3 parser recovers from malformed template signatures")
     func phase3c3ParserRecoversMalformedTemplateSignature() throws {
         // Missing `)` and missing `->`/result. We expect each to surface

@@ -732,9 +732,9 @@ struct SemanticModelTests {
         let source = """
         :::schema prelude
         type Person : value = { name: str }
-        type Render : template = Render(p: Person) -> inline
+        type Render : template = Render(p: Person?) -> inline
         :::
-        :::template PersonCard(person: Person) -> blocks
+        :::template PersonCard(person: Person?) -> blocks
         Bio
         :::
         """
@@ -754,6 +754,7 @@ struct SemanticModelTests {
         #expect(renderSig.name.rawValue == "Render")
         #expect(renderSig.parameters.map(\.name) == ["p"])
         #expect(renderSig.parameters[0].type == .named("Person"))
+        #expect(renderSig.parameters[0].isOptional)
         #expect(renderSig.result == .inline)
 
         // Template-block side: parsedSignature mirrors the schema-side
@@ -766,6 +767,7 @@ struct SemanticModelTests {
         #expect(blockSig.name.rawValue == "PersonCard")
         #expect(blockSig.parameters.map(\.name) == ["person"])
         #expect(blockSig.parameters[0].type == .named("Person"))
+        #expect(blockSig.parameters[0].isOptional)
         #expect(blockSig.result == .blocks)
     }
 }

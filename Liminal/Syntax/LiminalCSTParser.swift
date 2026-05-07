@@ -1424,6 +1424,14 @@ struct LiminalCSTParser {
                 try builder.staticToken(.comma)
                 cursor = text.index(after: cursor)
                 cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            } else if identifierEnd(in: text, from: cursor) != nil {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "missing `,` between template parameters",
+                    at: bodyBaseByteOffset
+                        + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
             }
         }
 
