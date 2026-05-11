@@ -939,4 +939,48 @@ struct SchemaValidatorTests {
         #expect(nick.type == .str)
         #expect(nick.isOptional == true)
     }
+
+    @Test("Phase 3.6 enum schema type lowers to .enumeration with cases")
+    func phase36EnumSchemaTypeLowersToEnumeration() throws {
+        let source = """
+        :::schema prelude
+        type Color : value = enum { red, green, blue }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        guard case .schema(let block) = document.items.first,
+              let declaration = block.declarations.first
+        else {
+            Issue.record("expected lowered user-declared enum")
+            return
+        }
+        #expect(declaration.definition == .enumeration(["red", "green", "blue"]))
+    }
+
+    @Test("Phase 3.6 enum field validation accepts known cases and rejects unknown")
+    func phase36EnumFieldValidatesCases() throws {
+        // Inline an `enum {...}` directly in the field value-type slot;
+        // that exercises `.enumeration` at validate time without going
+        // through named-type indirection (named-type-following is a
+        // separate validator concern).
+        let source = """
+        :::schema prelude
+        type Painted : value = { tint: enum { red, green, blue } }
+        :::
+        @Painted{tint: red}
+        @Painted{tint: purple}
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+        let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
+
+        let shapeErrors = validated.diagnostics.filter {
+            $0.severity == .error &&
+            $0.message.contains("wrong shape") &&
+            $0.message.contains("'tint'")
+        }
+        #expect(shapeErrors.count == 1, "expected exactly one wrong-shape error (purple), got \(shapeErrors.count)")
+    }
 }

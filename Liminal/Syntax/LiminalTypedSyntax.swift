@@ -784,6 +784,35 @@ public struct SchemaTypeExpressionSyntax: LiminalSyntaxNode {
         firstChild(kind: .schemaTypeExpression)
             .map(SchemaTypeExpressionSyntax.init(unchecked:))
     }
+
+    /// True when the parser opened an `enum { … }` schema type here.
+    /// Detected by the leading `enum` identifier paired with a `{`.
+    public var isEnum: Bool {
+        guard let leadingIdent = firstToken(kind: .identifier),
+              leadingIdent.text == "enum"
+        else {
+            return false
+        }
+        return firstToken(kind: .leftBrace) != nil
+    }
+
+    /// Case names declared inside an `enum { … }` schema type, in
+    /// source order. Empty for non-enum expressions.
+    public var enumCaseNames: [String] {
+        guard isEnum else { return [] }
+        // Skip the leading `enum` identifier; remaining direct
+        // `.identifier` tokens are the case names.
+        var result: [String] = []
+        var seenKeyword = false
+        for token in directTokens(kind: .identifier) {
+            if !seenKeyword, token.text == "enum" {
+                seenKeyword = true
+                continue
+            }
+            result.append(token.text)
+        }
+        return result
+    }
 }
 
 @CambiumSyntaxNode(LiminalKind.self, for: .schemaField)

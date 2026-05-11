@@ -936,6 +936,15 @@ struct LiminalCSTParser {
                 )
             }
             cursor = formEnd
+        } else if startsSchemaEnumType(in: text, from: cursor) {
+            // 3.6: enum is the simplest of the previously-deferred TypeExpr
+            // forms — structurally parse `enum { Ident, Ident, ... }`.
+            cursor = try parseSchemaEnumType(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
         } else {
             // 3.5 #2: a deferred-form keyword (`map`/`ref`/`embed`) opened
             // a `<…>` that never balanced. Surface a diagnostic so the
@@ -990,6 +999,80 @@ struct LiminalCSTParser {
         return cursor
     }
 
+    /// Phase 3.6: `enum { Ident, Ident, ... }` — the simplest of the
+    /// originally-deferred TypeExpr forms. Detected by a lookahead for
+    /// the `enum` keyword followed by `{`.
+    private func startsSchemaEnumType(
+        in text: String,
+        from start: String.Index
+    ) -> Bool {
+        guard let identEnd = identifierEnd(in: text, from: start),
+              String(text[start..<identEnd]) == "enum"
+        else {
+            return false
+        }
+        let braceIndex = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
+        return braceIndex < text.endIndex && text[braceIndex] == "{"
+    }
+
+    private mutating func parseSchemaEnumType(
+        in text: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        // `enum` keyword.
+        if let identEnd = identifierEnd(in: text, from: cursor) {
+            try builder.token(.identifier, text: String(text[cursor..<identEnd]))
+            cursor = identEnd
+        }
+        cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+
+        // `{`
+        if cursor < text.endIndex, text[cursor] == "{" {
+            try builder.staticToken(.leftBrace)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected `{` in enum schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+            return cursor
+        }
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // Case list: Ident ("," Ident)* ","?
+        while cursor < text.endIndex, text[cursor] != "}" {
+            guard let caseEnd = identifierEnd(in: text, from: cursor) else {
+                break
+            }
+            try builder.token(.identifier, text: String(text[cursor..<caseEnd]))
+            cursor = caseEnd
+            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            if cursor < text.endIndex, text[cursor] == "," {
+                try builder.staticToken(.comma)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            }
+        }
+
+        if cursor < text.endIndex, text[cursor] == "}" {
+            try builder.staticToken(.rightBrace)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing closing `}` in enum schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        return cursor
+    }
+
     /// Returns the keyword + `<` opener index when the lookahead position
     /// holds an unbalanced `map<…` / `ref<…` / `embed<…` form (3.5 #2).
     /// `enum` and `variant` aren't included — their `{ … }` forms are
@@ -1030,12 +1113,6 @@ struct LiminalCSTParser {
         switch firstIdent {
         case "map", "ref", "embed":
             guard cursor < text.endIndex, text[cursor] == "<" else {
-                return nil
-            }
-            return scanBalancedSchemaFormEnd(in: text, from: cursor)
-
-        case "enum":
-            guard cursor < text.endIndex, text[cursor] == "{" else {
                 return nil
             }
             return scanBalancedSchemaFormEnd(in: text, from: cursor)

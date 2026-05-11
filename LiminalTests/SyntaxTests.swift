@@ -1084,12 +1084,14 @@ struct SyntaxTests {
 
     @Test("Phase 3c.2 deferred TypeExpr forms leave definition unstructured")
     func phase3c2DeferredTypeExprFormsLeaveDefinitionUnstructured() throws {
+        // `enum {...}` is structured by Phase 3.6 — see the enum-specific
+        // tests below. The remaining deferred forms still flow through
+        // the salvage path.
         let source = """
         :::schema prelude
         type Tags : value = map<str>
         type Refs : value = ref<Person>
         type Pic : value = embed<Image>
-        type Color : value = enum { red, green, blue }
         type Maybe : value = variant by kind { yes: { v: str }, no: {} }
         :::
         """

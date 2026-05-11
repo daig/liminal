@@ -160,6 +160,12 @@ public struct LiminalLowerer: Sendable {
     private func lowerRawSchemaTypeExpression(
         _ syntax: SchemaTypeExpressionSyntax
     ) -> SchemaTypeExpression? {
+        if syntax.isEnum {
+            // Phase 3.6: structured `enum { Ident, ... }` — surface the
+            // declared case names so the validator can enforce
+            // membership against bare-scalar / string values.
+            return .enumeration(syntax.enumCaseNames)
+        }
         if syntax.isList {
             // List type — recurse into the element type.
             guard let elementSyntax = syntax.listElementType else {
