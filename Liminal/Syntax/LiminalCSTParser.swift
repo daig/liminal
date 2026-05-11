@@ -328,7 +328,7 @@ struct LiminalCSTParser {
 
         if cursor == bodyText.endIndex {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing use directive body", at: missingBodyIndex, length: 0)
+            appendDiagnostic("expected use directive body", at: missingBodyIndex, length: 0)
             return
         }
 
@@ -376,7 +376,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendBodyDiagnostic(
-                "missing use directive target",
+                "expected use directive target",
                 at: bodyBaseByteOffset
                     + bodyText[bodyText.startIndex..<cursor].utf8.count,
                 length: 0
@@ -1209,7 +1209,7 @@ struct LiminalCSTParser {
             {
                 try builder.missingNode(.missing)
                 appendSchemaBodyDiagnostic(
-                    "missing `,` or newline between schema fields",
+                    "expected `,` or newline between schema fields",
                     at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
                     length: 0
                 )
@@ -1222,7 +1222,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing `}` in record schema type",
+                "missing closing `}` in record schema type",
                 at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
                 length: 0
             )
@@ -1255,7 +1255,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing `]` in list schema type",
+                "missing closing `]` in list schema type",
                 at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
                 length: 0
             )
@@ -1335,7 +1335,7 @@ struct LiminalCSTParser {
                 } else {
                     try builder.missingNode(.missing)
                     appendSchemaBodyDiagnostic(
-                        "missing `)` in modifier arguments",
+                        "missing closing `)` in modifier arguments",
                         at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
                         length: 0
                     )
@@ -1434,7 +1434,7 @@ struct LiminalCSTParser {
         if cursor == text.endIndex {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing template signature",
+                "expected template signature",
                 at: bodyBaseByteOffset
                     + text[text.startIndex..<cursor].utf8.count,
                 length: 0
@@ -1465,7 +1465,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing `(` in template signature",
+                "expected `(` in template signature",
                 at: bodyBaseByteOffset
                     + text[text.startIndex..<cursor].utf8.count,
                 length: 0
@@ -1515,7 +1515,7 @@ struct LiminalCSTParser {
             } else if identifierEnd(in: text, from: cursor) != nil {
                 try builder.missingNode(.missing)
                 appendSchemaBodyDiagnostic(
-                    "missing `,` between template parameters",
+                    "expected `,` between template parameters",
                     at: bodyBaseByteOffset
                         + text[text.startIndex..<cursor].utf8.count,
                     length: 0
@@ -1530,7 +1530,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing `)` in template signature",
+                "missing closing `)` in template signature",
                 at: bodyBaseByteOffset
                     + text[text.startIndex..<cursor].utf8.count,
                 length: 0
@@ -1550,7 +1550,7 @@ struct LiminalCSTParser {
             } else {
                 try builder.missingNode(.missing)
                 appendSchemaBodyDiagnostic(
-                    "missing `->` in template signature",
+                    "expected `->` in template signature",
                     at: bodyBaseByteOffset
                         + text[text.startIndex..<arrowStart].utf8.count,
                     length: 0
@@ -1559,7 +1559,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing `->` in template signature",
+                "expected `->` in template signature",
                 at: bodyBaseByteOffset
                     + text[text.startIndex..<arrowStart].utf8.count,
                 length: 0
@@ -1584,7 +1584,7 @@ struct LiminalCSTParser {
         } else {
             try builder.missingNode(.missing)
             appendSchemaBodyDiagnostic(
-                "missing template result keyword",
+                "expected template result keyword",
                 at: bodyBaseByteOffset
                     + text[text.startIndex..<cursor].utf8.count,
                 length: 0
@@ -4352,7 +4352,7 @@ private struct LiminalStructuredCSTParser {
             }
         } else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing structured embed target", at: index, length: 0)
+            appendDiagnostic("expected structured embed target", at: index, length: 0)
         }
         try builder.finishNode()
         try emitUnexpectedRemainder(with: &builder)
@@ -4371,7 +4371,7 @@ private struct LiminalStructuredCSTParser {
     ) throws {
         guard index < source.endIndex else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing value", at: index, length: 0)
+            appendDiagnostic("expected value", at: index, length: 0)
             return
         }
 
@@ -4432,7 +4432,7 @@ private struct LiminalStructuredCSTParser {
                 if !sawSeparator {
                     try builder.missingNode(.missing)
                     appendDiagnostic(
-                        "missing `,` or newline between fields",
+                        "expected `,` or newline between fields",
                         at: index,
                         length: 0
                     )
@@ -4460,14 +4460,14 @@ private struct LiminalStructuredCSTParser {
             try emitStatic(.colon, expected: ":", with: &builder)
         } else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing field colon", at: index, length: 0)
+            appendDiagnostic("expected field colon", at: index, length: 0)
         }
         try emitTrivia(with: &builder)
         if isValueStart(at: index) {
             try emitValue(with: &builder)
         } else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing field value", at: index, length: 0)
+            appendDiagnostic("expected field value", at: index, length: 0)
         }
         try builder.finishNode()
     }
@@ -4712,7 +4712,7 @@ private struct LiminalStructuredCSTParser {
     ) throws {
         guard let end = LiminalStructuredScanner(source: source).qnameEnd(from: index) else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing qualified name", at: index, length: 0)
+            appendDiagnostic("expected qualified name", at: index, length: 0)
             return
         }
         try builder.token(.qname, text: String(source[index..<end]))
@@ -4725,7 +4725,7 @@ private struct LiminalStructuredCSTParser {
         let start = index
         guard start < source.endIndex, source[start].isIdentifierStart else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing field name", at: index, length: 0)
+            appendDiagnostic("expected field name", at: index, length: 0)
             return
         }
         index = source.index(after: index)
@@ -4741,7 +4741,7 @@ private struct LiminalStructuredCSTParser {
         let start = index
         guard start < source.endIndex, source[start].isAnchorCharacter else {
             try builder.missingNode(.missing)
-            appendDiagnostic("missing anchor", at: index, length: 0)
+            appendDiagnostic("expected anchor", at: index, length: 0)
             return
         }
         index = source.index(after: index)
@@ -5356,7 +5356,7 @@ private struct LiminalInlineCSTParser {
             } else {
                 try builder.missingNode(.missing)
                 appendBodyDiagnostic(
-                    "missing right-hand side after `??` in interpolation",
+                    "expected right-hand side after `??` in interpolation",
                     at: bodyBaseByteOffset
                         + bodyText[bodyText.startIndex..<cursor].utf8.count,
                     length: 0
@@ -5442,7 +5442,7 @@ private struct LiminalInlineCSTParser {
                 } else {
                     try builder.missingNode(.missing)
                     appendBodyDiagnostic(
-                        "missing `]` in interpolation projection",
+                        "missing closing `]` in interpolation projection",
                         at: bodyBaseByteOffset
                             + bodyText[bodyText.startIndex..<cursor].utf8.count,
                         length: 0
@@ -5466,7 +5466,7 @@ private struct LiminalInlineCSTParser {
         guard cursor < bodyText.endIndex else {
             try builder.missingNode(.missing)
             appendBodyDiagnostic(
-                "missing interpolation expression",
+                "expected interpolation expression",
                 at: bodyBaseByteOffset
                     + bodyText[bodyText.startIndex..<cursor].utf8.count,
                 length: 0
@@ -5503,7 +5503,7 @@ private struct LiminalInlineCSTParser {
             } else {
                 try builder.missingNode(.missing)
                 appendBodyDiagnostic(
-                    "missing `)` in interpolation expression",
+                    "missing closing `)` in interpolation expression",
                     at: bodyBaseByteOffset
                         + bodyText[bodyText.startIndex..<cursor].utf8.count,
                     length: 0
@@ -5642,7 +5642,7 @@ private struct LiminalInlineCSTParser {
         bodyBaseByteOffset: Int
     ) {
         appendBodyDiagnostic(
-            "missing interpolation expression",
+            "expected interpolation expression",
             at: bodyBaseByteOffset
                 + bodyText[bodyText.startIndex..<cursor].utf8.count,
             length: 0

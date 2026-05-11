@@ -901,7 +901,7 @@ struct SyntaxTests {
         let dangling = try LiminalParser().parse(danglingCoalesce)
         #expect(dangling.sourceText == danglingCoalesce)
         #expect(dangling.diagnostics.contains {
-            $0.message.contains("missing right-hand side after `??`")
+            $0.message.contains("expected right-hand side after `??`")
         })
 
         // Unparseable garbage falls back to .interpolationText salvage so
@@ -936,14 +936,14 @@ struct SyntaxTests {
         let emptyResult = try LiminalParser().parse(empty)
         #expect(emptyResult.sourceText == empty)
         #expect(emptyResult.diagnostics.contains {
-            $0.message == "missing interpolation expression"
+            $0.message == "expected interpolation expression"
         })
 
         let emptyParens = "Hello ${()}\n"
         let emptyParensResult = try LiminalParser().parse(emptyParens)
         #expect(emptyParensResult.sourceText == emptyParens)
         #expect(emptyParensResult.diagnostics.contains {
-            $0.message == "missing interpolation expression"
+            $0.message == "expected interpolation expression"
         })
     }
 
@@ -1045,7 +1045,7 @@ struct SyntaxTests {
         #expect(result.sourceText == source)
         // Foo's record never closed — diagnostic surfaces, but Bar still
         // parses cleanly. Recovery doesn't drop the next declaration.
-        #expect(result.diagnostics.contains { $0.message.contains("missing `}`") })
+        #expect(result.diagnostics.contains { $0.message.contains("missing closing `}`") })
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
             Issue.record("expected schema block")
@@ -1289,7 +1289,7 @@ struct SyntaxTests {
         let result = try LiminalParser().parse(source)
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
-            $0.message.contains("missing `,` between template parameters")
+            $0.message.contains("expected `,` between template parameters")
         })
 
         guard case .templateBlock(let template) = result.rootSyntax.documentItems.first else {
@@ -1314,7 +1314,7 @@ struct SyntaxTests {
         let missingCloseResult = try LiminalParser().parse(missingClose)
         #expect(missingCloseResult.sourceText == missingClose)
         #expect(missingCloseResult.diagnostics.contains {
-            $0.message.contains("missing `)` in template signature")
+            $0.message.contains("missing closing `)` in template signature")
         })
 
         let missingArrow = """
@@ -1325,7 +1325,7 @@ struct SyntaxTests {
         let missingArrowResult = try LiminalParser().parse(missingArrow)
         #expect(missingArrowResult.sourceText == missingArrow)
         #expect(missingArrowResult.diagnostics.contains {
-            $0.message.contains("missing `->` in template signature")
+            $0.message.contains("expected `->` in template signature")
         })
 
         let unknownResult = """
@@ -1350,7 +1350,7 @@ struct SyntaxTests {
         let result = try LiminalParser().parse(source)
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
-            $0.message.contains("missing `,` or newline between schema fields")
+            $0.message.contains("expected `,` or newline between schema fields")
         })
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
@@ -1369,7 +1369,7 @@ struct SyntaxTests {
         let result = try LiminalParser().parse(source)
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
-            $0.message.contains("missing `,` or newline between fields")
+            $0.message.contains("expected `,` or newline between fields")
         })
 
         guard case .valueDeclaration(let declaration) = result.rootSyntax.documentItems.first,
@@ -1427,7 +1427,7 @@ struct SyntaxTests {
         let directiveResult = try LiminalParser().parse("::use\n")
         #expect(directiveResult.sourceText == "::use\n")
         #expect(directiveResult.diagnostics.map(\.message) == [
-            "missing use directive body"
+            "expected use directive body"
         ])
 
         let schemaSource = ":::schema prelude\nbody\n"
@@ -1697,7 +1697,7 @@ struct SyntaxTests {
 
         #expect(result.sourceText == source)
         #expect(result.diagnostics.map(\.severity).allSatisfy { $0 == .error })
-        #expect(result.diagnostics.map(\.message).contains("missing field colon"))
+        #expect(result.diagnostics.map(\.message).contains("expected field colon"))
         #expect(result.diagnostics.map(\.message).contains("missing closing fields delimiter"))
     }
 
