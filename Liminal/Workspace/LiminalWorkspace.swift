@@ -161,15 +161,38 @@ public struct WikiTarget: Equatable, Hashable, Sendable {
     public var notePath: String?
     public var heading: String?
     public var blockID: String?
+    /// Phase 4.5: an absolute external URI (`https://...`, `mailto:...`,
+    /// `data:...`, etc.). When non-nil, the target represents an external
+    /// resource and the vault-related fields are all nil. Activation
+    /// routes externals through `.openExternal` rather than vault
+    /// resolution; the indexer still emits these so backlinks see them.
+    public var externalURI: String?
 
-    public init(notePath: String? = nil, heading: String? = nil, blockID: String? = nil) {
-        self.notePath = Self.cleanComponent(notePath)
-        self.heading = Self.cleanComponent(heading)
-        self.blockID = Self.cleanBlockID(blockID)
+    public init(
+        notePath: String? = nil,
+        heading: String? = nil,
+        blockID: String? = nil,
+        externalURI: String? = nil
+    ) {
+        self.externalURI = Self.cleanComponent(externalURI)
+        if self.externalURI != nil {
+            // External targets are mutually exclusive with vault fields.
+            self.notePath = nil
+            self.heading = nil
+            self.blockID = nil
+        } else {
+            self.notePath = Self.cleanComponent(notePath)
+            self.heading = Self.cleanComponent(heading)
+            self.blockID = Self.cleanBlockID(blockID)
+        }
+    }
+
+    public var isExternal: Bool {
+        externalURI != nil
     }
 
     public var isLocalOnly: Bool {
-        notePath == nil
+        externalURI == nil && notePath == nil
     }
 
     public var hasAnchor: Bool {
@@ -177,6 +200,10 @@ public struct WikiTarget: Equatable, Hashable, Sendable {
     }
 
     public var rawTargetString: String {
+        if let externalURI {
+            return externalURI
+        }
+
         var result = notePath ?? ""
 
         if let blockID {
@@ -190,6 +217,10 @@ public struct WikiTarget: Equatable, Hashable, Sendable {
 
     public static func parse(_ raw: String) -> WikiTarget {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if Self.looksLikeAbsoluteURI(trimmed) {
+            return WikiTarget(externalURI: trimmed)
+        }
 
         guard let hashIndex = trimmed.firstIndex(of: "#") else {
             return WikiTarget(notePath: trimmed.isEmpty ? nil : trimmed)
@@ -209,6 +240,32 @@ public struct WikiTarget: Equatable, Hashable, Sendable {
             notePath: notePart.isEmpty ? nil : notePart,
             heading: anchorPart
         )
+    }
+
+    /// True when `raw` begins with what RFC 3986 calls a scheme followed
+    /// by `:`. The scheme prefix must precede any `/` or `#` so vault
+    /// paths like `Folder/Note:foo` (which would have a colon embedded
+    /// in the path) aren't misclassified.
+    private static func looksLikeAbsoluteURI(_ raw: String) -> Bool {
+        guard let colonIndex = raw.firstIndex(of: ":") else {
+            return false
+        }
+        let prefix = raw[..<colonIndex]
+        guard !prefix.isEmpty,
+              prefix.first?.isLetter == true
+        else {
+            return false
+        }
+        for character in prefix {
+            if character.isLetter || character.isNumber {
+                continue
+            }
+            if character == "+" || character == "." || character == "-" {
+                continue
+            }
+            return false
+        }
+        return true
     }
 
     private static func cleanComponent(_ value: String?) -> String? {
@@ -363,6 +420,10 @@ public enum LinkActivationDecision: Equatable, Sendable {
     case open(noteID: URL, anchor: LinkNavigationAnchor?)
     case createNote(relativePath: String)
     case showAmbiguous([URL])
+    /// Phase 4.5: target is an absolute external URI; route via the
+    /// system default handler (`NSWorkspace.open`, `UIApplication.open`,
+    /// etc.). Never auto-creates a vault note.
+    case openExternal(URL)
     case noAction
 }
 
@@ -371,15 +432,23 @@ public enum LinkActivationPolicy {
         for target: WikiTarget,
         resolution: ReferenceResolution
     ) -> LinkActivationDecision {
+        // External-URI targets short-circuit vault resolution entirely —
+        // we never want an `https://...` to flow through `.createNote`.
+        if let externalURI = target.externalURI {
+            if let url = URL(string: externalURI) {
+                return .openExternal(url)
+            }
+            return .noAction
+        }
         switch resolution {
         case .resolved(let destination):
-            .open(noteID: destination.noteID, anchor: destination.anchor)
+            return .open(noteID: destination.noteID, anchor: destination.anchor)
         case .noteResolved(let noteID, _):
-            .open(noteID: noteID, anchor: nil)
+            return .open(noteID: noteID, anchor: nil)
         case .unresolved:
-            target.notePath.map { .createNote(relativePath: $0) } ?? .noAction
+            return target.notePath.map { .createNote(relativePath: $0) } ?? .noAction
         case .ambiguous(let candidates):
-            .showAmbiguous(candidates)
+            return .showAmbiguous(candidates)
         }
     }
 
@@ -513,6 +582,13 @@ public struct VaultLinkIndex: Equatable, Sendable {
     }
 
     public func resolve(target: WikiTarget, from sourceNoteID: URL) -> ReferenceResolution {
+        // External targets make no vault claim — `LinkActivationPolicy`
+        // routes them via `.openExternal` regardless of the resolution
+        // returned here.
+        if target.isExternal {
+            return .unresolved
+        }
+
         let resolvedNoteID: URL
 
         if let notePath = target.notePath {

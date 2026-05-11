@@ -71,6 +71,53 @@ struct WorkspaceLinkingTests {
         #expect(target.hasAnchor == expectation.hasAnchor)
     }
 
+    @Test(
+        "Phase 4.5 wiki target parser recognises external URI schemes",
+        arguments: [
+            ("https://example.org", true),
+            ("http://example.org/path?q=1#frag", true),
+            ("mailto:user@example.org", true),
+            ("ftp://ftp.example.org", true),
+            ("data:image/png;base64,abc", true),
+            ("file:///tmp/foo", true),
+            ("Folder/Note", false),
+            ("Folder/Note#Heading", false),
+            ("Note#^block-id", false),
+            ("./relative-path", false),
+            ("", false)
+        ]
+    )
+    func phase45WikiTargetParserRecognisesExternalSchemes(_ inputs: (String, Bool)) {
+        let (raw, expectedExternal) = inputs
+        let target = WikiTarget.parse(raw)
+        #expect(target.isExternal == expectedExternal,
+                "expected isExternal=\(expectedExternal) for \(raw.debugDescription)")
+        if expectedExternal {
+            #expect(target.externalURI == raw)
+            #expect(target.notePath == nil)
+            #expect(target.heading == nil)
+            #expect(target.blockID == nil)
+            #expect(target.rawTargetString == raw)
+        }
+    }
+
+    @Test("Phase 4.5 external targets route to openExternal regardless of resolution")
+    func phase45ExternalTargetsRouteToOpenExternal() throws {
+        let target = WikiTarget.parse("https://example.org/page")
+        let url = try #require(URL(string: "https://example.org/page"))
+
+        for resolution: ReferenceResolution in [
+            .resolved(.note(URL(fileURLWithPath: "/tmp/note.md"))),
+            .noteResolved(URL(fileURLWithPath: "/tmp/note.md"), requestedAnchor: .heading("X")),
+            .unresolved,
+            .ambiguous([URL(fileURLWithPath: "/tmp/a.md")])
+        ] {
+            let decision = LinkActivationPolicy.decision(for: target, resolution: resolution)
+            #expect(decision == .openExternal(url),
+                    "external target should win over resolution \(resolution)")
+        }
+    }
+
     @Test("wiki target initializer normalizes block IDs with or without caret")
     func wikiTargetInitializerNormalizesBlockIDsWithOrWithoutCaret() {
         let withCaret = WikiTarget(notePath: " Note ", blockID: " ^Block-ID ")
