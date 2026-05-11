@@ -124,7 +124,8 @@ public struct LiminalLowerer: Sendable {
                 name: QualifiedName(decl.qnameText),
                 kind: NodeKind(rawValue: decl.nodeKindText),
                 rawRHS: decl.rhsText,
-                definition: decl.definition.flatMap(lowerSchemaTypeExpression)
+                definition: decl.definition.flatMap(lowerSchemaTypeExpression),
+                modifiers: decl.modifiers.compactMap(lowerSchemaModifier)
             ))
         }
         for decl in schema.templateDeclarations {

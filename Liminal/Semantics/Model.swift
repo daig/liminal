@@ -152,19 +152,26 @@ public struct LiminalUserSchemaTypeDeclaration: Equatable, Sendable {
     /// Phase 3c.3: parsed signature for `type Q : template = …` decls.
     /// `nil` for non-template declarations and for recovery paths.
     public var templateSignature: LiminalTemplateSignature?
+    /// Phase 3.6 (Indep-2 #1): top-level modifiers attached to the
+    /// declaration's type expression (e.g.
+    /// `type A : value = str @deprecated("old") @readonly`). Empty when
+    /// no modifiers were declared.
+    public var modifiers: [SchemaModifier]
 
     public init(
         name: QualifiedName,
         kind: NodeKind?,
         rawRHS: String,
         definition: SchemaTypeExpression? = nil,
-        templateSignature: LiminalTemplateSignature? = nil
+        templateSignature: LiminalTemplateSignature? = nil,
+        modifiers: [SchemaModifier] = []
     ) {
         self.name = name
         self.kind = kind
         self.rawRHS = rawRHS
         self.definition = definition
         self.templateSignature = templateSignature
+        self.modifiers = modifiers
     }
 }
 

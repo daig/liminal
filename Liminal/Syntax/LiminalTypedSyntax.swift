@@ -712,6 +712,14 @@ public struct SchemaTypeDeclarationSyntax: LiminalSyntaxNode {
             .map(SchemaTypeExpressionSyntax.init(unchecked:))
     }
 
+    /// Phase 3.6: top-level modifiers attached to the declaration's
+    /// type expression (`type A : value = str @deprecated("…")`).
+    /// Mirrors the field-level modifier surface so consumers can
+    /// uniformly read modifiers regardless of position.
+    public var modifiers: [SchemaModifierSyntax] {
+        childNodes(kind: .schemaModifier).map(SchemaModifierSyntax.init(unchecked:))
+    }
+
     /// Source text of everything after the `=` and before the trailing
     /// newline. Walks every direct child/token in source order so trailing
     /// `.schemaText` salvage (top-level modifiers, deferred TypeExpr

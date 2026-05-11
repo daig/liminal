@@ -969,6 +969,45 @@ struct SchemaValidatorTests {
         #expect(declaration.definition == .enumeration(["red", "green", "blue"]))
     }
 
+    @Test("Phase 3.6 top-level type modifiers structure on the declaration")
+    func phase36TopLevelTypeModifiersStructure() throws {
+        let source = """
+        :::schema prelude
+        type A : value = str @readonly @deprecated("old")
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        guard case .schema(let block) = document.items.first,
+              let declaration = block.declarations.first
+        else {
+            Issue.record("expected lowered schema decl")
+            return
+        }
+        // The structured RHS still lowers cleanly.
+        #expect(declaration.definition == .str)
+        // `@readonly` decodes; `@deprecated("old")` will decode in
+        // the next slice (G4 modifier arg semantics) — for now the
+        // arg-carrying modifier still appears in the typed-overlay
+        // CST modifier list, but `lowerSchemaModifier` returns nil
+        // for it so it doesn't surface in the lowered modifiers.
+        #expect(declaration.modifiers.contains(.readonly))
+
+        // rhsText still preserves the original bytes including
+        // the trailing modifier text.
+        guard case .schemaBlock(let schemaSyntax) = parsed.rootSyntax.documentItems.first,
+              let declSyntax = schemaSyntax.declarations.first
+        else {
+            Issue.record("expected schema declaration syntax")
+            return
+        }
+        #expect(declSyntax.rhsText == #"str @readonly @deprecated("old")"#)
+        // Both modifiers surface on the CST/typed overlay even though
+        // lowering currently drops the arg-carrying one.
+        #expect(declSyntax.modifiers.map(\.modifierName) == ["readonly", "deprecated"])
+    }
+
     @Test("Phase 3.6 variant lowers to .variant with discriminator and cases")
     func phase36VariantLowersToSchemaVariant() throws {
         let source = """

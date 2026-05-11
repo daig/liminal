@@ -902,12 +902,24 @@ struct LiminalCSTParser {
                 bodyBaseByteOffset: bodyBaseByteOffset,
                 with: &builder
             )
+            // Phase 3.6 (Indep-2 #1): consume trailing top-level
+            // modifiers structurally. `parseSchemaModifiers` emits
+            // `.schemaModifier` siblings of the `.schemaTypeExpression`
+            // so they're directly addressable on the lowered
+            // declaration.
+            cursor = try parseSchemaModifiers(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
             cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
         }
         if cursor < text.endIndex {
-            // Salvage anything we couldn't structurally consume so byte
-            // preservation holds even when the RHS contains type-expression
-            // forms 3c.2 doesn't yet cover (variant/enum/map/ref/embed).
+            // Anything still unconsumed after the structured TypeExpr +
+            // modifier chain salvages as a single `.schemaText` token so
+            // round-trip stays lossless even for inputs the parser
+            // doesn't yet structure.
             try builder.largeToken(
                 .schemaText,
                 text: String(text[cursor..<text.endIndex])
