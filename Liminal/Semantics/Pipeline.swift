@@ -166,6 +166,22 @@ public struct LiminalLowerer: Sendable {
             // membership against bare-scalar / string values.
             return .enumeration(syntax.enumCaseNames)
         }
+        if let keyword = syntax.angleTypeKeyword {
+            // Phase 3.6: `map<T>` / `ref<T>` / `embed<T>` — recurse
+            // through the inner type expression.
+            let elementSyntax = syntax.angleElementType
+            let element = elementSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
+            switch keyword {
+            case "map":
+                return .map(element)
+            case "ref":
+                return .reference(element)
+            case "embed":
+                return .embed(element)
+            default:
+                return nil
+            }
+        }
         if syntax.isList {
             // List type — recurse into the element type.
             guard let elementSyntax = syntax.listElementType else {

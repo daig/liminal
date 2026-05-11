@@ -796,6 +796,28 @@ public struct SchemaTypeExpressionSyntax: LiminalSyntaxNode {
         return firstToken(kind: .leftBrace) != nil
     }
 
+    /// Phase 3.6: the leading keyword for `map<T>` / `ref<T>` /
+    /// `embed<T>` shapes; `nil` for any other expression form.
+    /// Identified by a leading identifier whose text is one of the
+    /// three keywords AND a following `<` direct token.
+    public var angleTypeKeyword: String? {
+        guard let leadingIdent = firstToken(kind: .identifier),
+              ["map", "ref", "embed"].contains(leadingIdent.text),
+              firstToken(kind: .lessThan) != nil
+        else {
+            return nil
+        }
+        return leadingIdent.text
+    }
+
+    /// Inner element type for `map<T>` / `ref<T>` / `embed<T>` shapes.
+    /// `nil` when the wrapper has no nested `.schemaTypeExpression`
+    /// child (recovery path).
+    public var angleElementType: SchemaTypeExpressionSyntax? {
+        firstChild(kind: .schemaTypeExpression)
+            .map(SchemaTypeExpressionSyntax.init(unchecked:))
+    }
+
     /// Case names declared inside an `enum { … }` schema type, in
     /// source order. Empty for non-enum expressions.
     public var enumCaseNames: [String] {

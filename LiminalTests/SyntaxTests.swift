@@ -1084,14 +1084,12 @@ struct SyntaxTests {
 
     @Test("Phase 3c.2 deferred TypeExpr forms leave definition unstructured")
     func phase3c2DeferredTypeExprFormsLeaveDefinitionUnstructured() throws {
-        // `enum {...}` is structured by Phase 3.6 — see the enum-specific
-        // tests below. The remaining deferred forms still flow through
-        // the salvage path.
+        // `enum {...}` and `map<T>` / `ref<T>` / `embed<T>` are
+        // structured by Phase 3.6 — see the specific tests below. The
+        // remaining deferred form is `variant by ...`, still riding
+        // through salvage until 3.6 closes it out.
         let source = """
         :::schema prelude
-        type Tags : value = map<str>
-        type Refs : value = ref<Person>
-        type Pic : value = embed<Image>
         type Maybe : value = variant by kind { yes: { v: str }, no: {} }
         :::
         """
@@ -1115,9 +1113,12 @@ struct SyntaxTests {
 
     @Test("Phase 3c.2 deferred form inside a record field doesn't shadow as named type")
     func phase3c2DeferredFormInsideRecordFieldDoesNotShadow() throws {
-        // `tags: map<str>` previously degraded to `.named("map")`; the
-        // outer record now structures cleanly while the field's inner
-        // definition is unstructured.
+        // Originally asserted that `tags: map<str>` produced an
+        // unstructured wrapper (deferred form). Phase 3.6 structures
+        // `map<T>` so the field's value-type wrapper now identifies as
+        // an angle-bracketed schema type with element `str`. The test
+        // shape is preserved: the outer record still parses cleanly,
+        // `map` is not misclassified as a `.named` type.
         let source = """
         :::schema prelude
         type Item : value = { name: str, tags: map<str> }
@@ -1138,11 +1139,8 @@ struct SyntaxTests {
         #expect(nameType.qnameText == "str")
 
         let tagsType = try #require(fields[1].valueType)
-        // The tags field's value type is the deferred form — no qname,
-        // not a record, not a list.
-        #expect(tagsType.qnameText == nil)
-        #expect(tagsType.isRecord == false)
-        #expect(tagsType.isList == false)
+        #expect(tagsType.angleTypeKeyword == "map")
+        #expect(tagsType.angleElementType?.qnameText == "str")
     }
 
     @Test("Phase 3c.2 deferred TypeExpr field suffixes stay structural")
@@ -1393,8 +1391,13 @@ struct SyntaxTests {
         })
     }
 
-    @Test("Phase 3.5 parser diagnoses unmatched < in deferred TypeExpr forms")
-    func phase35ParserDiagnosesUnmatchedDeferredFormDelimiter() throws {
+    @Test("Phase 3.6 parser diagnoses unclosed angle-bracketed schema types")
+    func phase36ParserDiagnosesUnclosedAngleTypeDelimiter() throws {
+        // Originally a 3.5 test that asserted "unmatched `<` in `map`
+        // form" — 3.6 structurally parses `map<T>` / `ref<T>` /
+        // `embed<T>`, so an unclosed form now flows through the
+        // normal missing-closer recovery path with a different
+        // diagnostic.
         let source = """
         :::schema prelude
         type Bad : value = map<str
@@ -1403,7 +1406,7 @@ struct SyntaxTests {
         let result = try LiminalParser().parse(source)
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
-            $0.message == "unmatched `<` in `map` form"
+            $0.message.contains("missing closing `>` in schema type")
         })
     }
 

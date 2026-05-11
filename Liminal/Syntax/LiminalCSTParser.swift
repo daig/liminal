@@ -945,20 +945,16 @@ struct LiminalCSTParser {
                 bodyBaseByteOffset: bodyBaseByteOffset,
                 with: &builder
             )
+        } else if startsSchemaAngleType(in: text, from: cursor) {
+            // 3.6: `map<T>` / `ref<T>` / `embed<T>` share the same
+            // angle-bracketed grammar; recursive inner TypeExpr.
+            cursor = try parseSchemaAngleType(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
         } else {
-            // 3.5 #2: a deferred-form keyword (`map`/`ref`/`embed`) opened
-            // a `<…>` that never balanced. Surface a diagnostic so the
-            // user knows the form is malformed; the qname fallthrough
-            // below still captures `map` as a `.qname` token so the rest
-            // of the declaration keeps parsing.
-            if let unmatched = unmatchedDeferredFormStart(in: text, from: cursor) {
-                appendSchemaBodyDiagnostic(
-                    "unmatched `<` in `\(unmatched.keyword)` form",
-                    at: bodyBaseByteOffset
-                        + text[text.startIndex..<unmatched.openerIndex].utf8.count,
-                    length: 0
-                )
-            }
             if cursor < text.endIndex {
                 let ch = text[cursor]
                 if ch == "{" {
@@ -1073,31 +1069,79 @@ struct LiminalCSTParser {
         return cursor
     }
 
-    /// Returns the keyword + `<` opener index when the lookahead position
-    /// holds an unbalanced `map<…` / `ref<…` / `embed<…` form (3.5 #2).
-    /// `enum` and `variant` aren't included — their `{ … }` forms are
-    /// already detected by the existing record-type recovery path.
-    private func unmatchedDeferredFormStart(
+    /// Phase 3.6: `map<T>` / `ref<T>` / `embed<T>` share the same
+    /// angle-bracketed grammar. Detection is the keyword followed by
+    /// `<` after optional whitespace.
+    private func startsSchemaAngleType(
         in text: String,
         from start: String.Index
-    ) -> (keyword: String, openerIndex: String.Index)? {
+    ) -> Bool {
         guard let identEnd = identifierEnd(in: text, from: start) else {
-            return nil
+            return false
         }
-        let keyword = String(text[start..<identEnd])
-        switch keyword {
+        switch String(text[start..<identEnd]) {
         case "map", "ref", "embed":
             break
         default:
-            return nil
+            return false
         }
-        let openerIndex = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
-        guard openerIndex < text.endIndex, text[openerIndex] == "<" else {
-            return nil
+        let angle = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
+        return angle < text.endIndex && text[angle] == "<"
+    }
+
+    private mutating func parseSchemaAngleType(
+        in text: String,
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        // Keyword: `map`, `ref`, or `embed`.
+        if let identEnd = identifierEnd(in: text, from: cursor) {
+            try builder.token(.identifier, text: String(text[cursor..<identEnd]))
+            cursor = identEnd
         }
-        // The balanced scan failed (otherwise deferredSchemaTypeFormEnd
-        // would have matched). Surface the opener position to the caller.
-        return (keyword, openerIndex)
+        cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+
+        // `<`
+        if cursor < text.endIndex, text[cursor] == "<" {
+            try builder.staticToken(.lessThan)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected `<` in schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+            return cursor
+        }
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // Inner TypeExpr (recursive).
+        if cursor < text.endIndex, text[cursor] != ">" {
+            cursor = try parseSchemaTypeExpression(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+            cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+        }
+
+        // `>`
+        if cursor < text.endIndex, text[cursor] == ">" {
+            try builder.staticToken(.greaterThan)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing closing `>` in schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        return cursor
     }
 
     private func deferredSchemaTypeFormEnd(
@@ -1111,12 +1155,6 @@ struct LiminalCSTParser {
         var cursor = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
 
         switch firstIdent {
-        case "map", "ref", "embed":
-            guard cursor < text.endIndex, text[cursor] == "<" else {
-                return nil
-            }
-            return scanBalancedSchemaFormEnd(in: text, from: cursor)
-
         case "variant":
             guard let byEnd = schemaKeywordEnd("by", in: text, from: cursor) else {
                 return nil

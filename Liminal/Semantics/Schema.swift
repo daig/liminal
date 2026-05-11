@@ -846,6 +846,11 @@ public struct SchemaValidator: Sendable {
             return values.allSatisfy { valueMatches($0, type: inner) }
         case (.list, _), (_, .list):
             return false
+        case (.record(let fields), .map(let valueType)):
+            // Phase 3.6: `map<T>` accepts any record value whose values
+            // are each of type T. Keys are always strings in Liminal,
+            // so we don't separately validate them.
+            return fields.allSatisfy { valueMatches($0.value, type: valueType) }
         case (.record, .record):
             // Record-against-record is intentionally permissive in the base
             // validator; nested record schema checking lands later.
