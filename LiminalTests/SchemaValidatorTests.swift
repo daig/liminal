@@ -610,13 +610,17 @@ struct SchemaValidatorTests {
 
     @Test("Phase 3c.2 validator skips type-shape check for deferred-form field types")
     func phase3c2ValidatorSkipsTypeCheckForDeferredFieldType() throws {
-        // Originally used `tags: map<str>`; Phase 3.6 structures that
-        // form, so the still-deferred `variant` keeps this regression
-        // covered. The validator must still accept the field's value
-        // even though the parser couldn't structure its declared type.
+        // Originally tested `tags: map<str>` (then `variant`); Phase 3.6
+        // structures all of those. The `.deferred` sentinel still
+        // exists as the safety net for inputs the parser can't
+        // structurally classify (intentionally malformed RHS); the
+        // validator must continue to accept whatever value the user
+        // wrote so the type-shape check doesn't pile on top of a
+        // primary parser-recovery diagnostic. Use a syntactically
+        // unrecognized type-expression form to drive `.deferred`.
         let source = """
         :::schema prelude
-        type Item : value = { name: str, payload: variant by kind { a: { v: str }, b: {} } }
+        type Item : value = { name: str, payload: ?? }
         :::
         @Item{name: "Ada", payload: "anything"}
         """
@@ -634,12 +638,12 @@ struct SchemaValidatorTests {
 
     @Test("Phase 3c.2 validator preserves list shape around deferred element types")
     func phase3c2ValidatorPreservesListShapeAroundDeferredElementTypes() throws {
-        // Originally used `[map<str>]`; Phase 3.6 structures `map<T>`,
-        // so use the still-deferred `variant by …` as the inner element
-        // to keep coverage on "list wrapper preserved around an
-        // unstructured element type". The list shape is enforced; the
-        // inner type's shape is skipped.
-        let inner = "variant by kind { a: { v: str }, b: {} }"
+        // Originally `[map<str>]`; all TypeExpr forms structure cleanly
+        // in 3.6 so the inner is now intentionally malformed (`??`) to
+        // drive `.list(.deferred)`. The list shape is still enforced
+        // (list value accepted, scalar rejected); only the element-type
+        // shape check is skipped.
+        let inner = "??"
         let validSource = """
         :::schema prelude
         type Item : value = { tags: [\(inner)] }
@@ -963,6 +967,41 @@ struct SchemaValidatorTests {
             return
         }
         #expect(declaration.definition == .enumeration(["red", "green", "blue"]))
+    }
+
+    @Test("Phase 3.6 variant lowers to .variant with discriminator and cases")
+    func phase36VariantLowersToSchemaVariant() throws {
+        let source = """
+        :::schema prelude
+        type Shape : value = variant by kind {
+          circle: { radius: int }
+          rect: { width: int, height: int }
+        }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        guard case .schema(let block) = document.items.first,
+              let declaration = block.declarations.first
+        else {
+            Issue.record("expected lowered variant declaration")
+            return
+        }
+        guard case .variant(let discriminator, let cases) = declaration.definition else {
+            Issue.record("expected `.variant` lowered definition, got \(String(describing: declaration.definition))")
+            return
+        }
+        #expect(discriminator == "kind")
+        #expect(cases.map(\.name) == ["circle", "rect"])
+
+        let circle = cases[0]
+        #expect(circle.fields.map(\.name.rawValue) == ["radius"])
+        #expect(circle.fields[0].type == .int)
+
+        let rect = cases[1]
+        #expect(rect.fields.map(\.name.rawValue) == ["width", "height"])
+        #expect(rect.fields.allSatisfy { $0.type == .int })
     }
 
     @Test("Phase 3.6 map/ref/embed lower to their SchemaTypeExpression cases")

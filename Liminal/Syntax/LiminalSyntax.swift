@@ -185,6 +185,7 @@ public enum LiminalKind: UInt32, Sendable {
     case useDirective = 323
     case schemaBody = 324
     case interpolationExpression = 325
+    case schemaVariantCase = 326
 
     case missing = 900
     case error = 901
@@ -197,7 +198,7 @@ public enum LiminalLanguage: SyntaxLanguage {
     public static let missingKind: LiminalKind = .missing
     public static let errorKind: LiminalKind = .error
     public static let serializationID = "dog.lambda.liminal.markup"
-    public static let serializationVersion: UInt32 = 7
+    public static let serializationVersion: UInt32 = 8
 
     public static func isTrivia(_ kind: LiminalKind) -> Bool {
         switch kind {
@@ -287,6 +288,7 @@ public enum LiminalLanguage: SyntaxLanguage {
             .useDirective,
             .schemaBody,
             .interpolationExpression,
+            .schemaVariantCase,
             .missing,
             .error:
             true

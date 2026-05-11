@@ -928,15 +928,7 @@ struct LiminalCSTParser {
         // Salvage only the deferred form itself as `.schemaText` inside the
         // wrapper, then continue through the shared optional suffix path so
         // `map<str>? @readonly` keeps both the `?` and field modifiers.
-        if let formEnd = deferredSchemaTypeFormEnd(in: text, from: cursor) {
-            if cursor < formEnd {
-                try builder.largeToken(
-                    .schemaText,
-                    text: String(text[cursor..<formEnd])
-                )
-            }
-            cursor = formEnd
-        } else if startsSchemaEnumType(in: text, from: cursor) {
+        if startsSchemaEnumType(in: text, from: cursor) {
             // 3.6: enum is the simplest of the previously-deferred TypeExpr
             // forms — structurally parse `enum { Ident, Ident, ... }`.
             cursor = try parseSchemaEnumType(
@@ -949,6 +941,15 @@ struct LiminalCSTParser {
             // 3.6: `map<T>` / `ref<T>` / `embed<T>` share the same
             // angle-bracketed grammar; recursive inner TypeExpr.
             cursor = try parseSchemaAngleType(
+                in: text,
+                from: cursor,
+                bodyBaseByteOffset: bodyBaseByteOffset,
+                with: &builder
+            )
+        } else if startsSchemaVariantType(in: text, from: cursor) {
+            // 3.6: `variant by F { case: { fields }, ... }` —
+            // closes out the last deferred TypeExpr form.
+            cursor = try parseSchemaVariantType(
                 in: text,
                 from: cursor,
                 bodyBaseByteOffset: bodyBaseByteOffset,
@@ -1144,36 +1145,6 @@ struct LiminalCSTParser {
         return cursor
     }
 
-    private func deferredSchemaTypeFormEnd(
-        in text: String,
-        from start: String.Index
-    ) -> String.Index? {
-        guard let identEnd = identifierEnd(in: text, from: start) else {
-            return nil
-        }
-        let firstIdent = String(text[start..<identEnd])
-        var cursor = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
-
-        switch firstIdent {
-        case "variant":
-            guard let byEnd = schemaKeywordEnd("by", in: text, from: cursor) else {
-                return nil
-            }
-            cursor = schemaHorizontalWhitespaceEnd(in: text, from: byEnd)
-            guard let fieldEnd = identifierEnd(in: text, from: cursor) else {
-                return nil
-            }
-            cursor = schemaHorizontalWhitespaceEnd(in: text, from: fieldEnd)
-            guard cursor < text.endIndex, text[cursor] == "{" else {
-                return nil
-            }
-            return scanBalancedSchemaFormEnd(in: text, from: cursor)
-
-        default:
-            return nil
-        }
-    }
-
     private func schemaHorizontalWhitespaceEnd(
         in text: String,
         from start: String.Index
@@ -1185,62 +1156,165 @@ struct LiminalCSTParser {
         return cursor
     }
 
-    private func schemaKeywordEnd(
-        _ keyword: String,
+    /// Phase 3.6: `variant by FieldName { Ident: { fields }, ... }`.
+    /// Detected by the leading `variant` keyword followed by `by`,
+    /// a field-name identifier, and `{`.
+    private func startsSchemaVariantType(
         in text: String,
         from start: String.Index
-    ) -> String.Index? {
-        guard let end = identifierEnd(in: text, from: start),
-              String(text[start..<end]) == keyword
+    ) -> Bool {
+        guard let identEnd = identifierEnd(in: text, from: start),
+              String(text[start..<identEnd]) == "variant"
         else {
-            return nil
+            return false
         }
-        return end
+        var cursor = schemaHorizontalWhitespaceEnd(in: text, from: identEnd)
+        guard let byEnd = identifierEnd(in: text, from: cursor),
+              String(text[cursor..<byEnd]) == "by"
+        else {
+            return false
+        }
+        cursor = schemaHorizontalWhitespaceEnd(in: text, from: byEnd)
+        guard let fieldEnd = identifierEnd(in: text, from: cursor) else {
+            return false
+        }
+        cursor = schemaHorizontalWhitespaceEnd(in: text, from: fieldEnd)
+        return cursor < text.endIndex && text[cursor] == "{"
     }
 
-    private func scanBalancedSchemaFormEnd(
+    private mutating func parseSchemaVariantType(
         in text: String,
-        from start: String.Index
-    ) -> String.Index? {
-        // Walks one balanced `{} [] <> ()` form with quoted-string
-        // awareness and returns the index immediately after the matching
-        // closer. Used for deferred TypeExpr forms so field suffixes and
-        // modifiers stay outside the salvage token.
-        guard start < text.endIndex else { return nil }
-        var cursor = start
-        var depth = 0
-        var inString = false
-        while cursor < text.endIndex {
-            let ch = text[cursor]
-            if inString {
-                if ch == "\\",
-                   text.index(after: cursor) < text.endIndex
-                {
-                    cursor = text.index(after: text.index(after: cursor))
-                    continue
-                }
-                if ch == "\"" { inString = false }
-                cursor = text.index(after: cursor)
-                continue
-            }
-            if ch == "\"" {
-                inString = true
-                cursor = text.index(after: cursor)
-                continue
-            }
-            if ch == "{" || ch == "[" || ch == "<" || ch == "(" {
-                depth += 1
-            } else if ch == "}" || ch == "]" || ch == ">" || ch == ")" {
-                depth = Swift.max(0, depth - 1)
-                cursor = text.index(after: cursor)
-                if depth == 0 {
-                    return cursor
-                }
-                continue
-            }
-            cursor = text.index(after: cursor)
+        from cursor: String.Index,
+        bodyBaseByteOffset: Int,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> String.Index {
+        var cursor = cursor
+        // `variant` keyword.
+        if let identEnd = identifierEnd(in: text, from: cursor) {
+            try builder.token(.identifier, text: String(text[cursor..<identEnd]))
+            cursor = identEnd
         }
-        return nil
+        cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+        // `by` keyword.
+        if let byEnd = identifierEnd(in: text, from: cursor),
+           String(text[cursor..<byEnd]) == "by"
+        {
+            try builder.token(.identifier, text: "by")
+            cursor = byEnd
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected `by` in variant schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+        // Discriminator field name.
+        if let fieldEnd = identifierEnd(in: text, from: cursor) {
+            try builder.token(.fieldName, text: String(text[cursor..<fieldEnd]))
+            cursor = fieldEnd
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected discriminator field name in variant schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+        // `{`
+        if cursor < text.endIndex, text[cursor] == "{" {
+            try builder.staticToken(.leftBrace)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "expected `{` in variant schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+            return cursor
+        }
+        cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+
+        // Case list: Ident ":" RecordType separated by `,` or newline.
+        while cursor < text.endIndex, text[cursor] != "}" {
+            guard let caseEnd = identifierEnd(in: text, from: cursor) else {
+                break
+            }
+            builder.startNode(.schemaVariantCase)
+            try builder.token(.identifier, text: String(text[cursor..<caseEnd]))
+            cursor = caseEnd
+            cursor = try emitSchemaInlineTrivia(in: text, from: cursor, with: &builder)
+            if cursor < text.endIndex, text[cursor] == ":" {
+                try builder.staticToken(.colon)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+                if cursor < text.endIndex, text[cursor] == "{" {
+                    cursor = try parseSchemaTypeExpression(
+                        in: text,
+                        from: cursor,
+                        bodyBaseByteOffset: bodyBaseByteOffset,
+                        with: &builder
+                    )
+                } else {
+                    try builder.missingNode(.missing)
+                    appendSchemaBodyDiagnostic(
+                        "expected record `{ … }` payload for variant case",
+                        at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                        length: 0
+                    )
+                }
+            } else {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "expected `:` in variant case",
+                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+                try builder.finishNode()
+                break
+            }
+            try builder.finishNode()
+
+            var crossedNewline = false
+            cursor = try emitSchemaPayloadTrivia(
+                in: text,
+                from: cursor,
+                crossedNewline: &crossedNewline,
+                with: &builder
+            )
+            if cursor < text.endIndex, text[cursor] == "," {
+                try builder.staticToken(.comma)
+                cursor = text.index(after: cursor)
+                cursor = try emitSchemaPayloadTrivia(in: text, from: cursor, with: &builder)
+            } else if !crossedNewline,
+                      cursor < text.endIndex,
+                      text[cursor] != "}",
+                      identifierEnd(in: text, from: cursor) != nil
+            {
+                try builder.missingNode(.missing)
+                appendSchemaBodyDiagnostic(
+                    "expected `,` or newline between variant cases",
+                    at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                    length: 0
+                )
+            }
+        }
+
+        if cursor < text.endIndex, text[cursor] == "}" {
+            try builder.staticToken(.rightBrace)
+            cursor = text.index(after: cursor)
+        } else {
+            try builder.missingNode(.missing)
+            appendSchemaBodyDiagnostic(
+                "missing closing `}` in variant schema type",
+                at: bodyBaseByteOffset + text[text.startIndex..<cursor].utf8.count,
+                length: 0
+            )
+        }
+        return cursor
     }
 
     private mutating func parseSchemaRecordType(

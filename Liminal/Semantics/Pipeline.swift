@@ -166,6 +166,19 @@ public struct LiminalLowerer: Sendable {
             // membership against bare-scalar / string values.
             return .enumeration(syntax.enumCaseNames)
         }
+        if syntax.isVariant {
+            // Phase 3.6: structured `variant by F { case: { … }, ... }`.
+            // The discriminator field name and the variant cases (each
+            // with its own record payload) are lifted into the lowered
+            // shape; validator-side dispatch on the discriminator
+            // remains a future concern.
+            let discriminator = FieldName(syntax.variantDiscriminatorText ?? "")
+            let cases = syntax.variantCases.map { caseSyntax -> SchemaVariantCase in
+                let payloadFields = caseSyntax.payloadType?.recordFields.map(lowerSchemaField) ?? []
+                return SchemaVariantCase(name: caseSyntax.nameText, fields: payloadFields)
+            }
+            return .variant(discriminator: discriminator, cases: cases)
+        }
         if let keyword = syntax.angleTypeKeyword {
             // Phase 3.6: `map<T>` / `ref<T>` / `embed<T>` — recurse
             // through the inner type expression.

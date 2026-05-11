@@ -835,6 +835,46 @@ public struct SchemaTypeExpressionSyntax: LiminalSyntaxNode {
         }
         return result
     }
+
+    /// True when the parser opened a `variant by F { … }` schema type
+    /// here. Detected by the leading `variant` identifier paired with
+    /// a `{`.
+    public var isVariant: Bool {
+        guard let leadingIdent = firstToken(kind: .identifier),
+              leadingIdent.text == "variant"
+        else {
+            return false
+        }
+        return firstToken(kind: .leftBrace) != nil
+    }
+
+    /// Discriminator field-name token for a variant schema type.
+    /// `nil` for non-variants or recovery paths.
+    public var variantDiscriminatorText: String? {
+        guard isVariant else { return nil }
+        return firstToken(kind: .fieldName)?.text
+    }
+
+    /// Variant case wrappers in source order. Empty for non-variants.
+    public var variantCases: [SchemaVariantCaseSyntax] {
+        guard isVariant else { return [] }
+        return childNodes(kind: .schemaVariantCase)
+            .map(SchemaVariantCaseSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .schemaVariantCase)
+public struct SchemaVariantCaseSyntax: LiminalSyntaxNode {
+    /// Case name (the identifier before `:`).
+    public var nameText: String {
+        firstToken(kind: .identifier)?.text ?? ""
+    }
+
+    /// Record-shaped payload (`{ field: T, ... }`) parsed after `:`.
+    public var payloadType: SchemaTypeExpressionSyntax? {
+        firstChild(kind: .schemaTypeExpression)
+            .map(SchemaTypeExpressionSyntax.init(unchecked:))
+    }
 }
 
 @CambiumSyntaxNode(LiminalKind.self, for: .schemaField)

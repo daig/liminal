@@ -6,7 +6,7 @@ import Testing
 struct SyntaxTests {
     @Test("syntax kinds use stable Phase 0 raw bands")
     func syntaxKindRawBandsAreStable() {
-        #expect(LiminalLanguage.serializationVersion == 7)
+        #expect(LiminalLanguage.serializationVersion == 8)
 
         #expect(LiminalKind.whitespace.rawValue == 1)
         #expect(LiminalKind.newline.rawValue == 2)
@@ -1080,35 +1080,6 @@ struct SyntaxTests {
         )
         #expect(noteMod.modifierName == "deprecated")
         #expect(noteMod.argumentsText == #""use foo()""#)
-    }
-
-    @Test("Phase 3c.2 deferred TypeExpr forms leave definition unstructured")
-    func phase3c2DeferredTypeExprFormsLeaveDefinitionUnstructured() throws {
-        // `enum {...}` and `map<T>` / `ref<T>` / `embed<T>` are
-        // structured by Phase 3.6 — see the specific tests below. The
-        // remaining deferred form is `variant by ...`, still riding
-        // through salvage until 3.6 closes it out.
-        let source = """
-        :::schema prelude
-        type Maybe : value = variant by kind { yes: { v: str }, no: {} }
-        :::
-        """
-        let result = try LiminalParser().parse(source)
-        #expect(result.sourceText == source)
-
-        guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
-            Issue.record("expected schema block")
-            return
-        }
-        for declaration in schema.declarations {
-            // Each deferred form leaves an empty `.schemaTypeExpression`
-            // wrapper — qnameText/isRecord/isList all false — so lowering
-            // returns nil and the validator falls back to kind-only.
-            let definition = try #require(declaration.definition)
-            #expect(definition.qnameText == nil)
-            #expect(definition.isRecord == false)
-            #expect(definition.isList == false)
-        }
     }
 
     @Test("Phase 3c.2 deferred form inside a record field doesn't shadow as named type")
