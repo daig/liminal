@@ -270,10 +270,18 @@ In-scope and shipped:
 
 Followed by:
 
-- **Phase 3.5 — correctness sweep.** Field separator enforcement
-  for both record parsers; unmatched `<` and chained `??`
-  diagnostics; reserved-name protection elevated to error;
-  `SchemaTypeExpression.unknown` → `.deferred` rename.
+- **Phase 3.5 — correctness sweep** (shipped). Field separator
+  enforcement for both record parsers; unmatched `<` and chained
+  `??` diagnostics; reserved-name protection elevated to error;
+  `SchemaTypeExpression.unknown` → `.deferred` rename; uniform
+  diagnostic phrasing convention.
+- **Phase 3.6 — schema completeness** (shipped). Nested optional
+  TypeExprs preserved through lowering; structural parsing for
+  `enum`, `variant`, `map<T>` / `ref<T>` / `embed<T>`; top-level
+  type modifiers structured on the declaration; `@default` /
+  `@surface` / `@deprecated` argument decoding. `.deferred`
+  becomes the safety-net sentinel for malformed RHS only — no
+  spec-compliant input falls through to it.
 
 ### Phase 4 - Workspace Migration onto the CST
 
@@ -320,28 +328,142 @@ work in Phase 7 needs it sooner.
 
 ### Phase 5 - Printer
 
-Lossless mode:
+Two very different sub-features bundled here. Each can land
+independently; the editor (Phase 7) only strictly needs one of them
+depending on its edit model. Settle on the editor edit model before
+sequencing this phase.
 
-- Walk the CST and concatenate token text.
-- Preserve original trivia, delimiters, source forms, field order, and raw
-  payloads.
+#### 5a - Lossless edit-apply (small)
 
-Canonical mode:
+Status today: `LiminalParseResult.sourceText` already round-trips
+parsed (unmodified) input via Cambium's `root.makeString()`.
 
-- Walk semantic document items.
-- Emit canonical generic typed syntax when no safe surface printer is
-  available.
-- Use registered surfaces only when `parse(print(node)) == node`.
-- Order fields by schema declaration order.
+What's owed:
 
-Canonical printing becomes useful after enough prelude document items lower;
-do not block early parser slices on it.
+- A clear public API for applying edits to a parsed tree and
+  re-emitting source. Two implementation paths:
+  - **Textual** edits (string-level insert/delete at byte offsets)
+    + re-parse. No printer code; the editor owns the text and the
+    parser handles round-trip. Cheapest. Likely sufficient for
+    Phase 7's MVP.
+  - **Structural** edits (replace a subtree with another) via
+    `SharedSyntaxTree.replacing(_:with:context:)` + `makeString()`.
+    Needed for semantic operations that can't be expressed as text
+    diffs (e.g. "rename heading" wants to replace just the heading
+    body inline, preserving `^block-id` suffixes and trivia).
+- A small wrapper / facade so editor consumers don't have to know
+  the internals.
+
+Estimate: ~200–400 LOC + tests. Could land in a single focused
+slice.
+
+#### 5b - Canonical printer foundation
+
+A printer registry that dispatches per `LiminalKind` (or per
+typed-overlay form), plus shared formatting infrastructure
+(indentation context, line-break policy, escape rules).
+
+What's owed:
+
+- A `CanonicalPrinter` (or similar) protocol: `print(_ node:
+  LiminalNode, into context: PrintContext) -> String`.
+- A `PrintContext` carrying current indent depth, ambient list
+  marker style, ambient blockquote depth, etc.
+- Shared escape / quoting helpers for inline text, scalar values,
+  quoted strings.
+- Dispatch tables / switches for each surface kind.
+- An `idempotent` invariant: `parse(canonicalPrint(node))`
+  produces a CST whose `LiminalDocument` lowering equals `node`.
+
+Estimate: ~300–500 LOC + tests for the foundation, before any
+surface printers.
+
+#### 5c–5f - Surface printer slices
+
+Each slice covers one family of surface forms. Total covered:
+
+- **Block surfaces** (~15 rules): paragraph, ATX heading (level
+  + closing markers + block-ID suffix), thematic break,
+  blockquote, ordered/unordered/task lists (with nesting), fenced
+  code block, math block, HTML block, comment block, pipe table
+  (header/delimiter/rows + alignment), structured embed block,
+  wiki embed block, frontmatter (YAML), directive (`::use ...`),
+  schema block, template block.
+- **Inline surfaces** (~18 rules): plain text, soft/hard breaks,
+  code span, escaped punctuation, emphasis (single marker),
+  strong (double marker), strikethrough, highlight, markdown link,
+  markdown image, wikilink, wiki embed, structured embed inline,
+  math inline, HTML inline, comment inline, footnote inline,
+  interpolation, typed inline.
+- **Value surfaces** (~8 rules): scalars (string with escape,
+  integer, number, boolean, null, bare), list, record, reference
+  (local / qualified / external), typed constructor, inline
+  literal, block literal, structured embed value.
+- **Schema RHS** (~8 rules, all structurally lowered after Phase
+  3.6): primitives, qnames, records, lists, optional `T?`, enum,
+  variant, `map<T>` / `ref<T>` / `embed<T>`. Plus modifier
+  printing (`@content` / `@readonly` / arg-carrying forms).
+
+Sequencing options:
+
+- **5c first**: block surfaces — covers the bulk of typical
+  content; many tests via round-trip on existing slice 1–7
+  fixtures.
+- **5d in parallel**: inline surfaces — needed by paragraph
+  printing anyway; can be its own slice or fold into 5c.
+- **5e next**: value + typed-constructor printing — needed by any
+  typed value declaration.
+- **5f last**: schema RHS — only matters if the canonical printer
+  should reformat schemas (a power-user feature). Lossless
+  round-trip via 5a covers schema preservation if 5f is skipped.
+
+Estimate per surface family: ~400–800 LOC + tests. Total Phase 5:
+**~2000–3500 LOC across foundation + surface families**, with
+significant design choices about trivia, style, and schema-ordered
+field reordering.
+
+#### Design questions to settle before starting
+
+These should be decided up front; otherwise mid-implementation
+re-decisions burn context:
+
+1. **Trivia preservation policy.** Does canonical print preserve
+   user-authored whitespace (spaces between fields, blank lines
+   between paragraphs) or normalize it? Hybrid?
+2. **Style options.** Are markers chosen by the printer
+   (e.g. always `*` for unordered lists) or by the lowered model
+   (preserve the original marker via `LiminalNode.source`)? What
+   about heading style (ATX always, no Setext), link style
+   (inline only, no reference-style), etc.?
+3. **Schema-ordered field reordering.** When is the schema
+   loaded? At the print call site, or threaded through the
+   printer context? What if a schema isn't available — preserve
+   source order or alphabetize?
+4. **Edit-apply model.** Textual edits + re-parse, or structural
+   edits via `replacing(_:with:context:)`? Determines whether 5a
+   alone suffices for the editor.
+5. **Canonical print scope for v1.** Does the editor's
+   format-on-save hit every surface, or only the common ones
+   (5c)? Determines whether 5e/5f are v1.
+
+#### Recommendation for first slice
+
+If you want a quick win: **5a (lossless edit-apply)** alone is
+small and unblocks Phase 7's MVP if the editor uses a textual
+edit model.
+
+If you want the full canonical pipeline: start with **5b
+(foundation) + 5c (block surfaces)** as a single slice (~1000
+LOC); 5d/5e/5f land incrementally.
 
 ### Phase 6 - Incremental Reuse Wiring
 
+Performance, not correctness. Reparses with edits demonstrably reuse
+eligible subtrees instead of reparsing from scratch.
+
 Wire `IncrementalParseSession`, `ParseInput`, and `ReuseOracle` into
-`LiminalParseSession`. The existing `edits: [TextEdit]` parameter becomes
-load-bearing here.
+`LiminalParseSession`. The existing `edits: [TextEdit]` parameter on
+`LiminalParseSession.parse(_:edits:)` becomes load-bearing here.
 
 Reusable kinds must be atomic, self-bounded subtrees whose meaning does not
 depend on caller context.
@@ -363,6 +485,9 @@ Good reuse candidates:
 - `mdLink`
 - `mdImage`
 - `codeSpan`
+- `:::schema` block, `:::template` block (whole-block reuse;
+  per-declaration reuse not in scope)
+- `${interpolation}` (self-bounded inline)
 
 Excluded initially:
 
@@ -371,9 +496,20 @@ Excluded initially:
 - `inlineContent`, because the same kind is emitted under headings,
   paragraphs, link labels, and wikilink aliases with diverging stop rules;
   reusing across contexts would silently apply the wrong ones.
+- Schema RHS subtrees inside a `:::schema` block — reuse the whole
+  block instead, since field/declaration boundaries shift on edit.
 
 Reuse boundary decisions are made during parser slices. Phase 6 wires the
 mechanism.
+
+**Estimate**: ~300–600 LOC for the wiring + reuse oracle, plus
+benchmarks demonstrating actual savings on representative edits.
+Mostly mechanical once the design is settled. Could land as one
+slice; the harder part is constructing realistic test corpora to
+measure against.
+
+**Can defer past v1** if Phase 7 doesn't surface perf complaints
+on typical document sizes.
 
 ### Phase 7 - Editor and Semantic Operations
 
@@ -391,6 +527,30 @@ Once a useful subset lowers and indexes, replace the SwiftUI template
   heading.
 - Rendering consumes `LiminalDocument` document items and their renderable
   block subset.
+
+**Edit model decision** (drives Phase 5 sequencing):
+
+- *Textual edits*: editor owns the source string; edits are
+  insert/delete at byte offsets; the parser re-runs on each edit.
+  Phase 5a (lossless edit-apply wrapper) is the only printer
+  prerequisite. Simplest path to a working editor.
+- *Structural edits*: editor manipulates the typed overlay /
+  lowered model directly; edits land via
+  `SharedSyntaxTree.replacing(_:with:context:)`. Requires Phase
+  5a + at least 5b/5c surface printers for any operation that
+  emits text from the lowered model (rename heading, toggle task
+  item, etc.).
+
+The recommended starting point for v1 is textual edits with
+semantic operations layered on top. Operations that don't need to
+emit canonical text (toggle task marker, fold/unfold) work
+without canonical print; operations that do (rename heading) can
+be deferred to a later editor slice.
+
+**Estimate**: hard to size without picking the editor architecture
+first. The MVP (open / render / edit / save with textual edits
+re-parsing) is probably 2–4 weeks of focused work; semantic
+operations layer on top incrementally.
 
 ---
 
@@ -460,19 +620,33 @@ These are no longer open design questions:
   reserved prelude entries (lowered as generic typed-block nodes
   named `if` / `for`). Specialized `LiminalTemplateControl`
   lowering and template execution are explicitly deferred from v1.
-- **Phase 3.5.** Correctness sweep: record-field separators required;
-  unmatched-`<` and chained-`??` diagnostics; reserved-name
-  protection for `if`/`for` elevated to error; `.unknown` → `.deferred`.
+- **Phase 3.5** [satisfied: `9e340c3`–`5b534f2`]. Correctness sweep:
+  record-field separators required; unmatched-`<` and chained-`??`
+  diagnostics; reserved-name protection for `if`/`for` elevated to
+  error; `.unknown` → `.deferred`; uniform diagnostic phrasing
+  convention applied across parsers.
+- **Phase 3.6** [satisfied: `425feba`, `a2ceea7`–`eeb0ebf`]. Schema
+  TypeExpr surface is complete: nested optionals preserved through
+  lowering; `enum`, `variant`, `map<T>` / `ref<T>` / `embed<T>` all
+  parse structurally; top-level type modifiers structured on the
+  declaration; `@default` / `@surface` / `@deprecated` argument
+  decoding lands. `.deferred` becomes the safety-net sentinel for
+  malformed RHS only.
 - **Phase 4** [satisfied: `a128aa2` + `5ab3b73`]. `DocumentIndex` is
   extracted from the CST and exposes sub-token `targetRange` alongside
   containment `sourceRange`; `VaultLinkIndex` builds without ad hoc
   source scanning; block anchors come from CST suffix tokens.
-- **Phase 4.5.** `WikiTarget` distinguishes external URIs from vault-
-  relative paths; markdown destinations and structured embed targets
-  are indexed and route through correct activation policy.
-- **Phase 5.** Lossless print walks real CST tokens; canonical print
-  emits schema-ordered typed syntax for lowered document items.
-- **Phase 6.** Reparses with edits demonstrably reuse eligible subtrees.
+- **Phase 4.5** [satisfied: `636a1d0` + `ea2409a`]. `WikiTarget` carries
+  an `externalURI` field; `LinkActivationPolicy` short-circuits external
+  targets to `.openExternal` so external URLs never flow into
+  `.createNote`; `DocumentIndexBuilder` emits references from markdown
+  link/image destinations and structured embed targets.
+- **Phase 5.** *(Decomposed; see §Phase 5 above.)* 5a: lossless
+  edit-apply wrapper. 5b–5f: canonical print foundation + surface
+  families. Editor MVP needs only 5a if textual edits are chosen.
+- **Phase 6.** Reparses with edits demonstrably reuse eligible
+  subtrees. Performance, not correctness — can defer past v1 if
+  Phase 7 doesn't surface complaints.
 - **Phase 7.** The editor opens, renders, edits, navigates, and indexes
   a real `.lim` document.
 
@@ -582,10 +756,44 @@ Already shipped:
 - **Typed-block nesting fix** (`e9ff413`): `closingFenceLineIndex`
   tracks same-colon-count nesting via `nestedDepth`; the duplicate
   `templateClosingFenceLineIndex` is gone. Phase 2 cleanup.
+- **Phase 3a — prelude + base validator** (`a4b47f4` +
+  `b4f2478` + `c7329fe` + `8bab0a4`): prelude reshaped to match
+  v0.2 §11; `SchemaValidator.validate(_:against:)` runs prelude-
+  shape validation (kind / record-field / @content modifier
+  handling).
+- **Phase 3b** (3b.1–3b.3 + review fixes): structured `:::schema`
+  declaration shells (`14fe6dd`); structured `::use` directive
+  bodies (`7bf83ce`); layered prelude + user-declared + import
+  resolver (`729c24a`); type-import semantics tightening
+  (`0c50eaa`).
+- **Phase 3c** (3c.1–3c.4 + review fixes): structured
+  interpolation expressions (`ec7e6a9` + `1cad03d`); structured
+  schema RHS TypeExpr — primitives / qname / record / list /
+  optional / modifiers (`e3d2fdc` + `c373d51`); template signatures
+  parsed structurally for both `:::template` and `type … :
+  template = …` (`15eef10` + `c5e59b9`); `:::if` / `:::for`
+  resolved through prelude entries (`fd3b2f6`).
+- **Phase 3.5** (correctness sweep): field separators
+  (`9e340c3`); unmatched-`<` diagnostic (`8034683`); chained-`??`
+  diagnostic (`4f6161e`); reserved-name protection
+  (`d1e99d3`); `.unknown` → `.deferred` (`1819a01`); diagnostic
+  phrasing convention (`5b534f2`).
+- **Phase 3.6** (schema completeness): nested optional TypeExprs
+  (`425feba`); enum (`a2ceea7`); map / ref / embed (`e6ce41c`);
+  variant (`393f552`); top-level type modifiers structured
+  (`f95805e`); modifier arg decoding (`7bec273`); `.deferred`
+  documented as safety-net sentinel (`eeb0ebf`).
+- **Phase 4.5**: external-URI policy on `WikiTarget` (`636a1d0`);
+  index markdown links/images and structured embed targets
+  (`ea2409a`).
+- **Templates deferred from v1** (`28d0024`): plan rescope
+  documenting that template execution + specialized lowering are
+  out of v1 scope. Parsing / validation / round-trip all remain.
 
-Next: **Phase 3a — prelude reshape and base schema validator.** Reshape
-`LiminalPrelude.declarations` (`Liminal/Semantics/Schema.swift`) to
-match v0.2 §11, rewrite `LiminalTests/PreludeSchemaTests.swift`, and
-replace the `SchemaValidator.validate(_:against:)` no-op stub with a
-prelude-shape validation pass. Self-contained; no dependencies on later
-sub-arcs.
+Next: **Phase 5 — Printer.** Two sub-features (lossless edit-apply
++ canonical print) of very different scope; see §Phase 5 above for
+the full decomposition. Recommended starting move: settle the
+editor edit-model question (textual vs structural), then either
+(a) ship just 5a (lossless edit-apply) as a single small slice, or
+(b) start the canonical printer arc with 5b (foundation) + 5c
+(block surfaces).
