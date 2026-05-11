@@ -248,19 +248,32 @@ no dependencies on later sub-arcs.
   types. Unresolved typed constructors stay valid CST and produce
   validation diagnostics, never parse errors.
 
-**Phase 3c - Template semantics.** Depends on Phase 3a; can run in
-parallel with 3b.
+**Phase 3c - Template syntax (parsing only).** Depends on Phase 3a;
+can run in parallel with 3b. **Scope clarified: v1 parses, validates,
+and round-trips template syntax. Template *execution* and related
+deep-semantics work are deferred post-v1 (see "Deferred from v1"
+below).**
 
-- Specialize `:::if` and `:::for` lowering: inside a `:::template` body,
-  these typed blocks lower to template-control semantic nodes (not
-  generic typed nodes) per spec §10.
+In-scope and shipped:
+
 - Parse template signatures (`Card(person: Person) -> blocks`)
-  structurally per §10, replacing today's raw `templateText`.
+  structurally per §10, replacing the raw `templateText` payload.
 - Parse interpolation expressions (`${person.name ?? fallback}`) per
-  spec §7.14 grammar (NullCoalesce / Projection / Primary / Literal),
-  replacing today's raw `interpolationText`.
-- Template execution engine consumes all three. May spin out as a
-  Phase 3d depending on scope at that point.
+  spec §7.14 (NullCoalesce / Projection / Primary / Literal),
+  replacing the raw `interpolationText` payload.
+- Resolve `:::if` and `:::for` as reserved prelude types so the
+  validator handles their field shapes and reserved-name
+  redeclaration is an error. The lowered representation is a
+  generic typed-block node with the reserved type name; a
+  specialized `LiminalTemplateControl` variant is **not** part of v1
+  (see deferral note).
+
+Followed by:
+
+- **Phase 3.5 — correctness sweep.** Field separator enforcement
+  for both record parsers; unmatched `<` and chained `??`
+  diagnostics; reserved-name protection elevated to error;
+  `SchemaTypeExpression.unknown` → `.deferred` rename.
 
 ### Phase 4 - Workspace Migration onto the CST
 
@@ -442,9 +455,14 @@ These are no longer open design questions:
 - **Phase 3b.** `:::schema` bodies and `::use` directive bodies parse
   structurally; reference resolution unifies prelude with user-defined
   types.
-- **Phase 3c.** `:::if` / `:::for` lower to template-control semantic
-  nodes; template signatures parse structurally; interpolation
-  expressions parse per §7.14.
+- **Phase 3c (v1 scope).** Template signatures and interpolation
+  expressions parse structurally; `:::if` / `:::for` resolve through
+  reserved prelude entries (lowered as generic typed-block nodes
+  named `if` / `for`). Specialized `LiminalTemplateControl`
+  lowering and template execution are explicitly deferred from v1.
+- **Phase 3.5.** Correctness sweep: record-field separators required;
+  unmatched-`<` and chained-`??` diagnostics; reserved-name
+  protection for `if`/`for` elevated to error; `.unknown` → `.deferred`.
 - **Phase 4** [satisfied: `a128aa2` + `5ab3b73`]. `DocumentIndex` is
   extracted from the CST and exposes sub-token `targetRange` alongside
   containment `sourceRange`; `VaultLinkIndex` builds without ad hoc
@@ -457,6 +475,62 @@ These are no longer open design questions:
 - **Phase 6.** Reparses with edits demonstrably reuse eligible subtrees.
 - **Phase 7.** The editor opens, renders, edits, navigates, and indexes
   a real `.lim` document.
+
+---
+
+## Deferred from v1
+
+Template-related work beyond *parsing and validation* is intentionally
+out of scope for v1. We built the parsing and lowered-model
+infrastructure upfront so future template work can plug in cleanly,
+but no v1 consumer runs templates. The dormant artifacts below stay
+in the codebase because removing them now (only to re-introduce them
+later) costs more than carrying them — they are small, tested, and
+do not constrain other code.
+
+**Dormant lowered-model surface (kept, no v1 consumer)**:
+
+- `LiminalTemplateBlock.parsedSignature: LiminalTemplateSignature?`
+  and the `LiminalTemplateSignature` / `LiminalTemplateParameter` /
+  `LiminalTemplateResult` types in `Liminal/Semantics/Model.swift`.
+- `LiminalUserSchemaTypeDeclaration.templateSignature`.
+- `lowerTemplateSignature` in `Liminal/Semantics/Pipeline.swift`.
+
+**Explicitly deferred work** (no commitment to ever ship):
+
+- **Template execution engine.** Evaluating `:::template Card(p:
+  Person) -> blocks` against an actual value of type `Person` and
+  producing the rendered blocks.
+- **Specialized `LiminalTemplateControl.if/.for` lowered variants.**
+  The plan originally called for these in Phase 3c; v1 instead uses
+  the generic typed-block representation with reserved prelude
+  entries (Indep-4 resolution). When (if) template execution lands,
+  the specialized variants land alongside it where a concrete
+  consumer can inform the variant shape.
+- **Template invocation validation.** Validating `@PersonCard{p:
+  ada}` against the declared signature.
+- **Field-value template-expression parsing.** `:::if{test:
+  person.bio}` captures `person.bio` as a bare scalar today; lowering
+  it as a parsed §7.14 template expression is deferred.
+- **Deferred TypeExpr forms inside schemas.** `map<T>` / `ref<T>` /
+  `embed<T>` / `enum {…}` / `variant by …` parse to the `.deferred`
+  sentinel; structural lowering of these forms is a separate
+  schema-completeness slice, not coupled to template execution.
+
+**What v1 *does* support for templates**:
+
+- Byte-accurate parse and round-trip of `:::template`, `:::if`,
+  `:::for`, `::use`, `${…}`, and `type … : template = …`.
+- Validation through reserved prelude entries (`:::if{test: …}`
+  flags missing fields, unknown fields, kind mismatches).
+- Reserved-name protection: user redeclaration of `if` / `for` is
+  an error.
+- Structured access to template signatures via the typed overlay
+  and lowered model for any future consumer.
+
+If templates re-enter v1 scope, the path back in is "build the
+executor against the existing lowered surface" rather than "redo
+the parser." That's the whole point of the deferral shape.
 
 ---
 
