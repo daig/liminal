@@ -414,18 +414,32 @@ struct WorkspaceLinkingTests {
         #expect(index.blockOffsets.count == 3)
     }
 
-    @Test("structured embeds are not indexed but fallback references are")
-    func structuredEmbedsAreNotIndexedButFallbackReferencesAre() throws {
-        #expect(try indexedTargets(in: "Paragraph !{Image}[Cover](cover.png)\n") == [])
+    @Test("Phase 4.5 indexer emits references for structured embed targets and their fallback content")
+    func phase45IndexerEmitsStructuredEmbedAndFallbackReferences() throws {
+        // `!{Type}[fallback](target)` — the navigation reference is the
+        // parenthesised target, not the type qname. Pre-4.5 the indexer
+        // walked only the fallback content; the target token was
+        // ignored. Now it emits a kind-.embed reference for the target
+        // and still walks the fallback for wikilinks inside.
+        #expect(
+            try indexedTargets(in: "Paragraph !{Image}[Cover](cover.png)\n") == [
+                "cover.png"
+            ]
+        )
         #expect(
             try indexedTargets(in: "Paragraph !{Image}[See [[Other]] for context](cover.png)\n") == [
+                "cover.png",
                 "Other"
             ]
         )
-
-        #expect(try indexedTargets(in: "!{Image}[Cover](cover.png)\n") == [])
+        #expect(
+            try indexedTargets(in: "!{Image}[Cover](cover.png)\n") == [
+                "cover.png"
+            ]
+        )
         #expect(
             try indexedTargets(in: "!{Image}[See [[Other]] for context](cover.png)\n") == [
+                "cover.png",
                 "Other"
             ]
         )
@@ -599,6 +613,49 @@ struct WorkspaceLinkingTests {
                 resolution: expectation.resolution
             ) == expectation.decision
         )
+    }
+
+    @Test("Phase 4.5 indexer emits markdown link references with kind .link")
+    func phase45IndexerEmitsMarkdownLinkReferences() throws {
+        let source = "See [Site](https://example.org) and [Note](Folder/Note#Section).\n"
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        let links = index.references.filter { $0.kind == .link }
+        #expect(links.count == 2)
+
+        let external = try #require(links.first { $0.target.isExternal })
+        #expect(external.target.externalURI == "https://example.org")
+        #expect(external.alias == "Site")
+
+        let vault = try #require(links.first { !$0.target.isExternal })
+        #expect(vault.target.notePath == "Folder/Note")
+        #expect(vault.target.heading == "Section")
+        #expect(vault.alias == "Note")
+    }
+
+    @Test("Phase 4.5 indexer emits markdown image references with kind .embed")
+    func phase45IndexerEmitsMarkdownImageReferences() throws {
+        let source = "Header ![Alt text](cover.png) and ![Remote](https://example.org/img.png).\n"
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        let embeds = index.references.filter { $0.kind == .embed }
+        #expect(embeds.map(\.target.rawTargetString).sorted() == [
+            "cover.png",
+            "https://example.org/img.png"
+        ])
+        // External image still resolves to external for activation.
+        let remote = try #require(embeds.first { $0.target.isExternal })
+        #expect(remote.alias == "Remote")
+    }
+
+    @Test("Phase 4.5 indexer drops references with empty destinations")
+    func phase45IndexerDropsEmptyDestinationReferences() throws {
+        let source = "Empty link [label]() and image ![alt]().\n"
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+        #expect(index.references.isEmpty)
     }
 
     @Test("backlink activation opens the source note at the reference offset")
