@@ -813,4 +813,130 @@ struct SchemaValidatorTests {
             diag.message.contains("'if'")
         })
     }
+
+    @Test("Phase 3.6 nested optional list element accepts null")
+    func phase36NestedOptionalListElementAcceptsNull() throws {
+        // Sanity construction: declare a record whose list field has an
+        // optional element type, then feed it a list containing a null.
+        // The validator must accept that — previously `[str?]` lowered
+        // as `.list(.str)` and the null was rejected.
+        let listField = SchemaField(
+            name: "tags",
+            type: .list(.optional(.str))
+        )
+        let declaration = SchemaTypeDeclaration(
+            name: "Item",
+            kind: .value,
+            definition: .record([listField])
+        )
+        let schema = LiminalSchema(name: "test", types: [declaration])
+
+        let document = LiminalDocument(items: [
+            .value(LiminalNode(
+                kind: .value,
+                type: "Item",
+                fields: [
+                    LiminalField(
+                        name: "tags",
+                        value: .list([
+                            .scalar(.string("a")),
+                            .scalar(.null),
+                            .scalar(.string("b"))
+                        ])
+                    )
+                ]
+            ))
+        ])
+
+        let validated = SchemaValidator().validate(document, against: schema)
+        let added = Array(validated.diagnostics.dropFirst(document.diagnostics.count))
+        #expect(added.allSatisfy {
+            !$0.message.contains("wrong shape")
+        })
+    }
+
+    @Test("Phase 3.6 nested optional list rejects null when type is not optional")
+    func phase36NestedOptionalListRejectsNullWithoutOptional() throws {
+        // Counter-check: `[str]` (no inner optional) still rejects null
+        // list elements — we only added permissiveness for `.optional(T)`.
+        let listField = SchemaField(name: "tags", type: .list(.str))
+        let declaration = SchemaTypeDeclaration(
+            name: "Item",
+            kind: .value,
+            definition: .record([listField])
+        )
+        let schema = LiminalSchema(name: "test", types: [declaration])
+
+        let document = LiminalDocument(items: [
+            .value(LiminalNode(
+                kind: .value,
+                type: "Item",
+                fields: [
+                    LiminalField(
+                        name: "tags",
+                        value: .list([
+                            .scalar(.string("a")),
+                            .scalar(.null)
+                        ])
+                    )
+                ]
+            ))
+        ])
+
+        let validated = SchemaValidator().validate(document, against: schema)
+        #expect(validated.diagnostics.contains { diag in
+            diag.severity == .error &&
+            diag.message.contains("wrong shape")
+        })
+    }
+
+    @Test("Phase 3.6 lowerer preserves nested optional in list element types")
+    func phase36LowererPreservesNestedOptionalInList() throws {
+        // Drive the lowerer end-to-end: `tags: [str?]` in a user schema
+        // must lower as `.list(.optional(.str))`, not `.list(.str)`.
+        let source = """
+        :::schema prelude
+        type Item : value = { tags: [str?] }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        guard case .schema(let block) = document.items.first,
+              let declaration = block.declarations.first,
+              case .record(let fields) = declaration.definition
+        else {
+            Issue.record("expected lowered user-declared record")
+            return
+        }
+
+        let tags = try #require(fields.first { $0.name.rawValue == "tags" })
+        #expect(tags.type == .list(.optional(.str)))
+        #expect(tags.isOptional == false)
+    }
+
+    @Test("Phase 3.6 lowerer hoists outer optional into SchemaField.isOptional")
+    func phase36LowererHoistsOuterOptional() throws {
+        // Backward-compat at the field boundary: `field: str?` continues
+        // to lower with `isOptional: true` and `type: .str` (the outer
+        // `.optional` wrapper is peeled into the field flag).
+        let source = """
+        :::schema prelude
+        type Person : value = { nick: str? }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        guard case .schema(let block) = document.items.first,
+              let declaration = block.declarations.first,
+              case .record(let fields) = declaration.definition
+        else {
+            Issue.record("expected lowered user-declared record")
+            return
+        }
+        let nick = try #require(fields.first { $0.name.rawValue == "nick" })
+        #expect(nick.type == .str)
+        #expect(nick.isOptional == true)
+    }
 }

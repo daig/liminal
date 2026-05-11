@@ -146,6 +146,20 @@ public struct LiminalLowerer: Sendable {
     private func lowerSchemaTypeExpression(
         _ syntax: SchemaTypeExpressionSyntax
     ) -> SchemaTypeExpression? {
+        guard let raw = lowerRawSchemaTypeExpression(syntax) else {
+            return nil
+        }
+        // 3.6: surface trailing `?` as a structural `.optional` wrapper
+        // so nested positions (`[str?]`, `map<int?>`) preserve the
+        // marker. At the field-value boundary the outer wrapper is
+        // hoisted into `SchemaField.isOptional` by `lowerSchemaField`,
+        // keeping the existing field-level optional semantics intact.
+        return syntax.isOptional ? .optional(raw) : raw
+    }
+
+    private func lowerRawSchemaTypeExpression(
+        _ syntax: SchemaTypeExpressionSyntax
+    ) -> SchemaTypeExpression? {
         if syntax.isList {
             // List type — recurse into the element type.
             guard let elementSyntax = syntax.listElementType else {
@@ -174,8 +188,17 @@ public struct LiminalLowerer: Sendable {
         // shape checks for them while still honouring presence and
         // optionality. Without this, a field declared as `tags: map<str>`
         // would degrade to `.str` and reject every valid value.
-        let valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
+        var valueType = valueTypeSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
         let typeLevelOptional = valueTypeSyntax?.isOptional ?? false
+        // 3.6: lowerSchemaTypeExpression wraps the result in `.optional`
+        // when the type expression ends in `?`. At the field-value
+        // boundary we hoist that one level into `isOptional` so the
+        // existing field-level semantics still apply — nested optional
+        // wrappers (`[str?]`) stay in place because their `?` was
+        // consumed by inner wrappers, not the outer field-value one.
+        if case .optional(let inner) = valueType {
+            valueType = inner
+        }
         let modifiers = syntax.modifiers.compactMap(lowerSchemaModifier)
         return SchemaField(
             name: FieldName(syntax.fieldNameText),
@@ -208,7 +231,13 @@ public struct LiminalLowerer: Sendable {
         guard let name = syntax.qnameText else { return nil }
         let parameters = syntax.parameters.map { paramSyntax in
             let typeSyntax = paramSyntax.valueType
-            let type = typeSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
+            var type = typeSyntax.flatMap(lowerSchemaTypeExpression) ?? .deferred
+            // 3.6: peel the outer `.optional` wrapper at the param
+            // boundary so the existing `isOptional` flag carries the
+            // signal (mirrors `lowerSchemaField`).
+            if case .optional(let inner) = type {
+                type = inner
+            }
             return LiminalTemplateParameter(
                 name: paramSyntax.nameText,
                 type: type,

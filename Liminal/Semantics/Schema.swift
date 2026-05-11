@@ -66,6 +66,13 @@ public indirect enum SchemaTypeExpression: Equatable, Sendable {
     /// `isOptional` are still enforced. Removed when those forms gain
     /// structural parsers.
     case deferred
+    /// Type-level optionality wrapper for nested positions (`[str?]`,
+    /// `map<int?>`, etc.). At the outer field-value position the
+    /// wrapper is hoisted into `SchemaField.isOptional` so the existing
+    /// field-level "required vs nullable" semantics still apply; the
+    /// wrapper remains in place for nested positions so the validator
+    /// can accept null elements inside containers.
+    case optional(SchemaTypeExpression)
 }
 
 public struct SchemaField: Equatable, Sendable {
@@ -820,6 +827,17 @@ public struct SchemaValidator: Sendable {
             // sentinel retires when variant/enum/map/ref/embed gain
             // structural parsers.
             return true
+        }
+        if case .optional(let inner) = type {
+            // Nested optional positions (`[str?]`, `map<int?>`, …).
+            // Null is always acceptable; non-null values match against
+            // the inner type. At the field boundary, the outer
+            // `.optional` wrapper is hoisted into `isOptional`, so
+            // matched values never include the field-level null path.
+            if isNull(value) {
+                return true
+            }
+            return valueMatches(value, type: inner)
         }
         switch (value, type) {
         case (.scalar(let scalar), let primitive):
