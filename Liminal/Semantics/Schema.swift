@@ -59,12 +59,17 @@ public indirect enum SchemaTypeExpression: Equatable, Sendable {
     case enumeration([String])
     case record([SchemaField])
     case variant(discriminator: FieldName, cases: [SchemaVariantCase])
-    /// Sentinel for type expressions the parser/lowerer hasn't
-    /// structured yet — currently `map<T>`, `ref<T>`, `embed<T>`,
-    /// `enum {…}`, and `variant by … {…}`. The validator treats
-    /// `.deferred` as "skip type-shape validation"; field presence and
-    /// `isOptional` are still enforced. Removed when those forms gain
-    /// structural parsers.
+    /// Safety-net sentinel for type expressions the parser couldn't
+    /// classify — reached only when the CST wrapper has none of the
+    /// structured shapes (no qname / record / list / enum / variant /
+    /// `map<T>` / `ref<T>` / `embed<T>`). The validator treats
+    /// `.deferred` as "skip type-shape validation"; field presence
+    /// and `isOptional` are still enforced. Originally introduced as
+    /// a placeholder while the deferred TypeExpr forms were unstructured
+    /// (3c.2 era); after Phase 3.6 every spec-compliant form parses
+    /// structurally, so the sentinel only fires for malformed RHS
+    /// (a separate parser diagnostic already surfaces the underlying
+    /// problem).
     case deferred
     /// Type-level optionality wrapper for nested positions (`[str?]`,
     /// `map<int?>`, etc.). At the outer field-value position the
