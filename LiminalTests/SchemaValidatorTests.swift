@@ -969,6 +969,41 @@ struct SchemaValidatorTests {
         #expect(declaration.definition == .enumeration(["red", "green", "blue"]))
     }
 
+    @Test("Phase 3.6 modifier argument decoding maps scalars/idents/quoted strings")
+    func phase36ModifierArgumentDecoding() throws {
+        let source = """
+        :::schema prelude
+        type Item : value = {
+          n: int @default(42)
+          ratio: num @default(1.5)
+          mode: str @default("dark")
+          enabled: bool @default(true)
+          tag: str @surface(category)
+          legacy: str @deprecated("renamed")
+        }
+        :::
+        """
+        let parsed = try LiminalParser().parse(source)
+        let document = LiminalLowerer().lower(parsed)
+
+        guard case .schema(let block) = document.items.first,
+              let declaration = block.declarations.first,
+              case .record(let fields) = declaration.definition
+        else {
+            Issue.record("expected lowered record declaration")
+            return
+        }
+        let modsByField = Dictionary(uniqueKeysWithValues: fields.map {
+            ($0.name.rawValue, $0.modifiers)
+        })
+        #expect(modsByField["n"]?.contains(.defaultValue(.scalar(.integer("42")))) == true)
+        #expect(modsByField["ratio"]?.contains(.defaultValue(.scalar(.number("1.5")))) == true)
+        #expect(modsByField["mode"]?.contains(.defaultValue(.scalar(.string("dark")))) == true)
+        #expect(modsByField["enabled"]?.contains(.defaultValue(.scalar(.boolean(true)))) == true)
+        #expect(modsByField["tag"]?.contains(.surface("category")) == true)
+        #expect(modsByField["legacy"]?.contains(.deprecated("renamed")) == true)
+    }
+
     @Test("Phase 3.6 top-level type modifiers structure on the declaration")
     func phase36TopLevelTypeModifiersStructure() throws {
         let source = """
@@ -987,12 +1022,10 @@ struct SchemaValidatorTests {
         }
         // The structured RHS still lowers cleanly.
         #expect(declaration.definition == .str)
-        // `@readonly` decodes; `@deprecated("old")` will decode in
-        // the next slice (G4 modifier arg semantics) — for now the
-        // arg-carrying modifier still appears in the typed-overlay
-        // CST modifier list, but `lowerSchemaModifier` returns nil
-        // for it so it doesn't surface in the lowered modifiers.
+        // Both modifiers decode now: `@readonly` (no-arg) and
+        // `@deprecated("old")` (quoted-string arg).
         #expect(declaration.modifiers.contains(.readonly))
+        #expect(declaration.modifiers.contains(.deprecated("old")))
 
         // rhsText still preserves the original bytes including
         // the trailing modifier text.

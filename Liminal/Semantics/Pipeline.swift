@@ -245,17 +245,89 @@ public struct LiminalLowerer: Sendable {
     }
 
     private func lowerSchemaModifier(_ syntax: SchemaModifierSyntax) -> SchemaModifier? {
-        // Phase 3c.2 only resolves the no-arg modifiers semantically. Args
-        // for `@default` / `@surface` / `@deprecated` are captured in the
-        // CST as raw text and decoded in a follow-up slice.
+        // Phase 3.6 (G4): decode the arg-carrying modifiers
+        // (`@default`, `@surface`, `@deprecated`) into their respective
+        // `SchemaModifier` cases. `@default` accepts the simple scalar
+        // value grammar (literal / quoted-string / bare / boolean /
+        // null); record / list / typed-constructor defaults remain
+        // undecoded (return nil so the modifier doesn't surface in a
+        // half-broken state).
         switch syntax.modifierName {
         case "content":
             return .content
         case "readonly":
             return .readonly
+        case "default":
+            guard let raw = syntax.argumentsText,
+                  let value = decodeSchemaModifierScalar(raw)
+            else {
+                return nil
+            }
+            return .defaultValue(value)
+        case "surface":
+            guard let raw = syntax.argumentsText else { return nil }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : .surface(trimmed)
+        case "deprecated":
+            guard let raw = syntax.argumentsText else { return nil }
+            return .deprecated(decodeSchemaModifierString(raw))
         default:
             return nil
         }
+    }
+
+    /// Phase 3.6 (G4): decode the scalar value form of a `@default(...)`
+    /// argument. Recognises quoted strings, booleans, null, ASCII
+    /// integers and decimals, falling back to a bare scalar. Returns
+    /// nil for inputs that don't fit any of those — record / list /
+    /// typed-constructor defaults stay undecoded for now.
+    private func decodeSchemaModifierScalar(_ raw: String) -> LiminalValue? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.hasPrefix("\""), trimmed.hasSuffix("\""), trimmed.count >= 2 {
+            let inner = String(trimmed.dropFirst().dropLast())
+            return .scalar(.string(inner))
+        }
+        if trimmed == "true" { return .scalar(.boolean(true)) }
+        if trimmed == "false" { return .scalar(.boolean(false)) }
+        if trimmed == "null" { return .scalar(.null) }
+
+        // Numbers — integer if no decimal/exponent, number otherwise.
+        if !trimmed.isEmpty,
+           trimmed.allSatisfy({ isAsciiDigit($0) || $0 == "-" })
+        {
+            return .scalar(.integer(trimmed))
+        }
+        if Double(trimmed) != nil,
+           trimmed.contains(where: { $0 == "." || $0 == "e" || $0 == "E" })
+        {
+            return .scalar(.number(trimmed))
+        }
+
+        // Record / list / typed constructor — deferred. Returning nil
+        // surfaces as "no decoded modifier" so the validator doesn't
+        // act on partial info.
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") || trimmed.hasPrefix("@") {
+            return nil
+        }
+        return .scalar(.bare(trimmed))
+    }
+
+    /// Phase 3.6 (G4): decode a quoted-string modifier argument like
+    /// `@deprecated("old")` or `@surface("Bar")`. Strips surrounding
+    /// quotes when present, falls back to trimmed text otherwise.
+    private func decodeSchemaModifierString(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("\""), trimmed.hasSuffix("\""), trimmed.count >= 2 else {
+            return trimmed
+        }
+        return String(trimmed.dropFirst().dropLast())
+    }
+
+    private func isAsciiDigit(_ character: Character) -> Bool {
+        guard let value = character.asciiValue else { return false }
+        return value >= 48 && value <= 57
     }
 
     private func lowerTemplateSignature(
