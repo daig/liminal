@@ -178,6 +178,54 @@ struct IncrementalReuseTests {
 
     // MARK: - Counter exposure
 
+    // MARK: - Regression: paragraph reuse must not splice past paragraph end
+
+    @Test("appending newlines to a paragraph at EOF does not splice a stale paragraph")
+    func appendingNewlinesAtEOF() throws {
+        // Reproduces the Phase 7 typing crash. Sequence: type "Hello",
+        // press Enter, press Enter. The old paragraph "Hello" had no
+        // trailing newline (byte length 5). Reuse must reject the
+        // stale candidate when the new source has appended a newline
+        // that the parser would now consider part of the paragraph.
+        let session = LiminalParseSession()
+        _ = try session.parse("Hello")
+
+        let edit1 = TextEdit(
+            range: TextRange(start: TextSize(UInt32(5)), length: TextSize(UInt32(0))),
+            replacement: "\n"
+        )
+        let r1 = try session.parse("Hello\n", edits: [edit1])
+        #expect(r1.sourceText == "Hello\n")
+        #expect(r1.tree.withRoot { $0.makeString() } == "Hello\n")
+
+        let edit2 = TextEdit(
+            range: TextRange(start: TextSize(UInt32(6)), length: TextSize(UInt32(0))),
+            replacement: "\n"
+        )
+        let r2 = try session.parse("Hello\n\n", edits: [edit2])
+        #expect(r2.sourceText == "Hello\n\n")
+        #expect(r2.tree.withRoot { $0.makeString() } == "Hello\n\n")
+    }
+
+    @Test("appending a continuation line to a single-line paragraph re-parses fresh")
+    func paragraphContinuationLineRejectsReuse() throws {
+        // "World\n" parsed alone is a paragraph of length 6. After
+        // appending "!", the spec says "World\n!" is ONE paragraph
+        // (two lines joined by a soft break). Splicing the old
+        // length-6 candidate would produce two paragraphs — wrong.
+        // The context-sensitive boundary guard must reject.
+        let session = LiminalParseSession()
+        _ = try session.parse("World\n")
+
+        let edit = TextEdit(
+            range: TextRange(start: TextSize(UInt32(6)), length: TextSize(UInt32(0))),
+            replacement: "!"
+        )
+        let result = try session.parse("World\n!", edits: [edit])
+        #expect(result.sourceText == "World\n!")
+        #expect(result.tree.withRoot { $0.makeString() } == "World\n!")
+    }
+
     @Test("lastReuseSummary reflects the most recent parse")
     func lastReuseSummaryReflectsMostRecentParse() throws {
         let session = LiminalParseSession()

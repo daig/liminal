@@ -100,6 +100,28 @@ struct LiminalCSTParser {
             let reusedRange = cursor.textRange
             let reusedByteLen = Int(reusedRange.length.rawValue)
 
+            // Line-boundary guard (necessary for all kinds). Block reuse
+            // splices must end on a line boundary (or at EOF) in the new
+            // source — the parser's cursor is line-based, and a mid-line
+            // splice would leave the rest of the line unparsed.
+            guard let nextLineIndex = lineIndexAfterReusedBytes(reusedByteLen) else {
+                return false
+            }
+
+            // Context-sensitive boundary guard (paragraph + pipeTable).
+            // These kinds have boundaries that depend on what follows, not
+            // on an explicit terminator. The parser determines their end by
+            // asking `startsDocumentItem(at:)` at each following line. If
+            // the candidate ended where the parser's own boundary-detection
+            // would NOT have stopped, splicing produces a structurally-wrong
+            // tree (e.g. a single paragraph becomes two). Reuse the parser's
+            // existing predicate to keep the two paths in sync.
+            if kind == .paragraph || kind == .pipeTable {
+                if nextLineIndex < lines.count, !startsDocumentItem(at: nextLineIndex) {
+                    return false
+                }
+            }
+
             // Text alignment guard. Cambium's oracle filters candidates whose
             // old range overlaps a reported edit, but it can't verify bytes
             // match when the caller supplies edits that don't actually cover
@@ -114,7 +136,7 @@ struct LiminalCSTParser {
             let oldPath = cursor.childIndexPath()
             let greenNode = cursor.green { $0 }
 
-            advancePastBytes(reusedByteLen)
+            currentLineIndex = nextLineIndex
 
             if case .direct = reuseOutcome {
                 acceptedReuses.append(LiminalAcceptedReuse(
@@ -126,6 +148,27 @@ struct LiminalCSTParser {
             return true
         }
         return outcome ?? false
+    }
+
+    /// If splicing a subtree of `byteCount` bytes from the current line's
+    /// start in the new source lands on a valid block boundary (a later
+    /// line's start, or exactly at end-of-source), return the line index
+    /// just past the splice. Otherwise return nil — the splice would leave
+    /// the parser mid-line.
+    private func lineIndexAfterReusedBytes(_ byteCount: Int) -> Int? {
+        guard currentLineIndex < lines.count else { return nil }
+        let target = lines[currentLineIndex].startByteOffset + byteCount
+        let sourceEndByte = baseByteOffset + source.utf8.count
+        if target == sourceEndByte { return lines.count }
+        if target > sourceEndByte { return nil }
+        var i = currentLineIndex + 1
+        while i < lines.count && lines[i].startByteOffset < target {
+            i += 1
+        }
+        if i < lines.count && lines[i].startByteOffset == target {
+            return i
+        }
+        return nil
     }
 
     /// Compare the cursor's old-tree bytes against the new source's bytes
@@ -175,26 +218,6 @@ struct LiminalCSTParser {
             shift += edit.replacementUTF8.count - oldLen
         }
         return newOffset - shift
-    }
-
-    /// Advance `currentLineIndex` past the next `byteCount` bytes from the
-    /// current line's start. Asserts the landing position is a line
-    /// boundary — if it isn't, the kind being reused doesn't actually align
-    /// to line boundaries and the candidate list at the top of the file is
-    /// wrong for that kind.
-    private mutating func advancePastBytes(_ byteCount: Int) {
-        let target = lines[currentLineIndex].startByteOffset + byteCount
-        var i = currentLineIndex + 1
-        while i < lines.count && lines[i].startByteOffset < target {
-            i += 1
-        }
-        if i < lines.count {
-            assert(
-                lines[i].startByteOffset == target,
-                "Reused subtree did not end on a line boundary — kind is misclassified for reuse."
-            )
-        }
-        currentLineIndex = i
     }
 
     /// Walk a reused subtree's cursor looking for `.missing` / `.error`
