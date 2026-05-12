@@ -9,19 +9,30 @@ import Foundation
 /// `utf16.distance` walks that previously dominated the highlight pass
 /// on large docs (each conversion was O(position-in-doc); applying N
 /// spans was O(N²/2)).
+///
+/// When the source up through the covered range is pure ASCII —
+/// every byte `< 0x80` — UTF-8 byte offsets equal UTF-16 unit offsets
+/// identically and the map stores no table at all, synthesizing
+/// answers at lookup time. The detection scan is O(coverage) over the
+/// raw byte buffer (SIMD-friendly, ~1 ns/byte), so even when it
+/// falls through to the scalar walk the overhead is negligible.
 struct OffsetMap {
-    /// `table[i]` is the UTF-16 offset corresponding to UTF-8 byte
-    /// offset `byteBase + i`. Continuation bytes inside a multi-byte
-    /// scalar share the scalar's UTF-16 offset. Size is
-    /// `coveredByteCount + 1` so that the end of the covered range is
-    /// a valid lookup.
-    private let table: [Int]
-    /// First byte offset (in source coordinates) covered by `table`.
-    /// `0` for the full-source build; the scope's start byte for the
-    /// scoped build.
-    private let byteBase: Int
+    private enum Storage {
+        /// Source up through the covered range is pure ASCII. UTF-16
+        /// offset equals byte offset at every position; no table
+        /// needed.
+        case ascii(byteBase: Int, coveredByteCount: Int)
+        /// Mixed content. `table[i]` is the UTF-16 offset
+        /// corresponding to UTF-8 byte offset `byteBase + i`.
+        /// Continuation bytes inside a multi-byte scalar share the
+        /// scalar's UTF-16 offset. Size is `coveredByteCount + 1` so
+        /// that the end of the covered range is a valid lookup.
+        case scalarTable(table: [Int], byteBase: Int)
+    }
+    private let storage: Storage
 
-    /// Full-source map. O(source byte count) build + memory.
+    /// Full-source map. O(source byte count) build + memory (or O(1)
+    /// memory on the ASCII fast path).
     init(source: String) {
         self.init(source: source, byteRange: nil)
     }
@@ -29,13 +40,13 @@ struct OffsetMap {
     /// Scope-local map covering only `byteRange`, anchored at the
     /// correct absolute UTF-16 offset.
     ///
-    /// `byteRange` is in source coordinates. The build walks unicode
-    /// scalars from source byte 0 up to `byteRange.lowerBound` to find
-    /// that point's absolute UTF-16 offset (counter-only, no
-    /// allocation), then fills the table for bytes in `byteRange`
-    /// (allocates O(byteRange length) + 1 entries). Useful when the
-    /// caller only needs UTF-16 conversion for a small contiguous
-    /// region — the per-keystroke highlight scope, for instance.
+    /// `byteRange` is in source coordinates. On the slow path the
+    /// build walks unicode scalars from source byte 0 up to
+    /// `byteRange.lowerBound` to find that point's absolute UTF-16
+    /// offset (counter-only, no allocation), then fills the table for
+    /// bytes in `byteRange` (allocates O(byteRange length) + 1
+    /// entries). On the ASCII fast path the byte offset *is* the
+    /// UTF-16 offset, so no walk and no allocation.
     ///
     /// `byteRange.lowerBound` must land on a Unicode-scalar boundary;
     /// otherwise the lookup is meaningless. (Liminal scope boundaries
@@ -54,6 +65,19 @@ struct OffsetMap {
         } else {
             lower = 0
             upper = totalBytes
+        }
+
+        // ASCII fast path. UTF-16 offsets only equal byte offsets when
+        // every preceding byte is ASCII, so the scan must cover
+        // `[0, upper)`, not just the requested byteRange. Single
+        // linear sweep, SIMD-friendly on contiguous UTF-8 storage; for
+        // non-contiguous strings (NSString-bridged) we fall through.
+        let asciiPrefix = source.utf8.withContiguousStorageIfAvailable { bytes -> Bool in
+            !bytes[0..<upper].contains { $0 >= 0x80 }
+        } ?? false
+        if asciiPrefix {
+            self.storage = .ascii(byteBase: lower, coveredByteCount: upper - lower)
+            return
         }
 
         var table: [Int] = []
@@ -94,14 +118,20 @@ struct OffsetMap {
         // range yields the right UTF-16 offset.
         table.append(utf16Position)
 
-        self.table = table
-        self.byteBase = lower
+        self.storage = .scalarTable(table: table, byteBase: lower)
     }
 
     /// Number of source bytes this map covers. For the full-source
     /// build this equals the source's UTF-8 byte count; for a scoped
     /// build it equals the scope's byte length.
-    var coveredByteCount: Int { table.count - 1 }
+    var coveredByteCount: Int {
+        switch storage {
+        case .ascii(_, let count):
+            return count
+        case .scalarTable(let table, _):
+            return table.count - 1
+        }
+    }
 
     /// Convert a UTF-8 byte range `[start, start + length)` to an
     /// `NSRange` in UTF-16 coordinates. Returns nil for ranges that
@@ -109,14 +139,25 @@ struct OffsetMap {
     func nsRange(forByteStart start: UInt32, length: UInt32) -> NSRange? {
         let startByte = Int(start)
         let endByte = startByte + Int(length)
-        guard startByte >= byteBase,
-              endByte >= startByte,
-              endByte <= byteBase + (table.count - 1)
-        else {
-            return nil
+        switch storage {
+        case .ascii(let byteBase, let count):
+            guard startByte >= byteBase,
+                  endByte >= startByte,
+                  endByte <= byteBase + count
+            else {
+                return nil
+            }
+            return NSRange(location: startByte, length: Int(length))
+        case .scalarTable(let table, let byteBase):
+            guard startByte >= byteBase,
+                  endByte >= startByte,
+                  endByte <= byteBase + (table.count - 1)
+            else {
+                return nil
+            }
+            let startUTF16 = table[startByte - byteBase]
+            let endUTF16 = table[endByte - byteBase]
+            return NSRange(location: startUTF16, length: endUTF16 - startUTF16)
         }
-        let startUTF16 = table[startByte - byteBase]
-        let endUTF16 = table[endByte - byteBase]
-        return NSRange(location: startUTF16, length: endUTF16 - startUTF16)
     }
 }
