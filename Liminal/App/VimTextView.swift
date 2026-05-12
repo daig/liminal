@@ -74,7 +74,15 @@ extension VimKey {
             return
         }
 
-        self.init(payload: .character(character), modifiers: modifiers)
+        // Shift is already encoded in the character ("A" vs "a", "$" vs "4")
+        // for printable keys, so dropping it here keeps bindings simple —
+        // `.char("$")` matches Shift+4 without callers having to write
+        // `.char("$", modifiers: [.shift])`. Shift stays meaningful on
+        // special keys (e.g. <S-Tab>) where it's not folded into the
+        // character payload.
+        var charModifiers = modifiers
+        charModifiers.remove(.shift)
+        self.init(payload: .character(character), modifiers: charModifiers)
     }
 
     private static func specialKey(forKeyCode keyCode: UInt16) -> SpecialKey? {

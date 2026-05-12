@@ -33,7 +33,7 @@ struct VimControllerTests {
         c.delegate = spy
 
         _ = c.handle(.char("h"))
-        #expect(spy.moveCursorCalls == [.init(direction: .left, count: 1)])
+        #expect(spy.moveCursorCalls == [.init(motion: .left, count: 1)])
     }
 
     @Test("3 h dispatches with count 3")
@@ -45,7 +45,7 @@ struct VimControllerTests {
         _ = c.handle(.char("3"))
         #expect(c.pendingCount == 3)
         _ = c.handle(.char("h"))
-        #expect(spy.moveCursorCalls == [.init(direction: .left, count: 3)])
+        #expect(spy.moveCursorCalls == [.init(motion: .left, count: 3)])
         #expect(c.pendingCount == nil)
     }
 
@@ -58,7 +58,7 @@ struct VimControllerTests {
         _ = c.handle(.char("1"))
         _ = c.handle(.char("2"))
         _ = c.handle(.char("h"))
-        #expect(spy.moveCursorCalls == [.init(direction: .left, count: 12)])
+        #expect(spy.moveCursorCalls == [.init(motion: .left, count: 12)])
     }
 
     @Test("Space + t dispatches toggleTaskAtCursor")
@@ -216,12 +216,119 @@ struct VimControllerTests {
         _ = c.handle(.char("z")) // not a continuation; clears
         #expect(c.visibleHintSnapshot == nil)
     }
+
+    // MARK: - Tier A: line / word / document motion
+
+    @Test("0 dispatches lineStart motion")
+    func zeroLineStart() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("0"))
+        #expect(spy.moveCursorCalls == [.init(motion: .lineStart, count: 1)])
+    }
+
+    @Test("0 after a count digit is consumed as the trailing digit")
+    func zeroAsCountDigit() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("3"))
+        _ = c.handle(.char("0"))
+        #expect(c.pendingCount == 30)
+        _ = c.handle(.char("j"))
+        #expect(spy.moveCursorCalls == [.init(motion: .down, count: 30)])
+    }
+
+    @Test("^ dispatches lineFirstNonBlank motion")
+    func caretFirstNonBlank() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("^"))
+        #expect(spy.moveCursorCalls == [.init(motion: .lineFirstNonBlank, count: 1)])
+    }
+
+    @Test("$ dispatches lineEnd motion")
+    func dollarLineEnd() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("$"))
+        #expect(spy.moveCursorCalls == [.init(motion: .lineEnd, count: 1)])
+    }
+
+    @Test("w/b/e dispatch word motions with count")
+    func wordMotions() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("w"))
+        _ = c.handle(.char("3"))
+        _ = c.handle(.char("b"))
+        _ = c.handle(.char("e"))
+        #expect(spy.moveCursorCalls == [
+            .init(motion: .wordForwardStart, count: 1),
+            .init(motion: .wordBackward, count: 3),
+            .init(motion: .wordForwardEnd, count: 1),
+        ])
+    }
+
+    @Test("gg with no count targets line 1")
+    func ggDefault() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("g"))
+        #expect(c.pendingKeys == [.char("g")])
+        _ = c.handle(.char("g"))
+        #expect(spy.moveCursorCalls == [.init(motion: .documentStart, count: 1)])
+    }
+
+    @Test("5gg targets line 5")
+    func ggWithCount() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("5"))
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("g"))
+        #expect(spy.moveCursorCalls == [.init(motion: .documentStart, count: 5)])
+    }
+
+    @Test("G with no count uses Int.max sentinel (last line)")
+    func gLastLine() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("G"))
+        #expect(spy.moveCursorCalls == [.init(motion: .documentEnd, count: Int.max)])
+    }
+
+    @Test("5G targets line 5")
+    func gWithCount() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("5"))
+        _ = c.handle(.char("G"))
+        #expect(spy.moveCursorCalls == [.init(motion: .documentEnd, count: 5)])
+    }
 }
 
 @MainActor
 private final class VimDelegateSpy: VimControllerDelegate {
     struct MoveCall: Equatable {
-        let direction: MoveDirection
+        let motion: CursorMotion
         let count: Int
     }
     struct StructuralCall: Equatable {
@@ -233,8 +340,8 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var structuralMotionCalls: [StructuralCall] = []
     var toggleTaskCallCount = 0
 
-    func moveCursor(direction: MoveDirection, count: Int) {
-        moveCursorCalls.append(.init(direction: direction, count: count))
+    func moveCursor(motion: CursorMotion, count: Int) {
+        moveCursorCalls.append(.init(motion: motion, count: count))
     }
     func structuralMotion(_ motion: StructuralMotion, count: Int) {
         structuralMotionCalls.append(.init(motion: motion, count: count))

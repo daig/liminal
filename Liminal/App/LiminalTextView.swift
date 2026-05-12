@@ -196,81 +196,21 @@ struct LiminalTextView: NSViewRepresentable {
         //
         // Cursor motion writes `setSelectedRange` directly rather than going
         // through NSResponder action methods (moveLeft/Right/Up/Down), which
-        // can silently no-op depending on responder state.
+        // can silently no-op depending on responder state. All motion math
+        // lives in `CursorMotionEngine`; this method just hands off and
+        // applies the result.
 
-        func moveCursor(direction: MoveDirection, count: Int) {
+        func moveCursor(motion: CursorMotion, count: Int) {
             guard let textView else { return }
-            let nsString = textView.string as NSString
-            let textLength = nsString.length
-            let currentRange = textView.selectedRange()
-            let currentLocation = currentRange.location
-            let steps = max(1, count)
-
-            let newLocation: Int
-            switch direction {
-            case .left:
-                newLocation = max(0, currentLocation - steps)
-            case .right:
-                newLocation = min(textLength, currentLocation + steps)
-            case .up, .down:
-                newLocation = Self.verticalMove(
-                    from: currentLocation,
-                    direction: direction,
-                    count: steps,
-                    in: nsString
-                )
-            }
-
+            let currentLocation = textView.selectedRange().location
+            let newLocation = CursorMotionEngine.newOffset(
+                for: motion,
+                in: textView.string,
+                from: currentLocation,
+                count: count
+            )
             setCursorAt(utf16Location: newLocation)
             textView.scrollRangeToVisible(textView.selectedRange())
-        }
-
-        /// Column-preserving line move using NSString's line-boundary
-        /// machinery. Handles arbitrary line terminators and clamps the
-        /// target column to the adjacent line's content length.
-        private static func verticalMove(
-            from location: Int,
-            direction: MoveDirection,
-            count: Int,
-            in nsString: NSString
-        ) -> Int {
-            var current = location
-            for _ in 0..<count {
-                let cur = lineInfo(at: current, in: nsString)
-                let column = current - cur.start
-                switch direction {
-                case .up:
-                    guard cur.start > 0 else { return current }
-                    let prev = lineInfo(at: cur.start - 1, in: nsString)
-                    let prevContentLen = prev.contentEnd - prev.start
-                    current = prev.start + min(column, prevContentLen)
-                case .down:
-                    guard cur.end < nsString.length else { return current }
-                    let next = lineInfo(at: cur.end, in: nsString)
-                    let nextContentLen = next.contentEnd - next.start
-                    current = next.start + min(column, nextContentLen)
-                default:
-                    return current
-                }
-            }
-            return current
-        }
-
-        private static func lineInfo(
-            at location: Int,
-            in nsString: NSString
-        ) -> (start: Int, contentEnd: Int, end: Int) {
-            var start = 0
-            var end = 0
-            var contentEnd = 0
-            let safeLocation = max(0, min(location, nsString.length))
-            nsString.getLineStart(
-                &start,
-                end: &end,
-                contentsEnd: &contentEnd,
-                for: NSRange(location: safeLocation, length: 0)
-            )
-            return (start, contentEnd, end)
         }
 
         func structuralMotion(_ motion: StructuralMotion, count: Int) {

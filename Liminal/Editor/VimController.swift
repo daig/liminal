@@ -78,13 +78,12 @@ public final class VimController: ObservableObject {
 
     private func handleNormal(_ key: VimKey) -> KeyHandled {
         // Count digits before any pending keys: build pendingCount.
-        if pendingKeys.isEmpty, let digit = key.asCountDigit {
-            if digit == 0 && pendingCount == nil {
-                // Bare leading `0` is a motion in real vim (first column);
-                // not yet bound in slice 3. Treat as no-op so it doesn't
-                // get mistaken for "count zero."
-                return .consumed
-            }
+        // Bare leading `0` falls through to the binding tree as the
+        // line-start motion in vim; once a count is already started,
+        // `0` is the trailing digit (e.g., `30`).
+        if pendingKeys.isEmpty,
+           let digit = key.asCountDigit,
+           !(digit == 0 && pendingCount == nil) {
             pendingCount = (pendingCount ?? 0) * 10 + digit
             return .consumed
         }
@@ -206,8 +205,8 @@ public final class VimController: ObservableObject {
             setMode(.insert)
         case .enterNormalMode:
             setMode(.normal)
-        case .moveCursor(let direction, let count):
-            delegate?.moveCursor(direction: direction, count: count)
+        case .moveCursor(let motion, let count):
+            delegate?.moveCursor(motion: motion, count: count)
         case .structuralMotion(let motion, let count):
             delegate?.structuralMotion(motion, count: count)
         case .toggleTaskAtCursor:
@@ -245,6 +244,39 @@ public final class VimController: ObservableObject {
         t.bind(.normal, [.char("k")],            description: "Move up",    command: upMotion)
         t.bind(.normal, [.special(.up)],         description: "Move up",    command: upMotion)
 
+        // Line motion (within the current line — count is ignored).
+        t.bind(.normal, [.char("0")], description: "Line start") { _ in
+            .moveCursor(.lineStart, count: 1)
+        }
+        t.bind(.normal, [.char("^")], description: "First non-blank") { _ in
+            .moveCursor(.lineFirstNonBlank, count: 1)
+        }
+        t.bind(.normal, [.char("$")], description: "Line end") { _ in
+            .moveCursor(.lineEnd, count: 1)
+        }
+
+        // Word motion (count = number of words).
+        t.bind(.normal, [.char("w")], description: "Next word") {
+            .moveCursor(.wordForwardStart, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("b")], description: "Previous word") {
+            .moveCursor(.wordBackward, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("e")], description: "Word end") {
+            .moveCursor(.wordForwardEnd, count: $0 ?? 1)
+        }
+
+        // Document jumps. `gg` defaults to line 1; `G` defaults to the
+        // last line. With an explicit count, both jump to that absolute
+        // line. The Int.max sentinel encodes "no count given" for `G`.
+        t.bind(.normal, [.char("g"), .char("g")],
+               description: "First line / line N") {
+            .moveCursor(.documentStart, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("G")], description: "Last line / line N") {
+            .moveCursor(.documentEnd, count: $0 ?? Int.max)
+        }
+
         // Structural sibling motion
         t.bind(.normal, [.char("{")], description: "Previous sibling block") {
             .structuralMotion(.previousSibling, count: $0 ?? 1)
@@ -274,7 +306,7 @@ public enum KeyHandled: Sendable, Equatable {
 /// the production conformer; tests provide spies.
 @MainActor
 public protocol VimControllerDelegate: AnyObject {
-    func moveCursor(direction: MoveDirection, count: Int)
+    func moveCursor(motion: CursorMotion, count: Int)
     func structuralMotion(_ motion: StructuralMotion, count: Int)
     func toggleTaskAtCursor()
 }
