@@ -129,13 +129,10 @@ struct LiminalTextView: NSViewRepresentable {
             self.document = document
         }
 
-        deinit {
-            if let url = routerSubscriptionURL {
-                MainActor.assumeIsolated {
-                    NavigationRouter.shared.unsubscribe(self, for: url)
-                }
-            }
-        }
+        // No `deinit` cleanup needed for the navigation router: it
+        // holds subscribers weakly, so a closed Coordinator drops out
+        // automatically on the next `navigate`. Save-As URL changes
+        // are handled explicitly in `updateRouterSubscription`.
 
         // MARK: - Mode observation
 
@@ -185,10 +182,17 @@ struct LiminalTextView: NSViewRepresentable {
         // MARK: - NavigationSubscriber
 
         /// Incoming cross-document navigation. The router has already
-        /// matched this request to our document URL; we just resolve
-        /// the anchor against the current `DocumentIndex` and scroll.
+        /// matched this request to our document URL; we bring our
+        /// window forward (the second-Cmd-click case where the target
+        /// is open but in the background), resolve the anchor against
+        /// the current `DocumentIndex`, and scroll.
         nonisolated func handleNavigation(_ request: NavigationRequest) {
             MainActor.assumeIsolated {
+                // Without this, Cmd-clicking a wikilink whose target
+                // is already open scrolls the background window
+                // silently and the user sees nothing happen in their
+                // current window.
+                textView?.window?.makeKeyAndOrderFront(nil)
                 guard let docIndex = currentDocumentIndex() else {
                     return
                 }

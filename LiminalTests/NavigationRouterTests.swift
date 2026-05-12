@@ -105,6 +105,30 @@ struct NavigationRouterTests {
         #expect(secondSub.received.count == 1)
     }
 
+    @Test("subscriber held weakly: deallocation falls through to queue + open")
+    func deallocatedSubscriberFallsThrough() {
+        let router = NavigationRouter.shared
+        router.resetForTesting()
+        defer { router.resetForTesting() }
+        var openCalls: [URL] = []
+        router.openDocument = { url in openCalls.append(url) }
+
+        let url = URL(fileURLWithPath: "/tmp/v/Note.lim")
+
+        // Subscribe inside a scope so the subscriber drops before
+        // navigate() runs. With strong refs the dict would still hold
+        // it; with weak refs we should see queue+open instead.
+        do {
+            let subscriber = StubSubscriber()
+            router.subscribe(subscriber, for: url)
+        }
+
+        router.navigate(to: url, anchor: nil)
+
+        #expect(openCalls.count == 1)
+        #expect(router.pendingRequest(for: url) != nil)
+    }
+
     @Test("URL canonicalization matches across symlink-equivalent paths")
     func canonicalMatching() {
         let router = NavigationRouter.shared

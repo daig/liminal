@@ -19,12 +19,24 @@ public final class NavigationRouter {
     /// Drained as soon as a subscriber for that URL appears.
     private var pending: [URL: NavigationRequest] = [:]
 
-    /// Live subscribers, keyed by canonical document URL. There is at
-    /// most one subscriber per URL: when the user opens an
-    /// already-open file, NSDocumentController focuses the existing
-    /// window rather than creating a duplicate, so the existing
-    /// subscription is what wins.
-    private var subscribers: [URL: any NavigationSubscriber] = [:]
+    /// Live subscribers, keyed by canonical document URL. **Held
+    /// weakly** so that a closed document's Coordinator can be
+    /// deallocated normally without us needing to clean up from its
+    /// `deinit`. (Strong refs here would synchronously reenter the
+    /// `subscribers` dict during `subscribe`'s replace-and-release —
+    /// the released old Coordinator's `deinit` would call
+    /// `unsubscribe`, which reads the same dict that's mid-mutation.
+    /// Swift's exclusivity checker traps that with "Simultaneous
+    /// accesses to … modification requires exclusive access".)
+    ///
+    /// At most one live subscriber per URL: opening an already-open
+    /// file just brings its existing window forward (NSDocumentController
+    /// dedupes), so resubscribes simply replace the slot.
+    private var subscribers: [URL: WeakSubscriber] = [:]
+
+    private struct WeakSubscriber {
+        weak var ref: (any NavigationSubscriber)?
+    }
 
     /// Function used to open a not-yet-open target URL. Defaults to
     /// `NSDocumentController.openDocument`. Tests assign a stub so
@@ -46,13 +58,18 @@ public final class NavigationRouter {
     /// receive the request synchronously; otherwise the request is
     /// queued and `NSDocumentController` is asked to open the file
     /// (the freshly-loaded document consumes the pending request on
-    /// subscribe).
+    /// subscribe). Stale weak entries (subscriber deallocated) are
+    /// cleaned up lazily here.
     public func navigate(to targetURL: URL, anchor: LinkNavigationAnchor?) {
         let canonical = VaultRegistry.canonicalNoteURL(for: targetURL)
         let request = NavigationRequest(targetURL: canonical, anchor: anchor)
-        if let subscriber = subscribers[canonical] {
-            subscriber.handleNavigation(request)
-            return
+        if let weak = subscribers[canonical] {
+            if let subscriber = weak.ref {
+                subscriber.handleNavigation(request)
+                return
+            }
+            // Stale entry — the subscriber was deallocated.
+            subscribers.removeValue(forKey: canonical)
         }
         pending[canonical] = request
         openDocument(canonical)
@@ -63,18 +80,18 @@ public final class NavigationRouter {
     /// pending entry.
     public func subscribe(_ subscriber: any NavigationSubscriber, for url: URL) {
         let canonical = VaultRegistry.canonicalNoteURL(for: url)
-        subscribers[canonical] = subscriber
+        subscribers[canonical] = WeakSubscriber(ref: subscriber)
         if let request = pending.removeValue(forKey: canonical) {
             subscriber.handleNavigation(request)
         }
     }
 
     /// Remove a subscriber. Called when a document changes URL (Save
-    /// As) or the view tears down. Idempotent and defends against
-    /// late-arriving unsubscribes from a prior URL.
+    /// As). Closed-document cleanup is automatic via the weak ref;
+    /// callers don't need to invoke this from `deinit`.
     public func unsubscribe(_ subscriber: any NavigationSubscriber, for url: URL) {
         let canonical = VaultRegistry.canonicalNoteURL(for: url)
-        if let current = subscribers[canonical], current === subscriber {
+        if let weak = subscribers[canonical], weak.ref === subscriber {
             subscribers.removeValue(forKey: canonical)
         }
     }
