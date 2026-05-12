@@ -14,18 +14,40 @@ import Foundation
 ///   defensive clearing.
 /// - The command interpreter is a focused switch over `VimCommand`, not
 ///   a god-function. New commands just add a case + a binding entry.
+/// - Derived presentation (`statusPresentation`, `visibleHintSnapshot`)
+///   is recomputed exactly once per `handle(_:)` via a `defer`, so every
+///   pending-state mutation path is covered without scattering refresh
+///   calls.
 @MainActor
 public final class VimController: ObservableObject {
     @Published public private(set) var mode: VimMode = .normal
     @Published public private(set) var pendingKeys: [VimKey] = []
     @Published public private(set) var pendingCount: Int?
 
+    /// Mode + pending detail formatted for the status bar.
+    @Published public private(set) var statusPresentation =
+        VimStatusPresentation(mode: .normal, detailText: nil)
+
+    /// The hint snapshot the overlay should display, or `nil` to hide
+    /// the overlay. Driven by the onset-delay state machine: a new
+    /// prefix becomes visible only after `hintOnsetDelay`, but
+    /// extending an already-visible prefix updates the snapshot
+    /// immediately (no flicker).
+    @Published public private(set) var visibleHintSnapshot: VimHintSnapshot?
+
     public weak var delegate: VimControllerDelegate?
 
     private nonisolated(unsafe) let bindings: VimBindingTree
+    private nonisolated let hintOnsetDelay: Duration
 
-    public nonisolated init(bindings: VimBindingTree) {
+    private var hintShowTask: Task<Void, Never>?
+
+    public nonisolated init(
+        bindings: VimBindingTree,
+        hintOnsetDelay: Duration = .milliseconds(200)
+    ) {
         self.bindings = bindings
+        self.hintOnsetDelay = hintOnsetDelay
     }
 
     public nonisolated convenience init() {
@@ -40,6 +62,12 @@ public final class VimController: ObservableObject {
     /// Normal) return `.passthrough` so NSTextView's regular typing
     /// pipeline handles them.
     public func handle(_ key: VimKey) -> KeyHandled {
+        // Every path through `handle` mutates pendingKeys / pendingCount /
+        // mode at least once (or leaves them unchanged in the count-zero
+        // no-op case). Recomputing derived state at the boundary covers
+        // them all uniformly.
+        defer { refreshDerived() }
+
         switch mode {
         case .normal:
             return handleNormal(key)
@@ -90,12 +118,6 @@ public final class VimController: ObservableObject {
         }
     }
 
-    // MARK: - Hints
-
-    public var hints: [VimBindingTree.HintEntry] {
-        bindings.hints(after: pendingKeys, mode: mode)
-    }
-
     // MARK: - State management
 
     /// The single function that clears pending state. Don't inline this
@@ -109,6 +131,71 @@ public final class VimController: ObservableObject {
     private func setMode(_ newMode: VimMode) {
         mode = newMode
         resetPending()
+    }
+
+    // MARK: - Derived state
+
+    /// Recompute `statusPresentation` and schedule / replace the hint
+    /// snapshot. Called once per `handle(_:)` invocation via `defer`.
+    private func refreshDerived() {
+        statusPresentation = VimStatusPresentation.make(
+            mode: mode,
+            pendingKeys: pendingKeys,
+            pendingCount: pendingCount
+        )
+        refreshHintSnapshot()
+    }
+
+    /// Hint-onset state machine. Cancel any in-flight delay task; if
+    /// the prefix is empty, clear the snapshot. Otherwise build the
+    /// snapshot from the binding tree's hints. If a snapshot is already
+    /// visible (we're extending an existing chord), replace immediately
+    /// — no delay, no flicker. Otherwise schedule the replacement
+    /// after `hintOnsetDelay` so transient chord input doesn't briefly
+    /// flash the overlay.
+    private func refreshHintSnapshot() {
+        hintShowTask?.cancel()
+        hintShowTask = nil
+
+        guard !pendingKeys.isEmpty else {
+            visibleHintSnapshot = nil
+            return
+        }
+
+        let items = bindings.hints(after: pendingKeys, mode: mode)
+        guard !items.isEmpty else {
+            visibleHintSnapshot = nil
+            return
+        }
+
+        let title = pendingKeys.map(\.displayString).joined()
+        let snapshot = VimHintSnapshot(title: title, items: items)
+
+        // Already-visible snapshot: replace synchronously so chord
+        // extensions feel continuous.
+        if visibleHintSnapshot != nil {
+            visibleHintSnapshot = snapshot
+            return
+        }
+
+        // First-appearance: with zero delay, set synchronously so tests
+        // (which inject `.zero`) don't need to await. Otherwise schedule
+        // an awaitable task that re-checks the prefix before firing.
+        if hintOnsetDelay == .zero {
+            visibleHintSnapshot = snapshot
+            return
+        }
+
+        let prefixAtSchedule = pendingKeys
+        let delay = hintOnsetDelay
+        hintShowTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            // Drop the snapshot if the prefix changed under us.
+            guard self.pendingKeys == prefixAtSchedule else { return }
+            self.visibleHintSnapshot = snapshot
+            self.hintShowTask = nil
+        }
     }
 
     // MARK: - Command interpreter

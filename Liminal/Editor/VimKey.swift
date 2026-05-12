@@ -72,7 +72,7 @@ public struct VimKey: Hashable, Sendable {
         case .character(let c):
             base = String(c)
         case .special(.escape):    base = "<Esc>"
-        case .special(.returnKey): base = "<Return>"
+        case .special(.returnKey): base = "<CR>"
         case .special(.tab):       base = "<Tab>"
         case .special(.backspace): base = "<BS>"
         case .special(.delete):    base = "<Del>"

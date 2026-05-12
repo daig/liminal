@@ -73,16 +73,21 @@ public struct VimBindingTree {
         return .none
     }
 
-    public func hints(after prefix: [VimKey], mode: VimMode) -> [HintEntry] {
+    public func hints(after prefix: [VimKey], mode: VimMode) -> [VimHintItem] {
         guard let root = rootsByMode[mode] else { return [] }
         var node = root
         for key in prefix {
             guard let next = node.children[key] else { return [] }
             node = next
         }
-        return node.insertionOrderKeys.compactMap { key -> HintEntry? in
+        return node.insertionOrderKeys.compactMap { key -> VimHintItem? in
             guard let child = node.children[key] else { return nil }
-            return HintEntry(key: key, description: child.terminalDescription)
+            let kind: VimHintItem.Kind = child.children.isEmpty ? .action : .group
+            return VimHintItem(
+                key: key,
+                description: child.terminalDescription,
+                kind: kind
+            )
         }
     }
 }
@@ -92,14 +97,6 @@ extension VimBindingTree {
         case command(VimCommand)
         case partial
         case none
-    }
-
-    public struct HintEntry: Sendable, Equatable {
-        public let key: VimKey
-        /// Description of where this key leads — either the bound command's
-        /// description if this key terminates, or "..." indicating more
-        /// keys follow.
-        public let description: String
     }
 }
 

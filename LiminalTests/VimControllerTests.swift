@@ -128,6 +128,94 @@ struct VimControllerTests {
         _ = c.handle(.char("{"))
         #expect(spy.structuralMotionCalls.last == .init(motion: .previousSibling, count: 2))
     }
+
+    // MARK: - Status / hint presentation
+
+    @Test("initial state: status mode is normal, detail is nil, no snapshot")
+    func initialPresentation() {
+        let c = VimController()
+        #expect(c.statusPresentation.mode == .normal)
+        #expect(c.statusPresentation.detailText == nil)
+        #expect(c.visibleHintSnapshot == nil)
+    }
+
+    @Test("count digit publishes count in status detail")
+    func countPublishedInStatus() {
+        let c = VimController()
+        _ = c.handle(.char("3"))
+        #expect(c.statusPresentation.detailText == "3")
+    }
+
+    @Test("partial chord shows pending keys in status detail")
+    func partialChordPublishedInStatus() {
+        let c = VimController()
+        _ = c.handle(.special(.space))
+        #expect(c.statusPresentation.detailText == "<Space>")
+    }
+
+    @Test("status detail clears after dispatch")
+    func statusClearsAfterDispatch() {
+        let c = VimController()
+        _ = c.handle(.char("3"))
+        _ = c.handle(.char("h"))
+        #expect(c.statusPresentation.detailText == nil)
+    }
+
+    @Test("status mode reflects mode switch")
+    func statusReflectsMode() {
+        let c = VimController()
+        _ = c.handle(.char("i"))
+        #expect(c.statusPresentation.mode == .insert)
+        _ = c.handle(.special(.escape))
+        #expect(c.statusPresentation.mode == .normal)
+    }
+
+    @Test("with zero onset delay: pending prefix produces visible snapshot synchronously")
+    func snapshotSynchronousWithZeroDelay() {
+        let c = VimController(
+            bindings: VimController.defaultBindings(),
+            hintOnsetDelay: .zero
+        )
+        _ = c.handle(.special(.space))
+        let snapshot = c.visibleHintSnapshot
+        #expect(snapshot != nil)
+        #expect(snapshot?.title == "<Space>")
+        let descriptions = snapshot?.items.map(\.description) ?? []
+        #expect(descriptions.contains("Toggle task checkbox"))
+    }
+
+    @Test("snapshot clears when prefix clears")
+    func snapshotClearsAfterDispatch() {
+        let c = VimController(
+            bindings: VimController.defaultBindings(),
+            hintOnsetDelay: .zero
+        )
+        _ = c.handle(.special(.space))
+        #expect(c.visibleHintSnapshot != nil)
+        _ = c.handle(.char("t"))
+        #expect(c.visibleHintSnapshot == nil)
+    }
+
+    @Test("default 200ms delay does NOT publish snapshot synchronously")
+    func snapshotDelayedByDefault() {
+        let c = VimController() // 200ms default
+        _ = c.handle(.special(.space))
+        // Status detail updates immediately; snapshot only after delay.
+        #expect(c.statusPresentation.detailText == "<Space>")
+        #expect(c.visibleHintSnapshot == nil)
+    }
+
+    @Test("unmatched key after partial clears the snapshot")
+    func unmatchedSubKeyClearsSnapshot() {
+        let c = VimController(
+            bindings: VimController.defaultBindings(),
+            hintOnsetDelay: .zero
+        )
+        _ = c.handle(.special(.space))
+        #expect(c.visibleHintSnapshot != nil)
+        _ = c.handle(.char("z")) // not a continuation; clears
+        #expect(c.visibleHintSnapshot == nil)
+    }
 }
 
 @MainActor

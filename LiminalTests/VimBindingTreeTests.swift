@@ -72,6 +72,22 @@ struct VimBindingTreeTests {
         #expect(labels["q"] == "Quote")
     }
 
+    @Test("hint kind: terminal child is .action, prefix child is .group")
+    func hintKindReflectsTerminality() {
+        var t = VimBindingTree()
+        // Space + t terminates: <Space> children include "t" as .action
+        t.bind(.normal, [.special(.space), .char("t")],
+               description: "Toggle task") { _ in .toggleTaskAtCursor }
+        // Space + g + h is a deeper chord: <Space> children include "g" as .group
+        t.bind(.normal, [.special(.space), .char("g"), .char("h")],
+               description: "Goto home") { _ in .enterNormalMode }
+
+        let hints = t.hints(after: [.special(.space)], mode: .normal)
+        let byKey = Dictionary(uniqueKeysWithValues: hints.map { ($0.key.displayString, $0.kind) })
+        #expect(byKey["t"] == .action)
+        #expect(byKey["g"] == .group)
+    }
+
     @Test("hints from empty prefix list top-level bindings")
     func hintsFromRoot() {
         var t = VimBindingTree()

@@ -6,11 +6,31 @@ struct LiminalEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             LiminalTextView(document: document)
+                .overlay(alignment: .bottom) {
+                    HintOverlayHost(controller: document.vimController)
+                }
             Divider()
             StatusBar(document: document, controller: document.vimController)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
         }
+    }
+}
+
+/// Subscribes to the controller so the overlay actually updates when
+/// `visibleHintSnapshot` changes. SwiftUI's `@ObservedObject` only
+/// propagates `objectWillChange` for the directly-observed object —
+/// reading `document.vimController.visibleHintSnapshot` from the parent
+/// view won't trigger a re-render when only the nested controller's
+/// state changes.
+private struct HintOverlayHost: View {
+    @ObservedObject var controller: VimController
+
+    var body: some View {
+        VimHintOverlayView(snapshot: controller.visibleHintSnapshot)
+            .animation(.easeOut(duration: 0.11),
+                       value: controller.visibleHintSnapshot)
+            .allowsHitTesting(false)
     }
 }
 
@@ -20,7 +40,7 @@ private struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            ModeBadge(mode: controller.mode)
+            ModeBadge(mode: controller.statusPresentation.mode)
             Label("\(document.diagnosticsCount)", systemImage: "exclamationmark.triangle")
                 .foregroundColor(document.diagnosticsCount == 0 ? .secondary : .orange)
             Label(
@@ -29,8 +49,10 @@ private struct StatusBar: View {
             )
             .foregroundColor(.secondary)
             Spacer()
-            PendingChord(controller: controller)
-                .foregroundColor(.secondary)
+            if let detail = controller.statusPresentation.detailText {
+                Text("(\(detail))")
+                    .foregroundColor(.secondary)
+            }
         }
         .font(.system(size: 11, weight: .regular, design: .monospaced))
         .labelStyle(.titleAndIcon)
@@ -61,25 +83,6 @@ private struct ModeBadge: View {
         switch mode {
         case .normal: return .blue
         case .insert: return .green
-        }
-    }
-}
-
-private struct PendingChord: View {
-    @ObservedObject var controller: VimController
-
-    var body: some View {
-        if !controller.pendingKeys.isEmpty {
-            let prefix = controller.pendingKeys.map(\.displayString).joined()
-            let hints = controller.hints
-                .prefix(6)
-                .map { "\($0.key.displayString): \($0.description)" }
-                .joined(separator: "  ")
-            Text("(\(prefix)) → \(hints)")
-        } else if let count = controller.pendingCount {
-            Text("(\(count))")
-        } else {
-            EmptyView()
         }
     }
 }
