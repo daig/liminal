@@ -141,19 +141,22 @@ public final class VimController: ObservableObject {
             .enterNormalMode
         }
 
-        // Basic motion
-        t.bind(.normal, [.char("h")], description: "Move left") {
-            .moveCursor(.left, count: $0 ?? 1)
-        }
-        t.bind(.normal, [.char("l")], description: "Move right") {
-            .moveCursor(.right, count: $0 ?? 1)
-        }
-        t.bind(.normal, [.char("j")], description: "Move down") {
-            .moveCursor(.down, count: $0 ?? 1)
-        }
-        t.bind(.normal, [.char("k")], description: "Move up") {
-            .moveCursor(.up, count: $0 ?? 1)
-        }
+        // Basic motion — h/j/k/l and arrows are aliases for the same
+        // commands; arrow keys also work in Insert mode (they fall through
+        // to NSTextView's normal handling since they're unbound there).
+        let leftMotion:  @Sendable (Int?) -> VimCommand = { .moveCursor(.left,  count: $0 ?? 1) }
+        let rightMotion: @Sendable (Int?) -> VimCommand = { .moveCursor(.right, count: $0 ?? 1) }
+        let downMotion:  @Sendable (Int?) -> VimCommand = { .moveCursor(.down,  count: $0 ?? 1) }
+        let upMotion:    @Sendable (Int?) -> VimCommand = { .moveCursor(.up,    count: $0 ?? 1) }
+
+        t.bind(.normal, [.char("h")],            description: "Move left",  command: leftMotion)
+        t.bind(.normal, [.special(.left)],       description: "Move left",  command: leftMotion)
+        t.bind(.normal, [.char("l")],            description: "Move right", command: rightMotion)
+        t.bind(.normal, [.special(.right)],      description: "Move right", command: rightMotion)
+        t.bind(.normal, [.char("j")],            description: "Move down",  command: downMotion)
+        t.bind(.normal, [.special(.down)],       description: "Move down",  command: downMotion)
+        t.bind(.normal, [.char("k")],            description: "Move up",    command: upMotion)
+        t.bind(.normal, [.special(.up)],         description: "Move up",    command: upMotion)
 
         // Structural sibling motion
         t.bind(.normal, [.char("{")], description: "Previous sibling block") {
