@@ -31,8 +31,10 @@ struct LiminalTextView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.vimController = document.vimController
         textView.linkActivationDelegate = context.coordinator
+        textView.linkHoverDelegate = context.coordinator
 
         context.coordinator.textView = textView
+        context.coordinator.hoverPreviewController.attach(to: textView)
         document.vimController.delegate = context.coordinator
         // Mirror initial mode into the layout manager's cursor style and
         // start watching for changes.
@@ -107,13 +109,19 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, NavigationSubscriber {
+    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, VimTextViewLinkHoverDelegate, NavigationSubscriber {
         let document: LiminalSourceDocument
         weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
 
         let highlighter = LiminalHighlighter()
         let theme = LiminalHighlightTheme.default
+
+        /// Cmd+hover popover lifetime is tied to this Coordinator —
+        /// when the window closes the controller goes with it, and
+        /// its `NSPopover` is released along with it. Constructed
+        /// once at init since it doesn't depend on the text view.
+        let hoverPreviewController: HoverPreviewController
 
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
@@ -127,6 +135,7 @@ struct LiminalTextView: NSViewRepresentable {
 
         init(document: LiminalSourceDocument) {
             self.document = document
+            self.hoverPreviewController = HoverPreviewController(document: document)
         }
 
         // No `deinit` cleanup needed for the navigation router: it
@@ -468,6 +477,20 @@ struct LiminalTextView: NSViewRepresentable {
             textView.scrollRangeToVisible(textView.selectedRange())
         }
 
+        // MARK: - VimTextViewLinkHoverDelegate
+
+        func vimTextView(_ view: VimTextView, modifierFlagsChanged flags: NSEvent.ModifierFlags) {
+            hoverPreviewController.handleFlagsChanged(flags)
+        }
+
+        func vimTextView(_ view: VimTextView, mouseMovedTo pointInView: NSPoint) {
+            hoverPreviewController.handleMouseMoved(at: pointInView)
+        }
+
+        func vimTextViewMouseExited(_ view: VimTextView) {
+            hoverPreviewController.handleMouseExited()
+        }
+
         // MARK: - Cmd-click activation
 
         /// Cmd-click receiver. Resolve the byte offset under the click,
@@ -482,6 +505,9 @@ struct LiminalTextView: NSViewRepresentable {
         /// claim the click but no-op until the navigation router and
         /// ambiguity popover land.
         func vimTextView(_ view: VimTextView, didCmdClickAt utf16Index: Int) -> Bool {
+            // Click takes over from hover; close any visible popover
+            // so it doesn't linger over the action.
+            hoverPreviewController.cancelForClick()
             guard let textView,
                   let url = document.fileURL,
                   let byteRange = LiminalTextView.utf16RangeToByteRange(

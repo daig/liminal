@@ -19,6 +19,14 @@ final class VimTextView: NSTextView {
     /// drag-tracking behavior.
     weak var linkActivationDelegate: VimTextViewLinkActivationDelegate?
 
+    /// Receives Cmd-modifier and mouse-move events for the hover
+    /// preview popover. Idle hover cost is one bool check inside the
+    /// delegate (gated on Cmd-held), so the per-frame overhead of
+    /// having `mouseMoved` enabled at all is negligible.
+    weak var linkHoverDelegate: VimTextViewLinkHoverDelegate?
+
+    private var hoverTrackingArea: NSTrackingArea?
+
     /// Mark indicators to paint as colored dots above their characters.
     /// Coordinator owns the anchor → utf16 location conversion and pushes
     /// this list whenever the registry changes. The view just paints what
@@ -117,6 +125,51 @@ final class VimTextView: NSTextView {
         )
     }
 
+    // MARK: - Hover tracking
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Required to receive mouseMoved events at all; tracking
+        // areas alone aren't enough on the document-window path.
+        window?.acceptsMouseMovedEvents = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = hoverTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,  // ignored when .inVisibleRect is set
+            options: [
+                .mouseMoved,
+                .mouseEnteredAndExited,
+                .activeInKeyWindow,
+                .inVisibleRect,
+            ],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        linkHoverDelegate?.vimTextView(self, modifierFlagsChanged: event.modifierFlags)
+        super.flagsChanged(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let pointInView = convert(event.locationInWindow, from: nil)
+        linkHoverDelegate?.vimTextView(self, mouseMovedTo: pointInView)
+        super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        linkHoverDelegate?.vimTextViewMouseExited(self)
+        super.mouseExited(with: event)
+    }
+
     /// Cmd-click intercepts: if the delegate claims the click, swallow
     /// it (no cursor placement, no drag tracking). Otherwise fall
     /// through to NSTextView's default. Excludes double-click and
@@ -175,6 +228,16 @@ final class VimTextView: NSTextView {
 @MainActor
 protocol VimTextViewLinkActivationDelegate: AnyObject {
     func vimTextView(_ view: VimTextView, didCmdClickAt utf16Index: Int) -> Bool
+}
+
+/// Cmd-modifier and mouse-move receiver for the hover preview
+/// pipeline. The delegate is responsible for gating expensive work
+/// on Cmd-held state — the view forwards every event unconditionally.
+@MainActor
+protocol VimTextViewLinkHoverDelegate: AnyObject {
+    func vimTextView(_ view: VimTextView, modifierFlagsChanged flags: NSEvent.ModifierFlags)
+    func vimTextView(_ view: VimTextView, mouseMovedTo pointInView: NSPoint)
+    func vimTextViewMouseExited(_ view: VimTextView)
 }
 
 extension VimKey {
