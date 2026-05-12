@@ -35,8 +35,8 @@ public extension LiminalSyntaxNode {
     }
 
     /// True when the parser inserted a `.missing` child during recovery.
-    /// Used by lowering to fall back to literal text per spec rules
-    /// (e.g. §7.4 unmatched delimiters remain literal text).
+    /// Used by lowering to honor the inline recovery policy: incomplete CST
+    /// nodes can drive editor feedback while still lowering as literal text.
     var isIncomplete: Bool {
         syntax.withCursor { node in
             var found = false
@@ -337,6 +337,8 @@ public enum BlockSyntax: Sendable, Hashable {
 public enum InlineSyntax: Sendable, Hashable {
     case codeSpan(CodeSpanSyntax)
     case escapedPunctuation(EscapedPunctuationSyntax)
+    case emphasis(EmphasisSyntax)
+    case strong(StrongSyntax)
     case strikethrough(StrikethroughSyntax)
     case highlight(HighlightSyntax)
     case mdLink(MdLinkSyntax)
@@ -356,6 +358,10 @@ public enum InlineSyntax: Sendable, Hashable {
             self = .codeSpan(CodeSpanSyntax(unchecked: syntax))
         case .escapedPunctuation:
             self = .escapedPunctuation(EscapedPunctuationSyntax(unchecked: syntax))
+        case .emphasis:
+            self = .emphasis(EmphasisSyntax(unchecked: syntax))
+        case .strong:
+            self = .strong(StrongSyntax(unchecked: syntax))
         case .strikethrough:
             self = .strikethrough(StrikethroughSyntax(unchecked: syntax))
         case .highlight:
@@ -391,6 +397,10 @@ public enum InlineSyntax: Sendable, Hashable {
             inline.syntax
         case .escapedPunctuation(let inline):
             inline.syntax
+        case .emphasis(let inline):
+            inline.syntax
+        case .strong(let inline):
+            inline.syntax
         case .strikethrough(let inline):
             inline.syntax
         case .highlight(let inline):
@@ -423,6 +433,10 @@ public enum InlineSyntax: Sendable, Hashable {
         case .codeSpan(let inline):
             inline.range
         case .escapedPunctuation(let inline):
+            inline.range
+        case .emphasis(let inline):
+            inline.range
+        case .strong(let inline):
             inline.range
         case .strikethrough(let inline):
             inline.range
@@ -1381,6 +1395,20 @@ public struct EscapedPunctuationSyntax: LiminalSyntaxNode {
     }
 }
 
+@CambiumSyntaxNode(LiminalKind.self, for: .emphasis)
+public struct EmphasisSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .strong)
+public struct StrongSyntax: LiminalSyntaxNode {
+    public var inlineContent: InlineContentSyntax? {
+        firstChild(kind: .inlineContent).map(InlineContentSyntax.init(unchecked:))
+    }
+}
+
 @CambiumSyntaxNode(LiminalKind.self, for: .strikethrough)
 public struct StrikethroughSyntax: LiminalSyntaxNode {
     public var inlineContent: InlineContentSyntax? {
@@ -1733,6 +1761,10 @@ private extension InlineSyntax {
             codeSpan.codeText
         case .escapedPunctuation(let punctuation):
             punctuation.escapedText
+        case .emphasis(let emphasis):
+            emphasis.inlineContent?.plainText ?? ""
+        case .strong(let strong):
+            strong.inlineContent?.plainText ?? ""
         case .strikethrough(let strikethrough):
             strikethrough.inlineContent?.plainText ?? ""
         case .highlight(let highlight):

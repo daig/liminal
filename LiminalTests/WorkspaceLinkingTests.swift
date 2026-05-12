@@ -447,14 +447,16 @@ struct WorkspaceLinkingTests {
 
     @Test("document index walks Slice 5 rich inline containers but skips raw payloads")
     func documentIndexWalksSlice5RichInlineContainersButSkipsRawPayloads() throws {
-        let source = #"~~[[Strike]]~~ ==[[Highlight]]== ^[[[Foot]]] %% [[Ignored Comment]] %% \([[Ignored Math]]\)"#
+        let source = #"*[[Emphasis]]* **[[Strong]]** ~~[[Strike]]~~ ==[[Highlight]]== ^[[[Foot]]] %% [[Ignored Comment]] %% \([[Ignored Math]]\)"#
         let parsed = try LiminalParser().parse(source)
         let index = DocumentIndex.build(from: parsed)
 
         #expect(index.references.map(\.target.rawTargetString).sorted() == [
+            "Emphasis",
             "Foot",
             "Highlight",
-            "Strike"
+            "Strike",
+            "Strong"
         ])
     }
 

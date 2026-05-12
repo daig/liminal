@@ -75,12 +75,27 @@ struct HighlighterTests {
         }
     }
 
-    // MARK: - Inline modifiers (currently parsed: strikethrough, highlight)
-    //
-    // emphasis / strong nodes exist in LiminalKind (205, 206) but the
-    // current parser doesn't emit them for `*foo*` / `**foo**`. When
-    // they're wired up (per WORKING_PLAN.md slice 5 follow-up), add
-    // tests that assert the .emphasis / .strong modifiers analogously.
+    // MARK: - Inline modifiers
+
+    @Test("emphasis text carries .emphasis modifier")
+    func emphasisModifier() throws {
+        let source = "a *em* b\n"
+        let parsed = try LiminalParser().parse(source)
+        let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
+
+        let inner = try #require(spans.first { byteText($0, in: source) == "em" })
+        #expect(inner.modifiers.contains(.emphasis))
+    }
+
+    @Test("strong text carries .strong modifier")
+    func strongModifier() throws {
+        let source = "a **strong** b\n"
+        let parsed = try LiminalParser().parse(source)
+        let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
+
+        let inner = try #require(spans.first { byteText($0, in: source) == "strong" })
+        #expect(inner.modifiers.contains(.strong))
+    }
 
     @Test("strikethrough text carries .strikethrough modifier")
     func strikethroughModifier() throws {
@@ -100,6 +115,49 @@ struct HighlighterTests {
 
         let inner = try #require(spans.first { byteText($0, in: source) == "marked" })
         #expect(inner.modifiers.contains(.highlight))
+    }
+
+    @Test("open strikethrough and highlight delimiters carry recovery modifiers")
+    func openStyledDelimiterRecoveryModifiers() throws {
+        let strikeSource = "~~draft"
+        let strikeParsed = try LiminalParser().parse(strikeSource)
+        let strikeSpans = LiminalHighlighter().spans(for: strikeParsed.rootSyntax)
+        let strikeText = try #require(strikeSpans.first { byteText($0, in: strikeSource) == "draft" })
+        #expect(strikeText.modifiers.contains(.strikethrough))
+
+        let highlightSource = "==marked"
+        let highlightParsed = try LiminalParser().parse(highlightSource)
+        let highlightSpans = LiminalHighlighter().spans(for: highlightParsed.rootSyntax)
+        let highlightText = try #require(highlightSpans.first { byteText($0, in: highlightSource) == "marked" })
+        #expect(highlightText.modifiers.contains(.highlight))
+
+        let emphasisSource = "*draft"
+        let emphasisParsed = try LiminalParser().parse(emphasisSource)
+        let emphasisSpans = LiminalHighlighter().spans(for: emphasisParsed.rootSyntax)
+        let literalText = try #require(emphasisSpans.first { byteText($0, in: emphasisSource) == "*draft" })
+        #expect(!literalText.modifiers.contains(.emphasis))
+    }
+
+    @Test("nested strong + emphasis carries both modifiers")
+    func nestedStrongEmphasisModifiers() throws {
+        let source = "**bold *both* bold**\n"
+        let parsed = try LiminalParser().parse(source)
+        let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
+
+        let inner = try #require(spans.first { byteText($0, in: source) == "both" })
+        #expect(inner.modifiers.contains(.strong))
+        #expect(inner.modifiers.contains(.emphasis))
+    }
+
+    @Test("nested emphasis + strong carries both modifiers")
+    func nestedEmphasisStrongModifiers() throws {
+        let source = "*em **both** em*\n"
+        let parsed = try LiminalParser().parse(source)
+        let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
+
+        let inner = try #require(spans.first { byteText($0, in: source) == "both" })
+        #expect(inner.modifiers.contains(.emphasis))
+        #expect(inner.modifiers.contains(.strong))
     }
 
     @Test("nested strikethrough + highlight carries both modifiers")

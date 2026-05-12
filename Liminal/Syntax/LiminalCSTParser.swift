@@ -5407,6 +5407,48 @@ private struct BlockLiteralCloseLine {
 }
 
 private struct LiminalInlineCSTParser {
+    private enum InlineDelimiterRecoveryPolicy {
+        /// Common prose delimiters stay plain text until a valid closer exists.
+        case literalText
+        /// Discovery-oriented styles keep an incomplete CST node for editor feedback.
+        case openNode(message: String)
+    }
+
+    private struct InlineDelimiterSpec {
+        let kind: LiminalKind
+        let delimiter: String
+        let delimiterKind: LiminalKind
+        let recoveryPolicy: InlineDelimiterRecoveryPolicy
+    }
+
+    private static let inlineDelimiterSpecs: [InlineDelimiterSpec] = [
+        // `**` is listed before `*` to keep the priority rule explicit.
+        InlineDelimiterSpec(
+            kind: .strong,
+            delimiter: "**",
+            delimiterKind: .star,
+            recoveryPolicy: .literalText
+        ),
+        InlineDelimiterSpec(
+            kind: .emphasis,
+            delimiter: "*",
+            delimiterKind: .star,
+            recoveryPolicy: .literalText
+        ),
+        InlineDelimiterSpec(
+            kind: .strikethrough,
+            delimiter: "~~",
+            delimiterKind: .tilde,
+            recoveryPolicy: .openNode(message: "missing closing strikethrough delimiter")
+        ),
+        InlineDelimiterSpec(
+            kind: .highlight,
+            delimiter: "==",
+            delimiterKind: .equals,
+            recoveryPolicy: .openNode(message: "missing closing highlight delimiter")
+        )
+    ]
+
     private let source: String
     private let baseByteOffset: Int
     private var index: String.Index
@@ -5492,24 +5534,8 @@ private struct LiminalInlineCSTParser {
             } else if source[index..<source.endIndex].hasPrefix("^[") {
                 try flushText(upTo: index, with: &builder)
                 try emitInlineFootnote(with: &builder)
-            } else if source[index..<source.endIndex].hasPrefix("~~") {
-                try flushText(upTo: index, with: &builder)
-                try emitDelimitedInlineContainer(
-                    kind: .strikethrough,
-                    delimiter: "~~",
-                    delimiterKind: .tilde,
-                    missingMessage: "missing closing strikethrough delimiter",
-                    with: &builder
-                )
-            } else if source[index..<source.endIndex].hasPrefix("==") {
-                try flushText(upTo: index, with: &builder)
-                try emitDelimitedInlineContainer(
-                    kind: .highlight,
-                    delimiter: "==",
-                    delimiterKind: .equals,
-                    missingMessage: "missing closing highlight delimiter",
-                    with: &builder
-                )
+            } else if try emitOrConsumeDelimitedInlineContainer(with: &builder) {
+                continue
             } else {
                 index = source.index(after: index)
             }
@@ -6157,37 +6183,95 @@ private struct LiminalInlineCSTParser {
         textStart = index
     }
 
-    private mutating func emitDelimitedInlineContainer(
-        kind: LiminalKind,
-        delimiter: String,
-        delimiterKind: LiminalKind,
-        missingMessage: String,
+    private mutating func emitOrConsumeDelimitedInlineContainer(
         with builder: inout GreenTreeBuilder<LiminalLanguage>
-    ) throws {
-        let openerStart = index
-        builder.startNode(kind)
-        try emitRepeatedStatic(delimiterKind, count: delimiter.count, with: &builder)
-        let contentStart = index
-
-        if let closerStart = findInlineDelimiter(delimiter, from: contentStart) {
-            try emitNestedInlineContent(
-                String(source[contentStart..<closerStart]),
-                baseByteOffset: globalByteOffset(of: contentStart),
-                with: &builder
-            )
-            index = closerStart
-            try emitRepeatedStatic(delimiterKind, count: delimiter.count, with: &builder)
-        } else {
-            try emitNestedInlineContent(
-                String(source[contentStart..<source.endIndex]),
-                baseByteOffset: globalByteOffset(of: contentStart),
-                with: &builder
-            )
-            try builder.missingNode(.missing)
-            appendDiagnostic(missingMessage, at: openerStart, length: delimiter.utf8.count)
-            index = source.endIndex
+    ) throws -> Bool {
+        if let literalRunEnd = literalOnlyDelimiterRunEnd(at: index) {
+            index = literalRunEnd
+            return true
         }
 
+        guard let spec = inlineDelimiterSpec(at: index) else {
+            return false
+        }
+
+        let openerStart = index
+        let contentStart = source.index(index, offsetBy: spec.delimiter.count)
+        guard isValidDelimitedInlineOpener(spec, at: openerStart) else {
+            index = contentStart
+            return true
+        }
+
+        guard let closerStart = findDelimitedInlineContainerClose(
+            spec,
+            from: contentStart
+        ) else {
+            switch spec.recoveryPolicy {
+            case .literalText:
+                index = contentStart
+                return true
+            case .openNode:
+                try flushText(upTo: index, with: &builder)
+                try emitIncompleteDelimitedInlineContainer(
+                    spec,
+                    openerStart: openerStart,
+                    contentStart: contentStart,
+                    with: &builder
+                )
+                return true
+            }
+        }
+
+        try flushText(upTo: index, with: &builder)
+        try emitCompleteDelimitedInlineContainer(
+            spec,
+            contentStart: contentStart,
+            closerStart: closerStart,
+            with: &builder
+        )
+        return true
+    }
+
+    private mutating func emitCompleteDelimitedInlineContainer(
+        _ spec: InlineDelimiterSpec,
+        contentStart: String.Index,
+        closerStart: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(spec.kind)
+        try emitRepeatedStatic(spec.delimiterKind, count: spec.delimiter.count, with: &builder)
+        try emitNestedInlineContent(
+            String(source[contentStart..<closerStart]),
+            baseByteOffset: globalByteOffset(of: contentStart),
+            with: &builder
+        )
+        index = closerStart
+        try emitRepeatedStatic(spec.delimiterKind, count: spec.delimiter.count, with: &builder)
+        try builder.finishNode()
+        textStart = index
+    }
+
+    private mutating func emitIncompleteDelimitedInlineContainer(
+        _ spec: InlineDelimiterSpec,
+        openerStart: String.Index,
+        contentStart: String.Index,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(spec.kind)
+        try emitRepeatedStatic(spec.delimiterKind, count: spec.delimiter.count, with: &builder)
+        try emitNestedInlineContent(
+            String(source[contentStart..<source.endIndex]),
+            baseByteOffset: globalByteOffset(of: contentStart),
+            with: &builder
+        )
+        switch spec.recoveryPolicy {
+        case .literalText:
+            break
+        case .openNode(let message):
+            try builder.missingNode(.missing)
+            appendDiagnostic(message, at: openerStart, length: spec.delimiter.utf8.count)
+        }
+        index = source.endIndex
         try builder.finishNode()
         textStart = index
     }
@@ -6530,7 +6614,11 @@ private struct LiminalInlineCSTParser {
     }
 
     private func canParseEscapedPunctuation() -> Bool {
-        let next = source.index(after: index)
+        canParseEscapedPunctuation(at: index)
+    }
+
+    private func canParseEscapedPunctuation(at start: String.Index) -> Bool {
+        let next = source.index(after: start)
         guard next < source.endIndex else {
             return false
         }
@@ -6549,6 +6637,260 @@ private struct LiminalInlineCSTParser {
     private func canParseStructuredEmbed() -> Bool {
         let typeStart = source.index(index, offsetBy: 2)
         return LiminalStructuredScanner(source: source).qnameEnd(from: typeStart) != nil
+    }
+
+    private func inlineDelimiterSpec(at start: String.Index) -> InlineDelimiterSpec? {
+        guard start < source.endIndex else {
+            return nil
+        }
+
+        return Self.inlineDelimiterSpecs.first { spec in
+            delimiterRunMatches(spec, at: start)
+        }
+    }
+
+    private func literalOnlyDelimiterRunEnd(at start: String.Index) -> String.Index? {
+        guard start < source.endIndex, source[start] == "*" else {
+            return nil
+        }
+
+        let runLength = countRun(of: "*", at: start)
+        let hasExactStarSpec = Self.inlineDelimiterSpecs.contains { spec in
+            spec.delimiterKind == .star && spec.delimiter.count == runLength
+        }
+        guard !hasExactStarSpec else {
+            return nil
+        }
+
+        return source.index(start, offsetBy: runLength)
+    }
+
+    private func delimiterRunMatches(
+        _ spec: InlineDelimiterSpec,
+        at start: String.Index
+    ) -> Bool {
+        guard source[start..<source.endIndex].hasPrefix(spec.delimiter),
+              !source.isEscaped(start)
+        else {
+            return false
+        }
+
+        if spec.delimiterKind == .star {
+            return countRun(of: "*", at: start) == spec.delimiter.count
+        }
+
+        return true
+    }
+
+    private func isValidDelimitedInlineOpener(
+        _ spec: InlineDelimiterSpec,
+        at openerStart: String.Index
+    ) -> Bool {
+        guard delimiterRunMatches(spec, at: openerStart) else {
+            return false
+        }
+
+        if spec.delimiterKind == .star {
+            let afterDelimiter = source.index(openerStart, offsetBy: spec.delimiter.count)
+            return afterDelimiter < source.endIndex && !source[afterDelimiter].isWhitespace
+        }
+
+        return true
+    }
+
+    private func isValidDelimitedInlineCloser(
+        _ spec: InlineDelimiterSpec,
+        at closerStart: String.Index
+    ) -> Bool {
+        guard delimiterRunMatches(spec, at: closerStart) else {
+            return false
+        }
+
+        if spec.delimiterKind == .star {
+            guard closerStart > source.startIndex else {
+                return false
+            }
+            let previous = source.index(before: closerStart)
+            return !source[previous].isWhitespace
+        }
+
+        return true
+    }
+
+    private func findDelimitedInlineContainerClose(
+        _ spec: InlineDelimiterSpec,
+        from start: String.Index
+    ) -> String.Index? {
+        var cursor = start
+        while cursor < source.endIndex {
+            if isValidDelimitedInlineCloser(spec, at: cursor) {
+                return cursor
+            }
+
+            if let end = completedInlineConstructEnd(at: cursor) {
+                cursor = end
+                continue
+            }
+
+            if let nested = inlineDelimiterSpec(at: cursor),
+               isValidDelimitedInlineOpener(nested, at: cursor)
+            {
+                let nestedContentStart = source.index(cursor, offsetBy: nested.delimiter.count)
+                if let nestedClose = findDelimitedInlineContainerClose(nested, from: nestedContentStart) {
+                    cursor = source.index(nestedClose, offsetBy: nested.delimiter.count)
+                    continue
+                }
+                cursor = nestedContentStart
+                continue
+            }
+
+            if source[cursor] == "*" {
+                cursor = source.index(cursor, offsetBy: countRun(of: "*", at: cursor))
+            } else {
+                cursor = source.index(after: cursor)
+            }
+        }
+
+        return nil
+    }
+
+    private func completedInlineConstructEnd(at start: String.Index) -> String.Index? {
+        if source[start] == "`" {
+            let delimiterLength = countRun(of: "`", at: start)
+            let contentStart = source.index(start, offsetBy: delimiterLength)
+            guard let close = findCodeSpanClose(matching: delimiterLength, from: contentStart) else {
+                return source.endIndex
+            }
+            return source.index(close, offsetBy: delimiterLength)
+        }
+
+        if source[start..<source.endIndex].hasPrefix("%%") {
+            let contentStart = source.index(start, offsetBy: 2)
+            guard let close = findInlineDelimiter("%%", from: contentStart, honoringEscape: false) else {
+                return source.endIndex
+            }
+            return source.index(close, offsetBy: 2)
+        }
+
+        if source[start..<source.endIndex].hasPrefix("\\(") {
+            let contentStart = source.index(start, offsetBy: 2)
+            guard let close = findInlineDelimiter("\\)", from: contentStart, honoringEscape: false) else {
+                return source.endIndex
+            }
+            return source.index(close, offsetBy: 2)
+        }
+
+        if source[start..<source.endIndex].hasPrefix("${") {
+            let contentStart = source.index(start, offsetBy: 2)
+            guard let close = findInterpolationClose(from: contentStart) else {
+                return inlineBoundary(from: contentStart)
+            }
+            return source.index(after: close)
+        }
+
+        if source[start] == "\\", canParseEscapedPunctuation(at: start) {
+            let punctuationIndex = source.index(after: start)
+            return source.index(after: punctuationIndex)
+        }
+
+        if let end = structuredEmbedEndForSkipping(at: start) {
+            return end
+        }
+
+        if let end = typedInlineEndForSkipping(at: start) {
+            return end
+        }
+
+        if source[start..<source.endIndex].hasPrefix("![[") {
+            let bodyStart = source.index(start, offsetBy: 3)
+            let close = findWikiClose(from: bodyStart)
+            return close.map { source.index($0, offsetBy: 2) } ?? inlineBoundary(from: start)
+        }
+
+        if source[start..<source.endIndex].hasPrefix("[[") {
+            let bodyStart = source.index(start, offsetBy: 2)
+            let close = findWikiClose(from: bodyStart)
+            return close.map { source.index($0, offsetBy: 2) } ?? inlineBoundary(from: start)
+        }
+
+        if let end = markdownImageEndForSkipping(at: start) {
+            return end
+        }
+
+        if let end = markdownLinkEndForSkipping(at: start) {
+            return end
+        }
+
+        if source[start..<source.endIndex].hasPrefix("^[") {
+            let bracket = source.index(after: start)
+            return findLabelClose(openBracketAt: bracket).map { source.index(after: $0) }
+                ?? source.endIndex
+        }
+
+        return nil
+    }
+
+    private func typedInlineEndForSkipping(at start: String.Index) -> String.Index? {
+        guard source[start] == "@",
+              !source[start..<source.endIndex].hasPrefix("@["),
+              !source[start..<source.endIndex].hasPrefix("@{")
+        else {
+            return nil
+        }
+        return LiminalStructuredScanner(source: source).typedConstructorEnd(from: start)
+    }
+
+    private func structuredEmbedEndForSkipping(at start: String.Index) -> String.Index? {
+        guard source[start..<source.endIndex].hasPrefix("!") else {
+            return nil
+        }
+        let afterBang = source.index(after: start)
+        guard afterBang < source.endIndex, source[afterBang] == "{" else {
+            return nil
+        }
+        let typeStart = source.index(after: afterBang)
+        guard LiminalStructuredScanner(source: source).qnameEnd(from: typeStart) != nil else {
+            return nil
+        }
+        return LiminalStructuredScanner(source: source).structuredEmbedEnd(from: start)
+            ?? inlineBoundary(from: start)
+    }
+
+    private func markdownImageEndForSkipping(at start: String.Index) -> String.Index? {
+        guard source[start..<source.endIndex].hasPrefix("![") else {
+            return nil
+        }
+
+        let bracket = source.index(after: start)
+        guard let labelClose = findLabelClose(openBracketAt: bracket) else {
+            return source.endIndex
+        }
+
+        let afterLabel = source.index(after: labelClose)
+        guard afterLabel < source.endIndex, source[afterLabel] == "(" else {
+            return nil
+        }
+
+        return findParenClose(openParenAt: afterLabel).map { source.index(after: $0) }
+            ?? source.endIndex
+    }
+
+    private func markdownLinkEndForSkipping(at start: String.Index) -> String.Index? {
+        guard source[start] == "[" else {
+            return nil
+        }
+
+        guard let labelClose = findLabelClose(openBracketAt: start) else {
+            return source.endIndex
+        }
+
+        let afterLabel = source.index(after: labelClose)
+        guard afterLabel < source.endIndex, source[afterLabel] == "(" else {
+            return nil
+        }
+
+        return findParenClose(openParenAt: afterLabel).map { source.index(after: $0) }
+            ?? source.endIndex
     }
 
     private func findLabelClose(openBracketAt open: String.Index) -> String.Index? {

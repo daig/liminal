@@ -606,6 +606,24 @@ public struct LiminalLowerer: Sendable {
             ))
         case .escapedPunctuation(let punctuation):
             .text(punctuation.escapedText)
+        case .emphasis(let emphasis):
+            emphasis.isIncomplete
+                ? .text(emphasis.sourceText)
+                : .node(LiminalNode(
+                    kind: .inline,
+                    type: "Emphasis",
+                    content: .inline(lowerInlineContent(emphasis.inlineContent)),
+                    source: surface("emphasis", emphasis.syntax)
+                ))
+        case .strong(let strong):
+            strong.isIncomplete
+                ? .text(strong.sourceText)
+                : .node(LiminalNode(
+                    kind: .inline,
+                    type: "Strong",
+                    content: .inline(lowerInlineContent(strong.inlineContent)),
+                    source: surface("strong", strong.syntax)
+                ))
         case .strikethrough(let strikethrough):
             strikethrough.isIncomplete
                 ? .text(strikethrough.sourceText)

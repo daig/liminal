@@ -327,6 +327,8 @@ Back to outer body.
 ```markdown
 *emphasis*
 **strong**
+~~strikethrough~~
+==highlight==
 ```
 
 Suggested delimiter rule:
@@ -335,11 +337,24 @@ Suggested delimiter rule:
 * opens emphasis only when followed by nonspace.
 * closes emphasis only when preceded by nonspace.
 ** has priority over *.
-Unmatched delimiters remain literal text.
 Underscore is not emphasis by default.
 ```
 
 This avoids a large class of CommonMark ambiguity around intraword underscores.
+
+Delimiter recovery is part of the editor-facing syntax contract:
+
+| Surface | Closed form | Unclosed opener |
+|---|---|---|
+| `*text*` | `Emphasis` | Remains literal text; no diagnostic. |
+| `**text**` | `Strong` | Remains literal text; no diagnostic. |
+| `~~text~~` | `Strikethrough` | Parser may keep an incomplete CST node with a missing-closer diagnostic; semantic lowering treats it as literal text. |
+| `==text==` | `Highlight` | Parser may keep an incomplete CST node with a missing-closer diagnostic; semantic lowering treats it as literal text. |
+
+The distinction is intentional. `*` and `**` are common prose characters, so
+they should not create noisy partial markup while typing. `~~` and `==` are
+rarer and visually distinctive, so incomplete CST nodes are useful for live
+highlighting and syntax discovery.
 
 ---
 

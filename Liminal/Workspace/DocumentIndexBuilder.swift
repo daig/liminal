@@ -148,6 +148,10 @@ struct DocumentIndexBuilder {
             if let constructor = typedInline.constructor {
                 walkSyntaxChildren(of: constructor.syntax)
             }
+        case .emphasis(let emphasis):
+            walkInlineContent(emphasis.inlineContent)
+        case .strong(let strong):
+            walkInlineContent(strong.inlineContent)
         case .strikethrough(let strikethrough):
             walkInlineContent(strikethrough.inlineContent)
         case .highlight(let highlight):

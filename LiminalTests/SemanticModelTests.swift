@@ -483,7 +483,7 @@ struct SemanticModelTests {
         hidden
         %%
 
-        ~~deleted~~ ==marked== ^[note] \\(x^2\\) %% hidden %% $x$
+        *em* **strong** ~~deleted~~ ==marked== ^[note] \\(x^2\\) %% hidden %% $x$
         """
         let document = LiminalLowerer().lower(try LiminalParser().parse(source))
 
@@ -517,15 +517,14 @@ struct SemanticModelTests {
             guard case .node(let node) = inline else { return nil }
             return node.type.rawValue
         }
-        #expect(nodeTypes == ["Strikethrough", "Highlight", "FootnoteInline", "MathInline", "CommentInline"])
+        #expect(nodeTypes == ["Emphasis", "Strong", "Strikethrough", "Highlight", "FootnoteInline", "MathInline", "CommentInline"])
         #expect(inlines.contains(.text(" $x$")))
     }
 
     @Test("incomplete inline containers lower as flat literal text")
     func incompleteInlineContainersLowerAsFlatLiteralText() throws {
-        // Spec §7.4 (strikethrough/highlight) and §7.13 (footnote) say
-        // unmatched delimiters remain literal text. The CST keeps the
-        // incomplete node for recovery (§13); the lowerer drops to text.
+        // Delimiter recovery keeps some incomplete CST nodes for editor
+        // feedback; semantic lowering still drops them to source text.
         let cases: [(source: String, expected: String)] = [
             ("~~unclosed [[Wiki]]\n", "~~unclosed [[Wiki]]"),
             ("==unclosed marker\n", "==unclosed marker"),

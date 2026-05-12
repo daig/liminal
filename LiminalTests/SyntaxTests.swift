@@ -413,6 +413,146 @@ struct SyntaxTests {
         #expect(inlineContent.plainText.hasSuffix(" $x$"))
     }
 
+    @Test("Slice 5 parser emits emphasis and strong inline CST")
+    func slice5ParserEmitsEmphasisAndStrongInlineCST() throws {
+        let source = "*em [[Target]]* **strong `code`**\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes,
+              inlineNodes.count == 2,
+              case .emphasis(let emphasis) = inlineNodes[0],
+              case .strong(let strong) = inlineNodes[1]
+        else {
+            Issue.record("expected emphasis and strong inline nodes")
+            return
+        }
+
+        #expect(emphasis.inlineContent?.plainText == "em Target")
+        #expect(strong.inlineContent?.plainText == "strong code")
+    }
+
+    @Test("Slice 5 parser leaves invalid and unmatched emphasis delimiters literal")
+    func slice5ParserLeavesInvalidAndUnmatchedEmphasisDelimitersLiteral() throws {
+        let source = "***literal*** _under_ * spaced * *unclosed [[Wiki]] **open\n"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineContent = paragraph.inlineContent
+        else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let styledNodes = inlineContent.inlineNodes.filter { inline in
+            if case .emphasis = inline { return true }
+            if case .strong = inline { return true }
+            return false
+        }
+        #expect(styledNodes.isEmpty)
+        #expect(inlineContent.inlineNodes.count == 1)
+        guard case .wikilink(let wikilink) = inlineContent.inlineNodes.first else {
+            Issue.record("expected wikilink inside otherwise literal text")
+            return
+        }
+        #expect(wikilink.targetText == "Wiki")
+        #expect(inlineContent.plainText == "***literal*** _under_ * spaced * *unclosed Wiki **open")
+    }
+
+    @Test("Slice 5 delimiter recovery opens strikethrough and highlight for editor feedback")
+    func slice5DelimiterRecoveryOpensStrikethroughAndHighlightForEditorFeedback() throws {
+        let strikeResult = try LiminalParser().parse("~~draft [[Note]]")
+        #expect(strikeResult.diagnostics.map(\.message) == [
+            "missing closing strikethrough delimiter"
+        ])
+
+        guard case .paragraph(let strikeParagraph) = strikeResult.rootSyntax.documentItems.first,
+              let strikeNode = strikeParagraph.inlineContent?.inlineNodes.first,
+              case .strikethrough(let strike) = strikeNode
+        else {
+            Issue.record("expected incomplete strikethrough node")
+            return
+        }
+        #expect(strike.isIncomplete)
+        #expect(strike.sourceText == "~~draft [[Note]]")
+        #expect(strike.inlineContent?.plainText == "draft Note")
+
+        let highlightResult = try LiminalParser().parse("==marked [[Note]]")
+        #expect(highlightResult.diagnostics.map(\.message) == [
+            "missing closing highlight delimiter"
+        ])
+
+        guard case .paragraph(let highlightParagraph) = highlightResult.rootSyntax.documentItems.first,
+              let highlightNode = highlightParagraph.inlineContent?.inlineNodes.first,
+              case .highlight(let highlight) = highlightNode
+        else {
+            Issue.record("expected incomplete highlight node")
+            return
+        }
+        #expect(highlight.isIncomplete)
+        #expect(highlight.sourceText == "==marked [[Note]]")
+        #expect(highlight.inlineContent?.plainText == "marked Note")
+    }
+
+    @Test("Slice 5 delimiter scanner skips completed inline nodes while finding closers")
+    func slice5DelimiterScannerSkipsCompletedInlineNodesWhileFindingClosers() throws {
+        let source = #"~~a `~~` b~~ ==[label](url==still) done=="# + "\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes,
+              inlineNodes.count == 2,
+              case .strikethrough(let strike) = inlineNodes[0],
+              case .highlight(let highlight) = inlineNodes[1]
+        else {
+            Issue.record("expected strikethrough and highlight nodes")
+            return
+        }
+
+        #expect(strike.inlineContent?.plainText == "a ~~ b")
+        #expect(highlight.inlineContent?.plainText == "label done")
+    }
+
+    @Test("Slice 5 parser supports nested emphasis inside strong")
+    func slice5ParserSupportsNestedEmphasisInsideStrong() throws {
+        let source = "**bold and *em* done**\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let strongNode = paragraph.inlineContent?.inlineNodes.first,
+              case .strong(let strong) = strongNode,
+              let nested = strong.inlineContent?.inlineNodes.first,
+              case .emphasis(let emphasis) = nested
+        else {
+            Issue.record("expected strong containing emphasis")
+            return
+        }
+
+        #expect(strong.inlineContent?.plainText == "bold and em done")
+        #expect(emphasis.inlineContent?.plainText == "em")
+    }
+
+    @Test("Slice 5 parser supports nested strong inside emphasis")
+    func slice5ParserSupportsNestedStrongInsideEmphasis() throws {
+        let source = "*em and **strong** done*\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let emphasisNode = paragraph.inlineContent?.inlineNodes.first,
+              case .emphasis(let emphasis) = emphasisNode,
+              let nested = emphasis.inlineContent?.inlineNodes.first,
+              case .strong(let strong) = nested
+        else {
+            Issue.record("expected emphasis containing strong")
+            return
+        }
+
+        #expect(emphasis.inlineContent?.plainText == "em and strong done")
+        #expect(strong.inlineContent?.plainText == "strong")
+    }
+
     @Test("Slice 5 parser recovers incomplete content blocks and rich inline")
     func slice5ParserRecoversIncompleteContentBlocksAndRichInline() throws {
         let blockSource = "```swift\nunterminated\n"
