@@ -59,22 +59,16 @@ extension VimKey {
         if flags.contains(.option)  { modifiers.insert(.option) }
         if flags.contains(.command) { modifiers.insert(.command) }
 
-        // Special keys by keyCode (consistent across keyboard layouts).
-        // NSEvent.keyCode is the physical key location.
         if let special = Self.specialKey(forKeyCode: event.keyCode) {
             self.init(payload: .special(special), modifiers: modifiers)
             return
         }
 
-        // Printable / Ctrl-letter combinations: use charactersIgnoringModifiers
-        // so `J` and `j` differ only by the shift modifier, and vim
-        // bindings match the physical key.
         guard let raw = event.charactersIgnoringModifiers,
               let scalar = raw.unicodeScalars.first,
               let character = Character(String(scalar)) as Character?
         else { return nil }
 
-        // Map literal space to .special(.space) for consistent hint display.
         if character == " " {
             self.init(payload: .special(.space), modifiers: modifiers)
             return
@@ -86,11 +80,11 @@ extension VimKey {
     private static func specialKey(forKeyCode keyCode: UInt16) -> SpecialKey? {
         switch keyCode {
         case 53:  return .escape
-        case 36:  return .returnKey      // Return
-        case 76:  return .returnKey      // Numpad Enter
+        case 36:  return .returnKey
+        case 76:  return .returnKey
         case 48:  return .tab
         case 51:  return .backspace
-        case 117: return .delete         // Forward delete
+        case 117: return .delete
         case 123: return .left
         case 124: return .right
         case 125: return .down

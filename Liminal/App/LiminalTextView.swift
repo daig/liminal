@@ -1,13 +1,14 @@
 import AppKit
 import CambiumCore
 import CambiumIncremental
+import Combine
 import SwiftUI
 
 struct LiminalTextView: NSViewRepresentable {
     @ObservedObject var document: LiminalSourceDocument
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = VimTextView()
+        let textView = Self.makeVimTextView()
         let scrollView = Self.makeScrollView(wrapping: textView)
 
         textView.isRichText = false
@@ -31,6 +32,10 @@ struct LiminalTextView: NSViewRepresentable {
 
         context.coordinator.textView = textView
         document.vimController.delegate = context.coordinator
+        // Mirror initial mode into the layout manager's cursor style and
+        // start watching for changes.
+        context.coordinator.installModeObservers(on: document.vimController)
+        context.coordinator.refreshCursorStyle()
 
         DispatchQueue.main.async { [weak textView, weak coordinator = context.coordinator] in
             guard let textView else { return }
@@ -50,19 +55,29 @@ struct LiminalTextView: NSViewRepresentable {
             context.coordinator.isApplyingProgrammaticEdit = false
             context.coordinator.applyHighlights()
         }
+        context.coordinator.refreshCursorStyle()
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(document: document)
     }
 
-    // MARK: - Scroll view construction
+    // MARK: - View construction
     //
     // `NSTextView.scrollableTextView()` returns a stock NSTextView; to
-    // host our `VimTextView` subclass we replicate the wrapping manually.
-    // Mirrors AppKit's own implementation: a non-flipped clip view, a
-    // text view sized to the clip's content size with sane resizing
-    // masks, and a vertical scroller.
+    // host our `VimTextView` subclass we wire up the text stack manually.
+
+    private static func makeVimTextView() -> VimTextView {
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+
+        let textContainer = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        layoutManager.addTextContainer(textContainer)
+
+        return VimTextView(frame: .zero, textContainer: textContainer)
+    }
 
     private static func makeScrollView(wrapping textView: VimTextView) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -98,8 +113,43 @@ struct LiminalTextView: NSViewRepresentable {
         let highlighter = LiminalHighlighter()
         let theme = LiminalHighlightTheme.default
 
+        private var modeObservation: AnyCancellable?
+
         init(document: LiminalSourceDocument) {
             self.document = document
+        }
+
+        // MARK: - Mode observation
+
+        func installModeObservers(on controller: VimController) {
+            modeObservation = controller.$mode.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshCursorStyle()
+                }
+            }
+        }
+
+        /// Block-cursor effect via selection: in Normal mode, the cursor's
+        /// selection is length 1 so NSTextView's selection highlight paints
+        /// a block over the "current" character. In Insert mode, length 0
+        /// for a conventional caret. Called after every motion and on mode
+        /// transitions.
+        func refreshCursorStyle() {
+            guard let textView else { return }
+            let current = textView.selectedRange()
+            let textLength = (textView.string as NSString).length
+            switch document.vimController.mode {
+            case .normal:
+                let location = min(current.location, max(textLength - 1, 0))
+                let length = (location < textLength) ? 1 : 0
+                if current.location != location || current.length != length {
+                    textView.setSelectedRange(NSRange(location: location, length: length))
+                }
+            case .insert:
+                if current.length != 0 {
+                    textView.setSelectedRange(NSRange(location: current.location, length: 0))
+                }
+            }
         }
 
         // MARK: - NSTextStorageDelegate
@@ -143,21 +193,84 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         // MARK: - VimControllerDelegate
+        //
+        // Cursor motion writes `setSelectedRange` directly rather than going
+        // through NSResponder action methods (moveLeft/Right/Up/Down), which
+        // can silently no-op depending on responder state.
 
         func moveCursor(direction: MoveDirection, count: Int) {
             guard let textView else { return }
+            let nsString = textView.string as NSString
+            let textLength = nsString.length
+            let currentRange = textView.selectedRange()
+            let currentLocation = currentRange.location
             let steps = max(1, count)
+
+            let newLocation: Int
             switch direction {
             case .left:
-                for _ in 0..<steps { textView.moveLeft(self) }
+                newLocation = max(0, currentLocation - steps)
             case .right:
-                for _ in 0..<steps { textView.moveRight(self) }
-            case .up:
-                for _ in 0..<steps { textView.moveUp(self) }
-            case .down:
-                for _ in 0..<steps { textView.moveDown(self) }
+                newLocation = min(textLength, currentLocation + steps)
+            case .up, .down:
+                newLocation = Self.verticalMove(
+                    from: currentLocation,
+                    direction: direction,
+                    count: steps,
+                    in: nsString
+                )
             }
+
+            setCursorAt(utf16Location: newLocation)
             textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        /// Column-preserving line move using NSString's line-boundary
+        /// machinery. Handles arbitrary line terminators and clamps the
+        /// target column to the adjacent line's content length.
+        private static func verticalMove(
+            from location: Int,
+            direction: MoveDirection,
+            count: Int,
+            in nsString: NSString
+        ) -> Int {
+            var current = location
+            for _ in 0..<count {
+                let cur = lineInfo(at: current, in: nsString)
+                let column = current - cur.start
+                switch direction {
+                case .up:
+                    guard cur.start > 0 else { return current }
+                    let prev = lineInfo(at: cur.start - 1, in: nsString)
+                    let prevContentLen = prev.contentEnd - prev.start
+                    current = prev.start + min(column, prevContentLen)
+                case .down:
+                    guard cur.end < nsString.length else { return current }
+                    let next = lineInfo(at: cur.end, in: nsString)
+                    let nextContentLen = next.contentEnd - next.start
+                    current = next.start + min(column, nextContentLen)
+                default:
+                    return current
+                }
+            }
+            return current
+        }
+
+        private static func lineInfo(
+            at location: Int,
+            in nsString: NSString
+        ) -> (start: Int, contentEnd: Int, end: Int) {
+            var start = 0
+            var end = 0
+            var contentEnd = 0
+            let safeLocation = max(0, min(location, nsString.length))
+            nsString.getLineStart(
+                &start,
+                end: &end,
+                contentsEnd: &contentEnd,
+                for: NSRange(location: safeLocation, length: 0)
+            )
+            return (start, contentEnd, end)
         }
 
         func structuralMotion(_ motion: StructuralMotion, count: Int) {
@@ -166,7 +279,6 @@ struct LiminalTextView: NSViewRepresentable {
             else { return }
             let steps = max(1, count)
 
-            // Start from the current cursor byte offset, jump iteratively.
             var byteOffset = currentCursorByteOffset() ?? 0
             for _ in 0..<steps {
                 let next: Int?
@@ -183,9 +295,38 @@ struct LiminalTextView: NSViewRepresentable {
             textView.scrollRangeToVisible(textView.selectedRange())
         }
 
+        /// Task toggle mutates the textStorage directly via the standard
+        /// NSTextView edit path (`shouldChangeText` + `replaceCharacters`
+        /// + `didChangeText`). The textStorage delegate fires, which
+        /// updates the session via `applyTextEdits`. Crucially, we do NOT
+        /// go through `document.applyTextEdits` directly — that would
+        /// trigger SwiftUI's `updateNSView` to do a full string replace
+        /// after the parse, resetting the cursor to end-of-doc.
         func toggleTaskAtCursor() {
-            guard let offset = currentCursorByteOffset() else { return }
-            document.toggleTaskAt(byteOffset: offset)
+            guard let textView,
+                  let parsed = document.session.parseResult,
+                  let offset = currentCursorByteOffset(),
+                  let location = StructureCursor.taskListItem(at: offset, in: parsed.rootSyntax)
+            else { return }
+
+            let newMarker: String
+            switch location.state {
+            case .unchecked: newMarker = "[x]"
+            case .checked:   newMarker = "[ ]"
+            }
+
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(
+                location.markerByteRange,
+                in: textView.string
+            ) else { return }
+
+            if textView.shouldChangeText(in: nsRange, replacementString: newMarker) {
+                textView.replaceCharacters(in: nsRange, with: newMarker)
+                textView.didChangeText()
+            }
+            // After the edit, position the cursor on the marker so the
+            // block cursor visibly sits on the freshly-toggled `[x]`/`[ ]`.
+            setCursorAt(utf16Location: nsRange.location)
         }
 
         // MARK: - Cursor helpers
@@ -208,7 +349,25 @@ struct LiminalTextView: NSViewRepresentable {
             )
             guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: textView.string)
             else { return }
-            textView.setSelectedRange(nsRange)
+            setCursorAt(utf16Location: nsRange.location)
+        }
+
+        /// Centralized cursor placement: in Normal mode wraps a length-1
+        /// selection around the character at `utf16Location` (so the
+        /// system-drawn selection highlight acts as our block cursor); in
+        /// Insert mode places a length-0 caret.
+        private func setCursorAt(utf16Location: Int) {
+            guard let textView else { return }
+            let textLength = (textView.string as NSString).length
+            let clampedLocation = max(0, min(utf16Location, textLength))
+            let length: Int
+            switch document.vimController.mode {
+            case .normal:
+                length = (clampedLocation < textLength) ? 1 : 0
+            case .insert:
+                length = 0
+            }
+            textView.setSelectedRange(NSRange(location: clampedLocation, length: length))
         }
 
         /// Re-apply highlights to the entire text storage from the current
