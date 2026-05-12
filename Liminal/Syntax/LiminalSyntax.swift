@@ -578,6 +578,30 @@ public final class LiminalParseSession {
         }
     }
 
+    /// Block kinds whose extent is delimited by an explicit closing
+    /// marker (` ``` `, `$$`, `%%`, `:::`, `---`, etc.) and whose
+    /// missing-closer recovery in the parser is "consume to EOF and emit
+    /// a `.missing` sentinel."
+    ///
+    /// When skip-clean-regions' sub-parse emits one of these as its
+    /// *trailing* child with `containsSentinels == true`, it means the
+    /// new source's opener at that position has no closer inside the
+    /// dirty slice — the block needs to grow until either a closer is
+    /// found or the document ends. The session detects this and extends
+    /// the dirty span to EOF before re-parsing, so the resulting tree
+    /// reflects the block's real extent rather than truncating it at
+    /// the slice boundary.
+    private static func opensUntilExplicitClose(_ kind: LiminalKind) -> Bool {
+        switch kind {
+        case .fencedCodeBlock, .mathBlock, .commentBlock,
+             .frontmatter, .typedBlock, .schemaBlock, .templateBlock,
+             .htmlBlock:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Walk `previousTree`'s root children, identify which intersect any
     /// edit's old-tree range (plus a boundary halo), and re-build the new
     /// tree by transplanting the unaffected children and sub-parsing the
@@ -645,15 +669,15 @@ public final class LiminalParseSession {
         // Edits before the span shift its start; edits inside change its
         // length; edits after don't affect us.
         let oldDirtyStart = snapshot[lo].oldRange.start
-        let oldDirtyEnd = snapshot[hi].oldRange.end
-        let (newDirtyStart, newDirtyEnd) = Self.mapDirtyRange(
+        var oldDirtyEnd = snapshot[hi].oldRange.end
+        var (newDirtyStart, newDirtyEnd) = Self.mapDirtyRange(
             oldStart: oldDirtyStart,
             oldEnd: oldDirtyEnd,
             edits: edits
         )
 
         // Step 4: extract the dirty slice as a String.
-        guard let dirtyText = Self.utf8Slice(
+        guard var dirtyText = Self.utf8Slice(
             of: source,
             from: Int(newDirtyStart.rawValue),
             to: Int(newDirtyEnd.rawValue)
@@ -703,7 +727,19 @@ public final class LiminalParseSession {
         // its internal tryReuse calls are no-ops — the entire dirty slice
         // is parsed fresh. The slice is small (typically <10 lines) so this
         // is cheap.
-        let childCountBeforeSubParse = builder.currentFrameChildCount
+        //
+        // After the sub-parse we inspect the trailing emitted child: if
+        // it's a sentinel-bearing opens-until-close kind (a fence/typed/
+        // math/comment/frontmatter block that didn't find its closer
+        // inside the slice), the structurally-correct new tree has that
+        // block consuming the rest of the document, not truncating at
+        // the slice's boundary. Revert and re-parse with the slice
+        // extended to EOF. Short-circuited when the old tree already had
+        // the same sentinel-bearing block in that position — we're
+        // editing inside an existing malformed structure and extending
+        // again would only re-parse the same span for no gain.
+        let preSubParseCheckpoint = builder.checkpoint()
+        let preSubParseChildCount = builder.currentFrameChildCount
         var subParser = LiminalCSTParser(
             source: dirtyText,
             baseByteOffset: Int(newDirtyStart.rawValue),
@@ -712,7 +748,44 @@ public final class LiminalParseSession {
             incrementalSession: nil
         )
         try subParser.parseDocumentItems(with: &builder)
-        let subParseChildCount = builder.currentFrameChildCount - childCountBeforeSubParse
+        var subParseChildCount = builder.currentFrameChildCount - preSubParseChildCount
+        var subParseDiagnostics = subParser.diagnostics
+
+        if hi < snapshot.count - 1,
+           Self.subParseNeedsExtensionToEOF(
+                builder: builder,
+                trailingFrameIndex: builder.currentFrameChildCount - 1,
+                oldChildAtHi: snapshot[hi]
+           )
+        {
+            try builder.revert(to: preSubParseCheckpoint)
+            hi = snapshot.count - 1
+            oldDirtyEnd = snapshot[hi].oldRange.end
+            (newDirtyStart, newDirtyEnd) = Self.mapDirtyRange(
+                oldStart: oldDirtyStart,
+                oldEnd: oldDirtyEnd,
+                edits: edits
+            )
+            guard let extendedText = Self.utf8Slice(
+                of: source,
+                from: Int(newDirtyStart.rawValue),
+                to: Int(newDirtyEnd.rawValue)
+            ) else {
+                return nil
+            }
+            dirtyText = extendedText
+            let preExtendedChildCount = builder.currentFrameChildCount
+            var extendedParser = LiminalCSTParser(
+                source: dirtyText,
+                baseByteOffset: Int(newDirtyStart.rawValue),
+                edits: [],
+                previousTree: nil,
+                incrementalSession: nil
+            )
+            try extendedParser.parseDocumentItems(with: &builder)
+            subParseChildCount = builder.currentFrameChildCount - preExtendedChildCount
+            subParseDiagnostics = extendedParser.diagnostics
+        }
 
         // 5c. Transplant successors (indices [hi + 1, count)).
         let newSuccessorBase = lo + subParseChildCount
@@ -753,9 +826,45 @@ public final class LiminalParseSession {
 
         return LiminalParseResult(
             tree: tree,
-            diagnostics: subParser.diagnostics,
+            diagnostics: subParseDiagnostics,
             changedByteRange: TextRange(start: newDirtyStart, end: newDirtyEnd)
         )
+    }
+
+    /// Decide whether the sub-parse's trailing emitted child means we
+    /// need to extend the dirty span to EOF and re-parse.
+    ///
+    /// True iff the trailing child is a sentinel-bearing
+    /// opens-until-close kind AND the OLD child at the dirty span's end
+    /// wasn't already the same. The OLD-child check is the
+    /// short-circuit: when the user is editing inside an existing
+    /// malformed block (the old tree already had a fence-with-missing-
+    /// closer here), extending wouldn't change the structure — the new
+    /// parse would re-emit the same sentinel-bearing block over a
+    /// longer range. We accept the smaller sub-parse and avoid the
+    /// per-keystroke re-parse-to-EOF that would otherwise dominate.
+    private static func subParseNeedsExtensionToEOF(
+        builder: borrowing GreenTreeBuilder<LiminalLanguage>,
+        trailingFrameIndex: Int,
+        oldChildAtHi: OldChildSnapshot
+    ) -> Bool {
+        if oldChildAtHi.containsSentinels,
+           Self.opensUntilExplicitClose(oldChildAtHi.kind)
+        {
+            return false
+        }
+        guard trailingFrameIndex >= 0,
+              let trailing = builder.peekCurrentFrameChild(at: trailingFrameIndex)
+        else {
+            return false
+        }
+        guard case .node(let trailingGreen) = trailing,
+              trailingGreen.containsSentinels
+        else {
+            return false
+        }
+        let trailingKind = LiminalLanguage.kind(for: trailingGreen.rawKind)
+        return Self.opensUntilExplicitClose(trailingKind)
     }
 
     private static func snapshotTopLevelChildren(

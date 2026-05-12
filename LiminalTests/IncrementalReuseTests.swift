@@ -241,6 +241,101 @@ struct IncrementalReuseTests {
         #expect(session.lastReuseSummary.queries > 0)
         #expect(session.lastReuseSummary.acceptedReuses >= 1)
     }
+
+    // MARK: - Cross-block-swallowing: dirty span extends to EOF when a
+    // new block opens but its closer is past the original halo.
+
+    @Test("typing a fence opener mid-document swallows subsequent paragraphs")
+    func fenceOpenerExtendsDirtySpanToEOF() throws {
+        // Five paragraphs separated by blank lines. Typing ``` at the
+        // start of B opens a fenced code block; with no matching closer,
+        // it should consume B, C, D, E (and the blank lines between).
+        // Skip-clean-regions' boundary halo of ±1 only reaches C; the
+        // trailing-sentinel detection must extend the dirty span to EOF
+        // so D and E end up inside the fence, not transplanted as
+        // separate paragraphs.
+        let session = LiminalParseSession()
+        let original = "A\n\nB\n\nC\n\nD\n\nE\n"
+        _ = try session.parse(original)
+
+        // Find B's start byte. Layout: "A" (1) "\n" (1) "\n" (1) → B at byte 3.
+        let bStart = 3
+        let edit = TextEdit(
+            range: TextRange(start: TextSize(UInt32(bStart)), length: TextSize(0)),
+            replacement: "```\n"
+        )
+        let newSource = "A\n\n```\nB\n\nC\n\nD\n\nE\n"
+        let result = try session.parse(newSource, edits: [edit])
+
+        // Structural assertion: the new tree should have exactly two
+        // top-level "real" blocks — paragraph A (and its trailing
+        // blank line) and one fenced code block consuming everything
+        // after, plus possibly a trailing blank line if the fixture
+        // ends with one. Test by counting fencedCodeBlock children and
+        // checking that no paragraph kinds appear after the fence.
+        let topLevelKinds: [LiminalKind] = result.tree.withRoot { root in
+            (0..<root.childOrTokenCount).compactMap { i in
+                root.withChildNode(atRawIndex: i) { cursor in
+                    LiminalLanguage.kind(for: cursor.rawKind)
+                }
+            }
+        }
+        // There must be exactly one fenced code block at top level.
+        let fenceIndices = topLevelKinds.enumerated()
+            .filter { $0.element == .fencedCodeBlock }
+            .map { $0.offset }
+        #expect(fenceIndices.count == 1, "expected one fenced code block; got kinds \(topLevelKinds)")
+        // No paragraphs may appear after the fence — they'd be inside
+        // the fence in a structurally-correct tree.
+        if let fenceIndex = fenceIndices.first {
+            let tail = topLevelKinds[(fenceIndex + 1)...]
+            #expect(
+                !tail.contains(.paragraph),
+                "found paragraph after fence opener; the fence should have swallowed it. Tail kinds: \(Array(tail))"
+            )
+        }
+        // The new tree's text must match the new source.
+        #expect(result.tree.withRoot { $0.makeString() } == newSource)
+    }
+
+    @Test("editing inside an existing unclosed fence stays cheap")
+    func editingInsideExistingUnclosedFenceShortCircuits() throws {
+        // After the previous test's scenario, the previous tree
+        // contains a sentinel-bearing fenced code block extending to
+        // EOF. A subsequent edit *inside* that fence shouldn't trigger
+        // the extend-to-EOF loop again — the short-circuit recognizes
+        // that the old child at the dirty span's end was already a
+        // sentinel-bearing opens-until-close kind.
+        let session = LiminalParseSession()
+        let original = "A\n\n```\nB\n\nC\n"
+        _ = try session.parse(original)
+
+        // Edit "B" → "Bx" — inside the fenced block.
+        // Source layout: "A\n\n```\nB" → byte index of "B" is 7.
+        let bIndex = original.utf8.distance(
+            from: original.utf8.startIndex,
+            to: original.range(of: "B")!.lowerBound.samePosition(in: original.utf8)!
+        )
+        let edit = TextEdit(
+            range: TextRange(start: TextSize(UInt32(bIndex + 1)), length: TextSize(0)),
+            replacement: "x"
+        )
+        let newSource = "A\n\n```\nBx\n\nC\n"
+        let result = try session.parse(newSource, edits: [edit])
+
+        // Tree text matches new source.
+        #expect(result.tree.withRoot { $0.makeString() } == newSource)
+        // Still exactly one fenced code block, no spurious paragraphs
+        // after.
+        let topLevelKinds: [LiminalKind] = result.tree.withRoot { root in
+            (0..<root.childOrTokenCount).compactMap { i in
+                root.withChildNode(atRawIndex: i) { cursor in
+                    LiminalLanguage.kind(for: cursor.rawKind)
+                }
+            }
+        }
+        #expect(topLevelKinds.filter { $0 == .fencedCodeBlock }.count == 1)
+    }
 }
 
 private func makeParagraphSnapshot(
