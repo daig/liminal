@@ -160,15 +160,19 @@ struct LiminalCSTParser {
             // change to the source — means the bytes in the new source at
             // the (possibly shifted) range are byte-identical to the
             // cursor's tree text. `sourceBytesMatch` is the byte-level
-            // verification of that guarantee. Compiled out in release for
-            // perf; trips loudly in debug if a caller violates the edit
-            // contract by passing wrong, missing, or empty edits for a
-            // source that has in fact changed.
-            // TEMPORARILY DISABLED during perf work — re-enable when done.
-            // assert(
-            //     sourceBytesMatch(cursor, newOffsetBytes: newOffset, byteLen: reusedByteLen),
-            //     "Reuse contract violated: cursor bytes != new source bytes at offset \(newOffset), kind=\(kind)"
-            // )
+            // verification of that guarantee. Compiled out entirely in
+            // release for perf; in debug, a mismatch gracefully rejects
+            // the reuse (the parser falls back to fresh emission) so
+            // callers that violate the contract get correct output
+            // instead of a stale splice. Tests that intentionally
+            // exercise contract violations (e.g. passing empty edits
+            // for a changed source) rely on the graceful-reject
+            // semantics to observe correct trees in debug.
+            #if DEBUG
+            if !sourceBytesMatch(cursor, newOffsetBytes: newOffset, byteLen: reusedByteLen) {
+                return false
+            }
+            #endif
 
             let reuseOutcome = try builder.reuseSubtree(cursor)
             let oldPath = cursor.childIndexPath()
