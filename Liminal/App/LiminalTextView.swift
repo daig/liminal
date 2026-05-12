@@ -4,7 +4,7 @@ import CambiumIncremental
 import SwiftUI
 
 struct LiminalTextView: NSViewRepresentable {
-    @ObservedObject var viewModel: LiminalEditorViewModel
+    @ObservedObject var document: LiminalSourceDocument
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -26,7 +26,7 @@ struct LiminalTextView: NSViewRepresentable {
         textView.isIncrementalSearchingEnabled = true
         textView.textContainerInset = NSSize(width: 12, height: 12)
 
-        textView.string = viewModel.session.source
+        textView.string = document.session.source
         textView.textStorage?.delegate = context.coordinator
         context.coordinator.textView = textView
 
@@ -35,7 +35,7 @@ struct LiminalTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        let target = viewModel.session.source
+        let target = document.session.source
         if textView.string != target {
             context.coordinator.isApplyingProgrammaticEdit = true
             textView.string = target
@@ -44,17 +44,17 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(viewModel: viewModel)
+        Coordinator(document: document)
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextStorageDelegate {
-        let viewModel: LiminalEditorViewModel
+        let document: LiminalSourceDocument
         weak var textView: NSTextView?
         var isApplyingProgrammaticEdit = false
 
-        init(viewModel: LiminalEditorViewModel) {
-            self.viewModel = viewModel
+        init(document: LiminalSourceDocument) {
+            self.document = document
         }
 
         nonisolated func textStorage(
@@ -79,7 +79,7 @@ struct LiminalTextView: NSViewRepresentable {
                     location: editedRange.location,
                     length: editedRange.length - delta
                 )
-                let preEditSource = viewModel.session.source
+                let preEditSource = document.session.source
                 guard let byteRange = LiminalTextView.utf16RangeToByteRange(
                     preEditRange,
                     in: preEditSource
@@ -95,7 +95,7 @@ struct LiminalTextView: NSViewRepresentable {
                     ),
                     replacement: replacement
                 )
-                viewModel.applyTextEdits([edit])
+                document.applyTextEdits([edit])
             }
         }
     }

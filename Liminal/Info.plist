@@ -37,8 +37,6 @@
 			<array>
 				<string>sub.dev.liminal.markup</string>
 			</array>
-			<key>NSDocumentClass</key>
-			<string>Liminal.LiminalSourceDocument</string>
 		</dict>
 	</array>
 	<key>UTExportedTypeDeclarations</key>

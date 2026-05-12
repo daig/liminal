@@ -1,13 +1,13 @@
 import SwiftUI
 
 struct LiminalEditorView: View {
-    @ObservedObject var viewModel: LiminalEditorViewModel
+    @ObservedObject var document: LiminalSourceDocument
 
     var body: some View {
         VStack(spacing: 0) {
-            LiminalTextView(viewModel: viewModel)
+            LiminalTextView(document: document)
             Divider()
-            StatusBar(viewModel: viewModel)
+            StatusBar(document: document)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
         }
@@ -15,14 +15,14 @@ struct LiminalEditorView: View {
 }
 
 private struct StatusBar: View {
-    @ObservedObject var viewModel: LiminalEditorViewModel
+    @ObservedObject var document: LiminalSourceDocument
 
     var body: some View {
         HStack(spacing: 16) {
-            Label("\(viewModel.diagnosticsCount)", systemImage: "exclamationmark.triangle")
-                .foregroundColor(viewModel.diagnosticsCount == 0 ? .secondary : .orange)
+            Label("\(document.diagnosticsCount)", systemImage: "exclamationmark.triangle")
+                .foregroundColor(document.diagnosticsCount == 0 ? .secondary : .orange)
             Label(
-                "\(viewModel.reuseSummary.acceptedReuses)/\(viewModel.reuseSummary.queries) reused",
+                "\(document.reuseSummary.acceptedReuses)/\(document.reuseSummary.queries) reused",
                 systemImage: "arrow.triangle.2.circlepath"
             )
             .foregroundColor(.secondary)

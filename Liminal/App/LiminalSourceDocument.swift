@@ -1,45 +1,63 @@
-import AppKit
+import CambiumIncremental
+import Combine
+import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
-final class LiminalSourceDocument: NSDocument {
-    let editorSession = LiminalEditorSession()
-    private(set) lazy var viewModel = LiminalEditorViewModel(session: editorSession)
+/// SwiftUI document-group document. Owns a `LiminalEditorSession` and
+/// re-publishes per-parse derived state (diagnostics count, reuse summary)
+/// so SwiftUI views can observe it. The session itself stays a plain
+/// orchestrator class; Combine is kept at the app boundary.
+///
+/// Not isolated to MainActor — SwiftUI's DocumentGroup constructs documents
+/// from a non-isolated Sendable closure, and `ReferenceFileDocument`
+/// conformance brings its own thread-safety expectations via @Published.
+final class LiminalSourceDocument: ReferenceFileDocument {
+    typealias Snapshot = String
 
-    override init() {
-        super.init()
-        hasUndoManager = true
+    static var readableContentTypes: [UTType] { [.liminalMarkup, .plainText] }
+    static var writableContentTypes: [UTType] { [.liminalMarkup] }
+
+    let session: LiminalEditorSession
+
+    @Published private(set) var diagnosticsCount: Int = 0
+    @Published private(set) var reuseSummary: ReuseSummary = .empty
+
+    init() {
+        self.session = LiminalEditorSession()
+        syncFromSession()
     }
 
-    override class var autosavesInPlace: Bool { true }
+    required init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let source = String(data: data, encoding: .utf8)
+        else { throw CocoaError(.fileReadCorruptFile) }
+        self.session = LiminalEditorSession()
+        try session.replaceSource(source)
+        syncFromSession()
+    }
 
-    override func read(from data: Data, ofType typeName: String) throws {
-        guard let source = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileReadCorruptFile)
+    func snapshot(contentType: UTType) throws -> String {
+        session.source
+    }
+
+    func fileWrapper(snapshot: String, configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(snapshot.utf8))
+    }
+
+    /// Forward a textual edit to the session. Called by `LiminalTextView`'s
+    /// `NSTextStorageDelegate` coordinator on user-initiated edits.
+    func applyTextEdits(_ edits: [TextEdit]) {
+        do {
+            try session.applyTextEdits(edits)
+        } catch {
+            NSLog("LiminalSourceDocument: applyTextEdits failed: \(error)")
         }
-        // Call the session directly: it's a plain (non-isolated) class, and
-        // the view-model is lazy — it will be created in makeWindowControllers
-        // and pick up this source via its init's syncFromSession.
-        try editorSession.replaceSource(source)
+        syncFromSession()
     }
 
-    override func data(ofType typeName: String) throws -> Data {
-        guard let data = editorSession.source.data(using: .utf8) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        return data
-    }
-
-    @MainActor
-    override func makeWindowControllers() {
-        let view = LiminalEditorView(viewModel: viewModel)
-        let host = NSHostingController(rootView: view)
-        let window = NSWindow(contentViewController: host)
-        window.setContentSize(NSSize(width: 900, height: 640))
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.title = displayName ?? "Untitled"
-        window.center()
-        let controller = NSWindowController(window: window)
-        controller.shouldCascadeWindows = true
-        addWindowController(controller)
+    private func syncFromSession() {
+        diagnosticsCount = session.parseResult?.diagnostics.count ?? 0
+        reuseSummary = session.lastReuseSummary
     }
 }
