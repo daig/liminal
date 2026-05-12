@@ -484,13 +484,36 @@ struct LiminalTextView: NSViewRepresentable {
 
             if EditorPreferences.shared.highlightingEnabled,
                let parsed = document.session.parseResult {
-                let spans = highlighter.spans(for: parsed.rootSyntax)
+                let source = storage.string
+                // Translate the NSRange scope to a byte range. For the
+                // per-keystroke path the scope is a few lines around the
+                // edit, so we can prune the tree walker to the
+                // corresponding byte range and emit ~hundreds of spans
+                // instead of every token in the document (which for the
+                // 1.2 MB stress fixture is ~233K). For the full-document
+                // path (`editedRange == nil`) we still walk everything.
+                let spans: [HighlightSpan]
+                let scopeByteRange: Range<Int>?
+                if editedRange != nil,
+                   let byteRange = LiminalTextView.utf16RangeToByteRange(scope, in: source)
+                {
+                    let textRange = CambiumCore.TextRange(
+                        start: TextSize(UInt32(byteRange.lowerBound)),
+                        end: TextSize(UInt32(byteRange.upperBound))
+                    )
+                    spans = highlighter.spans(for: parsed.rootSyntax, in: textRange)
+                    scopeByteRange = byteRange
+                } else {
+                    spans = highlighter.spans(for: parsed.rootSyntax)
+                    scopeByteRange = nil
+                }
                 // One linear pass to build the byte→UTF-16 lookup, then
                 // O(1) per span. Replaces the prior O(N²) byte-walk on
                 // each span which dominated load time on large docs.
-                let offsetMap = OffsetMap(source: storage.string)
+                let offsetMap = OffsetMap(source: source)
                 let scopeStart = scope.location
                 let scopeEnd = scope.location + scope.length
+                _ = scopeByteRange  // future: a scope-local offset map would let us avoid the full-source OffsetMap build
                 for span in spans {
                     guard let nsRange = offsetMap.nsRange(
                         forByteStart: span.range.start.rawValue,
@@ -498,7 +521,10 @@ struct LiminalTextView: NSViewRepresentable {
                     ) else { continue }
                     // Skip spans entirely outside the scope so we don't
                     // pay NSTextStorage's attribute-merge cost for runs
-                    // we're not actually changing.
+                    // we're not actually changing. (The scoped span walk
+                    // above already filters most of these out; the check
+                    // here remains a defensive belt for spans that
+                    // straddle the byte-range boundary.)
                     let spanEnd = nsRange.location + nsRange.length
                     if spanEnd <= scopeStart || nsRange.location >= scopeEnd {
                         continue

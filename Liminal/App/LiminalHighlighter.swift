@@ -56,7 +56,40 @@ public struct LiminalHighlighter: Sendable {
     public func spans(for root: RootSyntax) -> [HighlightSpan] {
         var spans: [HighlightSpan] = []
         root.syntax.withCursor { cursor in
-            Self.walk(cursor, modifiers: [], errorScope: false, into: &spans)
+            Self.walk(
+                cursor,
+                modifiers: [],
+                errorScope: false,
+                byteRange: nil,
+                into: &spans
+            )
+        }
+        return spans
+    }
+
+    /// Produce spans for tokens whose byte ranges intersect `byteRange`.
+    /// Prunes whole subtrees that fall entirely outside the range so the
+    /// walker never enters paragraphs/blocks the caller isn't going to
+    /// paint. Used on the per-keystroke highlight path, where the
+    /// repaint scope is a few lines around the edit and walking the full
+    /// tree to emit ~233K spans on a 1 MB document is the dominant cost.
+    ///
+    /// Modifier inheritance is preserved: an ancestor node's modifier
+    /// applies to every descendant token in `byteRange` even if other
+    /// descendants of that ancestor fall outside the range.
+    public func spans(
+        for root: RootSyntax,
+        in byteRange: TextRange
+    ) -> [HighlightSpan] {
+        var spans: [HighlightSpan] = []
+        root.syntax.withCursor { cursor in
+            Self.walk(
+                cursor,
+                modifiers: [],
+                errorScope: false,
+                byteRange: byteRange,
+                into: &spans
+            )
         }
         return spans
     }
@@ -65,8 +98,13 @@ public struct LiminalHighlighter: Sendable {
         _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>,
         modifiers: InlineModifiers,
         errorScope: Bool,
+        byteRange: TextRange?,
         into spans: inout [HighlightSpan]
     ) {
+        if let byteRange, !cursor.textRange.intersects(byteRange) {
+            return
+        }
+
         let nodeKind = LiminalLanguage.kind(for: cursor.rawKind)
         let addedModifier = modifier(for: nodeKind) ?? []
         let childModifiers = modifiers.union(addedModifier)
@@ -78,6 +116,9 @@ public struct LiminalHighlighter: Sendable {
         cursor.forEachChildOrToken { element in
             switch element {
             case .token(let token):
+                if let byteRange, !token.textRange.intersects(byteRange) {
+                    return
+                }
                 let tokenKind = LiminalLanguage.kind(for: token.rawKind)
                 let category: HighlightCategory = childErrorScope ? .error : Self.category(for: tokenKind)
                 spans.append(HighlightSpan(
@@ -86,7 +127,13 @@ public struct LiminalHighlighter: Sendable {
                     modifiers: childModifiers
                 ))
             case .node(let childCursor):
-                walk(childCursor, modifiers: childModifiers, errorScope: childErrorScope, into: &spans)
+                walk(
+                    childCursor,
+                    modifiers: childModifiers,
+                    errorScope: childErrorScope,
+                    byteRange: byteRange,
+                    into: &spans
+                )
             }
         }
     }
