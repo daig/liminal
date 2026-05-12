@@ -1,5 +1,6 @@
 import CambiumBuilder
 import CambiumCore
+import CambiumIncremental
 
 // MARK: - Parser reuse boundaries
 //
@@ -9,6 +10,14 @@ import CambiumCore
 //   typedInline, structuredEmbed, wikiEmbedBlock, structuredEmbedBlock,
 //   valueDeclaration, typedBlock, htmlBlock, pipeTable, directive,
 //   schemaBlock, templateBlock, and interpolation.
+//
+// Phase 6 wires reuse for the BLOCK-level subset of the above
+// (paragraph, atxHeading, frontmatter, fencedCodeBlock, mathBlock,
+// commentBlock, typedBlock, htmlBlock, pipeTable, directive,
+// schemaBlock, templateBlock, wikiEmbedBlock, structuredEmbedBlock,
+// valueDeclaration). Inline reuse (codeSpan, mdLink, mdImage, wikilink,
+// wikiEmbed, typedInline, structuredEmbed, interpolation) is a separate
+// follow-up; the inline parser would need its own oracle threading.
 //
 // Not reusable: inlineContent — the same kind is emitted under headings,
 // paragraphs, link labels, and wikilink aliases with diverging stop rules,
@@ -25,13 +34,28 @@ struct LiminalCSTParser {
     private let lines: [SourceLine]
     private var currentLineIndex = 0
 
-    var diagnostics: [LiminalDiagnostic] = []
+    private let edits: [TextEdit]
+    private let previousTree: SharedSyntaxTree<LiminalLanguage>?
+    private let incrementalSession: IncrementalParseSession<LiminalLanguage>?
 
-    init(source: String, baseByteOffset: Int = 0, containerColumn: Int = 0) {
+    var diagnostics: [LiminalDiagnostic] = []
+    private(set) var acceptedReuses: [LiminalAcceptedReuse] = []
+
+    init(
+        source: String,
+        baseByteOffset: Int = 0,
+        containerColumn: Int = 0,
+        edits: [TextEdit] = [],
+        previousTree: SharedSyntaxTree<LiminalLanguage>? = nil,
+        incrementalSession: IncrementalParseSession<LiminalLanguage>? = nil
+    ) {
         self.source = source
         self.baseByteOffset = baseByteOffset
         self.containerColumn = containerColumn
         self.lines = SourceLine.split(source, baseByteOffset: baseByteOffset)
+        self.edits = edits
+        self.previousTree = previousTree
+        self.incrementalSession = incrementalSession
     }
 
     mutating func parse(
@@ -40,6 +64,158 @@ struct LiminalCSTParser {
         builder.startNode(.root)
         try parseDocumentItems(with: &builder)
         try builder.finishNode()
+    }
+
+    // MARK: - Block-level incremental reuse
+
+    /// Attempt to splice a reused subtree of `kind` at the current cursor
+    /// position. Returns `true` if reuse succeeded (cursor advanced past
+    /// the reused span); `false` if no candidate, sentinel rejection, or
+    /// no reuse oracle is active.
+    private mutating func tryReuse(
+        kind: LiminalKind,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws -> Bool {
+        guard let previousTree, let session = incrementalSession else {
+            return false
+        }
+        guard currentLineIndex < lines.count else { return false }
+
+        let newOffset = lines[currentLineIndex].startByteOffset
+        guard let oldOffset = Self.mapNewToOld(newOffset, edits: edits) else {
+            return false
+        }
+
+        let oracle = session.makeReuseOracle(
+            previousTree: previousTree,
+            edits: edits
+        )
+
+        let outcome: Bool? = try oracle.withReusableNode(
+            startingAt: TextSize(UInt32(oldOffset)),
+            kind: kind
+        ) { cursor in
+            if Self.subtreeContainsSentinels(cursor) { return false }
+
+            let reusedRange = cursor.textRange
+            let reusedByteLen = Int(reusedRange.length.rawValue)
+
+            // Text alignment guard. Cambium's oracle filters candidates whose
+            // old range overlaps a reported edit, but it can't verify bytes
+            // match when the caller supplies edits that don't actually cover
+            // every change (or empty edits for a source that did change).
+            // Without this guard, a re-parse of unrelated source with empty
+            // edits would splice old subtrees by offset coincidence.
+            if !sourceBytesMatch(cursor, newOffsetBytes: newOffset, byteLen: reusedByteLen) {
+                return false
+            }
+
+            let reuseOutcome = try builder.reuseSubtree(cursor)
+            let oldPath = cursor.childIndexPath()
+            let greenNode = cursor.green { $0 }
+
+            advancePastBytes(reusedByteLen)
+
+            if case .direct = reuseOutcome {
+                acceptedReuses.append(LiminalAcceptedReuse(
+                    oldPath: oldPath,
+                    green: greenNode,
+                    newOffset: TextSize(UInt32(newOffset))
+                ))
+            }
+            return true
+        }
+        return outcome ?? false
+    }
+
+    /// Compare the cursor's old-tree bytes against the new source's bytes
+    /// starting at `newOffsetBytes`. Returns true iff they are byte-equal.
+    /// Defends against caller-side edit-contract violations.
+    private func sourceBytesMatch(
+        _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>,
+        newOffsetBytes: Int,
+        byteLen: Int
+    ) -> Bool {
+        let sourceUTF8 = source.utf8
+        let sourceLen = sourceUTF8.count
+        guard newOffsetBytes >= 0,
+              byteLen >= 0,
+              newOffsetBytes + byteLen <= sourceLen
+        else { return false }
+
+        let candidateString = cursor.makeString()
+        let candidateUTF8 = candidateString.utf8
+        guard candidateUTF8.count == byteLen else { return false }
+
+        let startIdx = sourceUTF8.index(sourceUTF8.startIndex, offsetBy: newOffsetBytes)
+        let endIdx = sourceUTF8.index(startIdx, offsetBy: byteLen)
+        return candidateUTF8.elementsEqual(sourceUTF8[startIdx..<endIdx])
+    }
+
+    /// Map a new-tree byte offset to its old-tree counterpart by replaying
+    /// the edits. Returns nil if `newOffset` falls inside any edit's
+    /// replacement region (meaning no old position corresponds — the bytes
+    /// at that location are freshly authored).
+    ///
+    /// Contract: edits are non-overlapping and sorted by `range.start` in
+    /// OLD-tree coordinates. Mirrors Calculator's `mapNewOffsetToOld`.
+    private static func mapNewToOld(_ newOffset: Int, edits: [TextEdit]) -> Int? {
+        var shift = 0
+        for edit in edits {
+            let oldStart = Int(edit.range.start.rawValue)
+            let oldLen = Int(edit.range.length.rawValue)
+            let newStart = oldStart + shift
+            let newEnd = newStart + edit.replacementUTF8.count
+            if newOffset < newStart {
+                return newOffset - shift
+            }
+            if newOffset < newEnd {
+                return nil
+            }
+            shift += edit.replacementUTF8.count - oldLen
+        }
+        return newOffset - shift
+    }
+
+    /// Advance `currentLineIndex` past the next `byteCount` bytes from the
+    /// current line's start. Asserts the landing position is a line
+    /// boundary — if it isn't, the kind being reused doesn't actually align
+    /// to line boundaries and the candidate list at the top of the file is
+    /// wrong for that kind.
+    private mutating func advancePastBytes(_ byteCount: Int) {
+        let target = lines[currentLineIndex].startByteOffset + byteCount
+        var i = currentLineIndex + 1
+        while i < lines.count && lines[i].startByteOffset < target {
+            i += 1
+        }
+        if i < lines.count {
+            assert(
+                lines[i].startByteOffset == target,
+                "Reused subtree did not end on a line boundary — kind is misclassified for reuse."
+            )
+        }
+        currentLineIndex = i
+    }
+
+    /// Walk a reused subtree's cursor looking for `.missing` / `.error`
+    /// sentinels. A subtree containing sentinels carries stale recovery
+    /// diagnostics; splicing it across a non-overlapping edit could
+    /// silently propagate diagnostics into regions that now parse cleanly.
+    /// Mirrors Calculator's sentinel filter.
+    private static func subtreeContainsSentinels(
+        _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>
+    ) -> Bool {
+        let missing = LiminalLanguage.rawKind(for: .missing)
+        let error = LiminalLanguage.rawKind(for: .error)
+        var hasSentinel = false
+        _ = cursor.visitPreorder { node in
+            if node.rawKind == missing || node.rawKind == error {
+                hasSentinel = true
+                return .stop
+            }
+            return .continue
+        }
+        return hasSentinel
     }
 
     mutating func parseDocumentItems(
@@ -51,41 +227,56 @@ struct LiminalCSTParser {
                 try emitBlankLine(line, with: &builder)
                 currentLineIndex += 1
             } else if let frontmatter = frontmatterInfo(for: line) {
+                if try tryReuse(kind: .frontmatter, with: &builder) { continue }
                 try emitFrontmatter(frontmatter, openerLine: line, with: &builder)
             } else if let fencedCode = fencedCodeBlockInfo(for: line) {
+                if try tryReuse(kind: .fencedCodeBlock, with: &builder) { continue }
                 try emitFencedCodeBlock(fencedCode, openerLine: line, with: &builder)
             } else if let mathBlock = mathShorthandBlockInfo(for: line) {
+                if try tryReuse(kind: .mathBlock, with: &builder) { continue }
                 try emitMathShorthandBlock(mathBlock, openerLine: line, with: &builder)
             } else if let commentBlock = commentBlockInfo(for: line) {
+                if try tryReuse(kind: .commentBlock, with: &builder) { continue }
                 try emitCommentBlock(commentBlock, openerLine: line, with: &builder)
             } else if let heading = headingInfo(for: line) {
+                if try tryReuse(kind: .atxHeading, with: &builder) { continue }
                 try emitHeading(heading, line: line, with: &builder)
                 currentLineIndex += 1
             } else if let directive = directiveInfo(for: line) {
+                if try tryReuse(kind: .directive, with: &builder) { continue }
                 try emitDirective(directive, line: line, with: &builder)
                 currentLineIndex += 1
             } else if let schemaBlock = schemaBlockInfo(for: line) {
+                if try tryReuse(kind: .schemaBlock, with: &builder) { continue }
                 try emitSchemaBlock(schemaBlock, openerLine: line, with: &builder)
             } else if let templateBlock = templateBlockInfo(for: line) {
+                if try tryReuse(kind: .templateBlock, with: &builder) { continue }
                 try emitTemplateBlock(templateBlock, openerLine: line, with: &builder)
             } else if let rawBlock = rawReservedBlockInfo(for: line) {
+                if try tryReuse(kind: rawBlock.kind, with: &builder) { continue }
                 try emitRawReservedBlock(rawBlock, openerLine: line, with: &builder)
             } else if let typedBlock = typedBlockInfo(for: line) {
+                if try tryReuse(kind: .typedBlock, with: &builder) { continue }
                 try emitTypedBlock(typedBlock, openerLine: line, with: &builder)
             } else if let embed = structuredEmbedBlockInfo(for: line) {
+                if try tryReuse(kind: .structuredEmbedBlock, with: &builder) { continue }
                 try emitStructuredEmbedBlock(embed, line: line, with: &builder)
             } else if let embed = wikiEmbedBlockInfo(for: line) {
+                if try tryReuse(kind: .wikiEmbedBlock, with: &builder) { continue }
                 try emitWikiEmbedBlock(embed, line: line, with: &builder)
                 currentLineIndex += 1
             } else if let declaration = valueDeclarationInfo(for: line) {
+                if try tryReuse(kind: .valueDeclaration, with: &builder) { continue }
                 try emitValueDeclaration(declaration, line: line, with: &builder)
             } else if blockQuoteLineInfo(for: line) != nil {
                 try emitBlockQuote(with: &builder)
             } else if let listItem = listItemInfo(for: line) {
                 try emitList(startingWith: listItem, with: &builder)
             } else if let table = pipeTableInfo(startingAt: currentLineIndex) {
+                if try tryReuse(kind: .pipeTable, with: &builder) { continue }
                 try emitPipeTable(table, with: &builder)
             } else {
+                if try tryReuse(kind: .paragraph, with: &builder) { continue }
                 try emitParagraph(with: &builder)
             }
         }

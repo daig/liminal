@@ -361,17 +361,26 @@ public struct LiminalParser {
 
     fileprivate func parse(
         _ source: String,
+        edits: [TextEdit],
+        previousTree: SharedSyntaxTree<LiminalLanguage>?,
+        incrementalSession: IncrementalParseSession<LiminalLanguage>?,
         context: consuming GreenTreeContext<LiminalLanguage>
     ) throws -> LiminalParseSessionBuildOutput {
         var builder = GreenTreeBuilder<LiminalLanguage>(context: consume context)
-        var parser = LiminalCSTParser(source: source)
+        var parser = LiminalCSTParser(
+            source: source,
+            edits: edits,
+            previousTree: previousTree,
+            incrementalSession: incrementalSession
+        )
         try parser.parse(with: &builder)
         let build = try builder.finish()
         let tree = build.snapshot.makeSyntaxTree().intoShared()
         let nextContext = build.intoContext()
         return LiminalParseSessionBuildOutput(
             result: LiminalParseResult(tree: tree, diagnostics: parser.diagnostics),
-            context: consume nextContext
+            context: consume nextContext,
+            acceptedReuses: parser.acceptedReuses
         )
     }
 }
@@ -379,11 +388,55 @@ public struct LiminalParser {
 struct LiminalParseSessionBuildOutput: ~Copyable {
     var result: LiminalParseResult
     var context: GreenTreeContext<LiminalLanguage>
+    var acceptedReuses: [LiminalAcceptedReuse]
+
+    init(
+        result: LiminalParseResult,
+        context: consuming GreenTreeContext<LiminalLanguage>,
+        acceptedReuses: [LiminalAcceptedReuse] = []
+    ) {
+        self.result = result
+        self.context = context
+        self.acceptedReuses = acceptedReuses
+    }
+}
+
+public struct ReuseSummary: Equatable, Sendable {
+    public let queries: Int
+    public let hits: Int
+    public let acceptedReuses: Int
+    public let bytesOffered: UInt64
+    public let bytesAccepted: UInt64
+
+    public init(
+        queries: Int = 0,
+        hits: Int = 0,
+        acceptedReuses: Int = 0,
+        bytesOffered: UInt64 = 0,
+        bytesAccepted: UInt64 = 0
+    ) {
+        self.queries = queries
+        self.hits = hits
+        self.acceptedReuses = acceptedReuses
+        self.bytesOffered = bytesOffered
+        self.bytesAccepted = bytesAccepted
+    }
+
+    public static let empty = ReuseSummary()
+}
+
+struct LiminalAcceptedReuse {
+    let oldPath: SyntaxNodePath
+    let green: GreenNode<LiminalLanguage>
+    let newOffset: TextSize
 }
 
 public final class LiminalParseSession {
     private var context: GreenTreeContext<LiminalLanguage>?
     private var lastTree: SharedSyntaxTree<LiminalLanguage>?
+    private let incrementalSession = IncrementalParseSession<LiminalLanguage>()
+    private(set) public var lastReuseSummary: ReuseSummary = .empty
+    private var pendingEditsInvalidated: Bool = false
 
     public init() {}
 
@@ -392,26 +445,177 @@ public final class LiminalParseSession {
         _ source: String,
         edits: [TextEdit] = []
     ) throws -> LiminalParseResult {
-        _ = edits
+        _ = incrementalSession.consumeAcceptedReuses()
+
+        let effectiveEdits: [TextEdit]
+        if pendingEditsInvalidated {
+            effectiveEdits = []
+            pendingEditsInvalidated = false
+        } else {
+            effectiveEdits = edits
+        }
+
+        let coldStart = (lastTree == nil && effectiveEdits.isEmpty)
+        let sessionForParser: IncrementalParseSession<LiminalLanguage>? = coldStart ? nil : incrementalSession
+        let previousTreeForParser = coldStart ? nil : lastTree
+
+        let countersBefore = incrementalSession.counters
 
         let parser = LiminalParser()
         let output: LiminalParseSessionBuildOutput
         if let existing = context.take() {
-            output = try parser.parse(source, context: consume existing)
+            output = try parser.parse(
+                source,
+                edits: effectiveEdits,
+                previousTree: previousTreeForParser,
+                incrementalSession: sessionForParser,
+                context: consume existing
+            )
         } else {
             output = try parser.parse(
                 source,
+                edits: effectiveEdits,
+                previousTree: previousTreeForParser,
+                incrementalSession: sessionForParser,
                 context: GreenTreeContext(policy: .parseSession(maxEntries: 16_384))
             )
         }
 
         let result = output.result
+        let acceptedReuses = output.acceptedReuses
         context = consume output.context
         lastTree = result.tree
+
+        var bytesAccepted: UInt64 = 0
+        for accepted in acceptedReuses {
+            bytesAccepted += UInt64(accepted.green.textLength.rawValue)
+            if let newPath = Self.resolveNewPath(
+                in: result.tree,
+                offset: accepted.newOffset,
+                green: accepted.green
+            ) {
+                incrementalSession.recordAcceptedReuse(
+                    oldPath: accepted.oldPath,
+                    newPath: newPath,
+                    green: accepted.green
+                )
+            }
+        }
+
+        let countersAfter = incrementalSession.counters
+        lastReuseSummary = ReuseSummary(
+            queries: countersAfter.reuseQueries - countersBefore.reuseQueries,
+            hits: countersAfter.reuseHits - countersBefore.reuseHits,
+            acceptedReuses: acceptedReuses.count,
+            bytesOffered: countersAfter.reusedBytes - countersBefore.reusedBytes,
+            bytesAccepted: bytesAccepted
+        )
+
         return result
     }
 
     public var currentTree: SharedSyntaxTree<LiminalLanguage>? {
         lastTree
     }
+
+    private static func resolveNewPath(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        offset: TextSize,
+        green: GreenNode<LiminalLanguage>
+    ) -> SyntaxNodePath? {
+        let identity = green.identity
+        var found: SyntaxNodePath?
+        tree.withRoot { root in
+            _ = root.visitPreorder { node in
+                let nodeRange = node.textRange
+                if nodeRange.start == offset {
+                    let matches = node.green { $0.identity == identity }
+                    if matches {
+                        found = node.childIndexPath()
+                        return .stop
+                    }
+                    return .continue
+                }
+                if nodeRange.end <= offset { return .skipChildren }
+                if nodeRange.start > offset { return .skipChildren }
+                return .continue
+            }
+        }
+        return found
+    }
+
+    /// Replace the subtree at `target` with `replacement`, updating the
+    /// session's current tree. The parser is NOT re-run; any diagnostics
+    /// from the previous parse are stale relative to the resulting tree.
+    ///
+    /// Returns the new tree and the replacement witness. Any
+    /// `SyntaxNodeHandle` captured before this call is invalidated by the
+    /// new `treeID`.
+    func replaceSubtree(
+        _ target: SyntaxNodeHandle<LiminalLanguage>,
+        with replacement: ResolvedGreenNode<LiminalLanguage>
+    ) throws -> StructuralReplaceOutput {
+        guard let tree = lastTree else {
+            throw LiminalEditError.noParsedTree
+        }
+        guard var ctx = context.take() else {
+            throw LiminalEditError.noParsedTree
+        }
+        let result = try tree.replacing(target, with: replacement, context: &ctx)
+        let witness = result.witness
+        let newTree = result.intoTree().intoShared()
+        context = consume ctx
+        lastTree = newTree
+        pendingEditsInvalidated = true
+        return StructuralReplaceOutput(tree: newTree, witness: witness)
+    }
+
+    func replaceSubtree(
+        _ target: SyntaxNodeHandle<LiminalLanguage>,
+        with replacement: GreenTreeSnapshot<LiminalLanguage>
+    ) throws -> StructuralReplaceOutput {
+        guard let tree = lastTree else {
+            throw LiminalEditError.noParsedTree
+        }
+        guard var ctx = context.take() else {
+            throw LiminalEditError.noParsedTree
+        }
+        let result = try tree.replacing(target, with: replacement, context: &ctx)
+        let witness = result.witness
+        let newTree = result.intoTree().intoShared()
+        context = consume ctx
+        lastTree = newTree
+        pendingEditsInvalidated = true
+        return StructuralReplaceOutput(tree: newTree, witness: witness)
+    }
+
+    func replaceSubtree(
+        _ target: SyntaxNodeHandle<LiminalLanguage>,
+        with replacement: borrowing GreenBuildResult<LiminalLanguage>
+    ) throws -> StructuralReplaceOutput {
+        guard let tree = lastTree else {
+            throw LiminalEditError.noParsedTree
+        }
+        guard var ctx = context.take() else {
+            throw LiminalEditError.noParsedTree
+        }
+        let result = try tree.replacing(target, with: replacement, context: &ctx)
+        let witness = result.witness
+        let newTree = result.intoTree().intoShared()
+        context = consume ctx
+        lastTree = newTree
+        pendingEditsInvalidated = true
+        return StructuralReplaceOutput(tree: newTree, witness: witness)
+    }
+}
+
+struct StructuralReplaceOutput {
+    let tree: SharedSyntaxTree<LiminalLanguage>
+    let witness: ReplacementWitness<LiminalLanguage>
+}
+
+public enum LiminalEditError: Error, Equatable, Sendable {
+    case noParsedTree
+    case overlappingEdits
+    case editOutOfRange(start: UInt32, end: UInt32, sourceByteLength: Int)
 }
