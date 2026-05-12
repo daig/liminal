@@ -2,6 +2,13 @@
 
 Status: draft for review
 
+Companion documents:
+
+- [Liminal Markup Motivation](./liminal_markup_motivation.md) captures the
+  non-normative design rationale.
+- [Liminal Markup Syntax Spec v0.1](./liminal_markup_syntax_spec_v0_1.md) is
+  retained as historical design context.
+
 This document defines the source syntax and parse/lowering contract for
 Liminal Markup v0.2.
 

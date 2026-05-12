@@ -7,10 +7,8 @@ struct LiminalTextView: NSViewRepresentable {
     @ObservedObject var document: LiminalSourceDocument
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        guard let textView = scrollView.documentView as? NSTextView else {
-            fatalError("NSTextView.scrollableTextView() did not return an NSTextView")
-        }
+        let textView = VimTextView()
+        let scrollView = Self.makeScrollView(wrapping: textView)
 
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -29,11 +27,11 @@ struct LiminalTextView: NSViewRepresentable {
 
         textView.string = document.session.source
         textView.textStorage?.delegate = context.coordinator
-        context.coordinator.textView = textView
+        textView.vimController = document.vimController
 
-        // Make NSTextView the first responder once the view is in the
-        // window, and apply initial highlights. Both must happen after
-        // the scroll view is attached to a window, hence the async hop.
+        context.coordinator.textView = textView
+        document.vimController.delegate = context.coordinator
+
         DispatchQueue.main.async { [weak textView, weak coordinator = context.coordinator] in
             guard let textView else { return }
             textView.window?.makeFirstResponder(textView)
@@ -44,7 +42,7 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView else { return }
+        guard let textView = scrollView.documentView as? VimTextView else { return }
         let target = document.session.source
         if textView.string != target {
             context.coordinator.isApplyingProgrammaticEdit = true
@@ -58,10 +56,43 @@ struct LiminalTextView: NSViewRepresentable {
         Coordinator(document: document)
     }
 
+    // MARK: - Scroll view construction
+    //
+    // `NSTextView.scrollableTextView()` returns a stock NSTextView; to
+    // host our `VimTextView` subclass we replicate the wrapping manually.
+    // Mirrors AppKit's own implementation: a non-flipped clip view, a
+    // text view sized to the clip's content size with sane resizing
+    // masks, and a vertical scroller.
+
+    private static func makeScrollView(wrapping textView: VimTextView) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .noBorder
+        scrollView.autohidesScrollers = false
+
+        let contentSize = scrollView.contentSize
+        textView.frame = NSRect(origin: .zero, size: contentSize)
+        textView.minSize = NSSize(width: 0, height: contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                  height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(
+            width: contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = true
+
+        scrollView.documentView = textView
+        return scrollView
+    }
+
     @MainActor
-    final class Coordinator: NSObject, NSTextStorageDelegate {
+    final class Coordinator: NSObject, NSTextStorageDelegate, VimControllerDelegate {
         let document: LiminalSourceDocument
-        weak var textView: NSTextView?
+        weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
 
         let highlighter = LiminalHighlighter()
@@ -71,6 +102,8 @@ struct LiminalTextView: NSViewRepresentable {
             self.document = document
         }
 
+        // MARK: - NSTextStorageDelegate
+
         nonisolated func textStorage(
             _ textStorage: NSTextStorage,
             didProcessEditing editedMask: NSTextStorageEditActions,
@@ -79,11 +112,6 @@ struct LiminalTextView: NSViewRepresentable {
         ) {
             guard editedMask.contains(.editedCharacters) else { return }
 
-            // AppKit dispatches textStorage delegate callbacks on the layout
-            // manager's thread, which is the main thread for typical NSTextView
-            // setups. Extract the (Sendable) replacement string here before
-            // hopping onto the MainActor closure so we don't capture the
-            // non-Sendable NSTextStorage across the boundary.
             let replacement = textStorage.attributedSubstring(from: editedRange).string
 
             MainActor.assumeIsolated {
@@ -114,6 +142,75 @@ struct LiminalTextView: NSViewRepresentable {
             }
         }
 
+        // MARK: - VimControllerDelegate
+
+        func moveCursor(direction: MoveDirection, count: Int) {
+            guard let textView else { return }
+            let steps = max(1, count)
+            switch direction {
+            case .left:
+                for _ in 0..<steps { textView.moveLeft(self) }
+            case .right:
+                for _ in 0..<steps { textView.moveRight(self) }
+            case .up:
+                for _ in 0..<steps { textView.moveUp(self) }
+            case .down:
+                for _ in 0..<steps { textView.moveDown(self) }
+            }
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        func structuralMotion(_ motion: StructuralMotion, count: Int) {
+            guard let textView,
+                  let parsed = document.session.parseResult
+            else { return }
+            let steps = max(1, count)
+
+            // Start from the current cursor byte offset, jump iteratively.
+            var byteOffset = currentCursorByteOffset() ?? 0
+            for _ in 0..<steps {
+                let next: Int?
+                switch motion {
+                case .previousSibling:
+                    next = StructureCursor.previousSibling(of: byteOffset, in: parsed.rootSyntax)
+                case .nextSibling:
+                    next = StructureCursor.nextSibling(of: byteOffset, in: parsed.rootSyntax)
+                }
+                guard let next else { break }
+                byteOffset = next
+            }
+            setCursor(byteOffset: byteOffset)
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        func toggleTaskAtCursor() {
+            guard let offset = currentCursorByteOffset() else { return }
+            document.toggleTaskAt(byteOffset: offset)
+        }
+
+        // MARK: - Cursor helpers
+
+        private func currentCursorByteOffset() -> Int? {
+            guard let textView else { return nil }
+            let selectedRange = textView.selectedRange()
+            let cursorNSRange = NSRange(location: selectedRange.location, length: 0)
+            return LiminalTextView.utf16RangeToByteRange(
+                cursorNSRange,
+                in: textView.string
+            )?.lowerBound
+        }
+
+        private func setCursor(byteOffset: Int) {
+            guard let textView else { return }
+            let range = CambiumCore.TextRange(
+                start: TextSize(UInt32(max(0, byteOffset))),
+                length: TextSize(UInt32(0))
+            )
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: textView.string)
+            else { return }
+            textView.setSelectedRange(nsRange)
+        }
+
         /// Re-apply highlights to the entire text storage from the current
         /// parse result. Called after every user edit, on initial display,
         /// and when the source is replaced externally (document load).
@@ -140,9 +237,6 @@ struct LiminalTextView: NSViewRepresentable {
             storage.endEditing()
             isApplyingProgrammaticEdit = false
 
-            // Keep typing attributes aligned with the default so newly-
-            // inserted text doesn't inherit stale styling from the cursor's
-            // previous position.
             textView.typingAttributes = theme.defaultAttributes
         }
     }
@@ -171,11 +265,6 @@ struct LiminalTextView: NSViewRepresentable {
         return startByte..<endByte
     }
 
-    /// Inverse of `utf16RangeToByteRange`. Converts a UTF-8 byte range to
-    /// the NSRange (UTF-16 code units) that NSTextStorage expects. Returns
-    /// nil for ranges whose boundaries don't align to scalar boundaries
-    /// (e.g., mid-emoji); the highlighter shouldn't produce such ranges
-    /// since tokens span whole scalars, but the conversion is defensive.
     nonisolated static func byteRangeToNSRange(
         _ range: CambiumCore.TextRange,
         in source: String

@@ -1,5 +1,10 @@
 # Liminal Markup Syntax Spec v0.1
 
+Status: historical proposal. The live syntax contract is
+[Liminal Markup Syntax Spec v0.2 Draft](./liminal_markup_syntax_spec_v0_2.md).
+The distilled, non-normative design rationale now lives in
+[Liminal Markup Motivation](./liminal_markup_motivation.md).
+
 Below is a proposed **v0.1 syntax architecture** for a language I’ll call **Liminal Markup** for now. The key idea is:
 
 > Markdown-like syntax is not the language’s semantic core.  
