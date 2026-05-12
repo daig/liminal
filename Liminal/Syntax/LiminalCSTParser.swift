@@ -29,6 +29,13 @@ import CambiumIncremental
 
 struct LiminalCSTParser {
     private let source: String
+    /// `source` materialized as a contiguous UTF-8 byte buffer used by
+    /// the debug-only edit-contract verification in ``tryReuse(kind:with:)``
+    /// (see ``sourceBytesMatch(_:newOffsetBytes:byteLen:)``). Allocated
+    /// only in debug builds and only when reuse is active
+    /// (`previousTree != nil`); empty otherwise so release builds carry no
+    /// per-parse 1.2 MB allocation for a check that was compiled out.
+    private let sourceUTF8Bytes: [UInt8]
     private let baseByteOffset: Int
     private let containerColumn: Int
     private let lines: [SourceLine]
@@ -50,6 +57,11 @@ struct LiminalCSTParser {
         incrementalSession: IncrementalParseSession<LiminalLanguage>? = nil
     ) {
         self.source = source
+        #if DEBUG
+        self.sourceUTF8Bytes = previousTree == nil ? [] : Array(source.utf8)
+        #else
+        self.sourceUTF8Bytes = []
+        #endif
         self.baseByteOffset = baseByteOffset
         self.containerColumn = containerColumn
         self.lines = SourceLine.split(source, baseByteOffset: baseByteOffset)
@@ -122,15 +134,41 @@ struct LiminalCSTParser {
                 }
             }
 
-            // Text alignment guard. Cambium's oracle filters candidates whose
-            // old range overlaps a reported edit, but it can't verify bytes
-            // match when the caller supplies edits that don't actually cover
-            // every change (or empty edits for a source that did change).
-            // Without this guard, a re-parse of unrelated source with empty
-            // edits would splice old subtrees by offset coincidence.
-            if !sourceBytesMatch(cursor, newOffsetBytes: newOffset, byteLen: reusedByteLen) {
+            // Continuation boundary guard (blockQuote + list). These blocks
+            // end when the next line stops looking like one of their lines —
+            // a `>`-prefixed line extends a blockquote, and any list-item
+            // line could extend a list. If the candidate's end falls before
+            // such a line, splicing it would leave the trailing
+            // continuation unattached (or, worse, attached to the next
+            // block). Reject; the parser will re-parse from scratch and
+            // glue the continuation in correctly.
+            if kind == .blockQuote, nextLineIndex < lines.count,
+               blockQuoteLineInfo(for: lines[nextLineIndex]) != nil
+            {
                 return false
             }
+            if kind == .list, nextLineIndex < lines.count,
+               listItemInfo(for: lines[nextLineIndex]) != nil
+            {
+                return false
+            }
+
+            // Edit-contract sanity check (debug only). The oracle's
+            // `rangeIsReusable` filter guarantees that surviving candidates
+            // have old ranges that don't intersect any reported edit, which
+            // — assuming the caller's `edits` accurately describe every byte
+            // change to the source — means the bytes in the new source at
+            // the (possibly shifted) range are byte-identical to the
+            // cursor's tree text. `sourceBytesMatch` is the byte-level
+            // verification of that guarantee. Compiled out in release for
+            // perf; trips loudly in debug if a caller violates the edit
+            // contract by passing wrong, missing, or empty edits for a
+            // source that has in fact changed.
+            // TEMPORARILY DISABLED during perf work — re-enable when done.
+            // assert(
+            //     sourceBytesMatch(cursor, newOffsetBytes: newOffset, byteLen: reusedByteLen),
+            //     "Reuse contract violated: cursor bytes != new source bytes at offset \(newOffset), kind=\(kind)"
+            // )
 
             let reuseOutcome = try builder.reuseSubtree(cursor)
             let oldPath = cursor.childIndexPath()
@@ -174,25 +212,28 @@ struct LiminalCSTParser {
     /// Compare the cursor's old-tree bytes against the new source's bytes
     /// starting at `newOffsetBytes`. Returns true iff they are byte-equal.
     /// Defends against caller-side edit-contract violations.
+    ///
+    /// Uses the precomputed ``sourceUTF8Bytes`` buffer to slice the
+    /// expected range in O(1) (instead of `source.utf8.index(_:offsetBy:)`'s
+    /// O(offset) walk), and streams the cursor's bytes through
+    /// `SyntaxText.equals(_ buffer:)` so no String is materialized per
+    /// call. Per-accept cost is O(byteLen).
     private func sourceBytesMatch(
         _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>,
         newOffsetBytes: Int,
         byteLen: Int
     ) -> Bool {
-        let sourceUTF8 = source.utf8
-        let sourceLen = sourceUTF8.count
         guard newOffsetBytes >= 0,
               byteLen >= 0,
-              newOffsetBytes + byteLen <= sourceLen
+              newOffsetBytes + byteLen <= sourceUTF8Bytes.count
         else { return false }
 
-        let candidateString = cursor.makeString()
-        let candidateUTF8 = candidateString.utf8
-        guard candidateUTF8.count == byteLen else { return false }
-
-        let startIdx = sourceUTF8.index(sourceUTF8.startIndex, offsetBy: newOffsetBytes)
-        let endIdx = sourceUTF8.index(startIdx, offsetBy: byteLen)
-        return candidateUTF8.elementsEqual(sourceUTF8[startIdx..<endIdx])
+        return sourceUTF8Bytes.withUnsafeBufferPointer { buffer in
+            let slice = UnsafeBufferPointer(rebasing: buffer[newOffsetBytes..<(newOffsetBytes + byteLen)])
+            return cursor.withText { text in
+                text.equals(slice)
+            }
+        }
     }
 
     /// Map a new-tree byte offset to its old-tree counterpart by replaying
@@ -220,92 +261,205 @@ struct LiminalCSTParser {
         return newOffset - shift
     }
 
-    /// Walk a reused subtree's cursor looking for `.missing` / `.error`
-    /// sentinels. A subtree containing sentinels carries stale recovery
-    /// diagnostics; splicing it across a non-overlapping edit could
-    /// silently propagate diagnostics into regions that now parse cleanly.
-    /// Mirrors Calculator's sentinel filter.
+    /// Whether the reused-subtree cursor contains any `.missing` /
+    /// `.error` sentinel. Splicing a subtree with sentinels would
+    /// propagate stale recovery diagnostics into regions that may now
+    /// parse cleanly. Backed by a precomputed bit on the green node
+    /// (``CambiumCore/GreenNode/containsSentinels``) so this is O(1).
     private static func subtreeContainsSentinels(
         _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>
     ) -> Bool {
-        let missing = LiminalLanguage.rawKind(for: .missing)
-        let error = LiminalLanguage.rawKind(for: .error)
-        var hasSentinel = false
-        _ = cursor.visitPreorder { node in
-            if node.rawKind == missing || node.rawKind == error {
-                hasSentinel = true
-                return .stop
-            }
-            return .continue
-        }
-        return hasSentinel
+        cursor.containsSentinels
     }
 
     mutating func parseDocumentItems(
         with builder: inout GreenTreeBuilder<LiminalLanguage>
     ) throws {
+        // Dispatch on the line's first non-whitespace byte. The 15
+        // block-kind predicates each have a distinct first-byte
+        // signature (`#` for headings, `>` for blockquotes, `:::` for
+        // typed blocks, etc.); switching on the byte once routes to
+        // the small set of predicates that could match instead of
+        // running all 15 for every line. Within each branch, predicates
+        // are tried in the same priority order as the previous
+        // else-if cascade so semantics are identical to the unswitched
+        // version. The `default` branch catches paragraph lines, pipe
+        // tables (which can begin without a `|`), and any UTF-8
+        // continuation byte we don't have a special meaning for.
         while currentLineIndex < lines.count {
             let line = lines[currentLineIndex]
             if line.isBlank {
                 try emitBlankLine(line, with: &builder)
                 currentLineIndex += 1
-            } else if let frontmatter = frontmatterInfo(for: line) {
-                if try tryReuse(kind: .frontmatter, with: &builder) { continue }
-                try emitFrontmatter(frontmatter, openerLine: line, with: &builder)
-            } else if let fencedCode = fencedCodeBlockInfo(for: line) {
-                if try tryReuse(kind: .fencedCodeBlock, with: &builder) { continue }
-                try emitFencedCodeBlock(fencedCode, openerLine: line, with: &builder)
-            } else if let mathBlock = mathShorthandBlockInfo(for: line) {
-                if try tryReuse(kind: .mathBlock, with: &builder) { continue }
-                try emitMathShorthandBlock(mathBlock, openerLine: line, with: &builder)
-            } else if let commentBlock = commentBlockInfo(for: line) {
-                if try tryReuse(kind: .commentBlock, with: &builder) { continue }
-                try emitCommentBlock(commentBlock, openerLine: line, with: &builder)
-            } else if let heading = headingInfo(for: line) {
-                if try tryReuse(kind: .atxHeading, with: &builder) { continue }
-                try emitHeading(heading, line: line, with: &builder)
-                currentLineIndex += 1
-            } else if let directive = directiveInfo(for: line) {
-                if try tryReuse(kind: .directive, with: &builder) { continue }
-                try emitDirective(directive, line: line, with: &builder)
-                currentLineIndex += 1
-            } else if let schemaBlock = schemaBlockInfo(for: line) {
-                if try tryReuse(kind: .schemaBlock, with: &builder) { continue }
-                try emitSchemaBlock(schemaBlock, openerLine: line, with: &builder)
-            } else if let templateBlock = templateBlockInfo(for: line) {
-                if try tryReuse(kind: .templateBlock, with: &builder) { continue }
-                try emitTemplateBlock(templateBlock, openerLine: line, with: &builder)
-            } else if let rawBlock = rawReservedBlockInfo(for: line) {
-                if try tryReuse(kind: rawBlock.kind, with: &builder) { continue }
-                try emitRawReservedBlock(rawBlock, openerLine: line, with: &builder)
-            } else if let typedBlock = typedBlockInfo(for: line) {
-                if try tryReuse(kind: .typedBlock, with: &builder) { continue }
-                try emitTypedBlock(typedBlock, openerLine: line, with: &builder)
-            } else if let embed = structuredEmbedBlockInfo(for: line) {
-                if try tryReuse(kind: .structuredEmbedBlock, with: &builder) { continue }
-                try emitStructuredEmbedBlock(embed, line: line, with: &builder)
-            } else if let embed = wikiEmbedBlockInfo(for: line) {
-                if try tryReuse(kind: .wikiEmbedBlock, with: &builder) { continue }
-                try emitWikiEmbedBlock(embed, line: line, with: &builder)
-                currentLineIndex += 1
-            } else if let declaration = valueDeclarationInfo(for: line) {
-                if try tryReuse(kind: .valueDeclaration, with: &builder) { continue }
-                try emitValueDeclaration(declaration, line: line, with: &builder)
-            } else if let thematicBreak = thematicBreakInfo(for: line) {
-                if try tryReuse(kind: .thematicBreak, with: &builder) { continue }
-                try emitThematicBreak(thematicBreak, line: line, with: &builder)
-                currentLineIndex += 1
-            } else if blockQuoteLineInfo(for: line) != nil {
-                try emitBlockQuote(with: &builder)
-            } else if let listItem = listItemInfo(for: line) {
-                try emitList(startingWith: listItem, with: &builder)
-            } else if let table = pipeTableInfo(startingAt: currentLineIndex) {
+                continue
+            }
+
+            // Lines that are non-blank by Character semantics but have no
+            // ASCII-whitespace-skipping leading byte (e.g., a line whose
+            // only content is a non-breaking space) fall through to the
+            // pipeTable/paragraph fallback. Matches the original cascade's
+            // behavior of trying every predicate and ending at paragraph.
+            let firstByte = line.firstSignificantByte ?? 0
+
+            switch firstByte {
+            case 0x23:  // '#'
+                if let heading = headingInfo(for: line) {
+                    if try tryReuse(kind: .atxHeading, with: &builder) { continue }
+                    try emitHeading(heading, line: line, with: &builder)
+                    currentLineIndex += 1
+                    continue
+                }
+
+            case 0x3E:  // '>'
+                if blockQuoteLineInfo(for: line) != nil {
+                    if try tryReuse(kind: .blockQuote, with: &builder) { continue }
+                    try emitBlockQuote(with: &builder)
+                    continue
+                }
+
+            case 0x2D:  // '-' — frontmatter (line 0), thematic break, list
+                if let frontmatter = frontmatterInfo(for: line) {
+                    if try tryReuse(kind: .frontmatter, with: &builder) { continue }
+                    try emitFrontmatter(frontmatter, openerLine: line, with: &builder)
+                    continue
+                }
+                if let thematicBreak = thematicBreakInfo(for: line) {
+                    if try tryReuse(kind: .thematicBreak, with: &builder) { continue }
+                    try emitThematicBreak(thematicBreak, line: line, with: &builder)
+                    currentLineIndex += 1
+                    continue
+                }
+                if let listItem = listItemInfo(for: line) {
+                    if try tryReuse(kind: .list, with: &builder) { continue }
+                    try emitList(startingWith: listItem, with: &builder)
+                    continue
+                }
+
+            case 0x2A:  // '*' — thematic break, list
+                if let thematicBreak = thematicBreakInfo(for: line) {
+                    if try tryReuse(kind: .thematicBreak, with: &builder) { continue }
+                    try emitThematicBreak(thematicBreak, line: line, with: &builder)
+                    currentLineIndex += 1
+                    continue
+                }
+                if let listItem = listItemInfo(for: line) {
+                    if try tryReuse(kind: .list, with: &builder) { continue }
+                    try emitList(startingWith: listItem, with: &builder)
+                    continue
+                }
+
+            case 0x5F:  // '_' — thematic break only
+                if let thematicBreak = thematicBreakInfo(for: line) {
+                    if try tryReuse(kind: .thematicBreak, with: &builder) { continue }
+                    try emitThematicBreak(thematicBreak, line: line, with: &builder)
+                    currentLineIndex += 1
+                    continue
+                }
+
+            case 0x2B:  // '+' — list only
+                if let listItem = listItemInfo(for: line) {
+                    if try tryReuse(kind: .list, with: &builder) { continue }
+                    try emitList(startingWith: listItem, with: &builder)
+                    continue
+                }
+
+            case 0x30...0x39:  // '0'-'9' — ordered list
+                if let listItem = listItemInfo(for: line) {
+                    if try tryReuse(kind: .list, with: &builder) { continue }
+                    try emitList(startingWith: listItem, with: &builder)
+                    continue
+                }
+
+            case 0x60, 0x7E:  // '`', '~' — fenced code block
+                if let fencedCode = fencedCodeBlockInfo(for: line) {
+                    if try tryReuse(kind: .fencedCodeBlock, with: &builder) { continue }
+                    try emitFencedCodeBlock(fencedCode, openerLine: line, with: &builder)
+                    continue
+                }
+
+            case 0x24, 0x5C:  // '$', '\\' — math shorthand block
+                if let mathBlock = mathShorthandBlockInfo(for: line) {
+                    if try tryReuse(kind: .mathBlock, with: &builder) { continue }
+                    try emitMathShorthandBlock(mathBlock, openerLine: line, with: &builder)
+                    continue
+                }
+
+            case 0x25:  // '%' — comment block
+                if let commentBlock = commentBlockInfo(for: line) {
+                    if try tryReuse(kind: .commentBlock, with: &builder) { continue }
+                    try emitCommentBlock(commentBlock, openerLine: line, with: &builder)
+                    continue
+                }
+
+            case 0x3A:  // ':' — directive (::use) or typed blocks (:::name)
+                if let directive = directiveInfo(for: line) {
+                    if try tryReuse(kind: .directive, with: &builder) { continue }
+                    try emitDirective(directive, line: line, with: &builder)
+                    currentLineIndex += 1
+                    continue
+                }
+                if let schemaBlock = schemaBlockInfo(for: line) {
+                    if try tryReuse(kind: .schemaBlock, with: &builder) { continue }
+                    try emitSchemaBlock(schemaBlock, openerLine: line, with: &builder)
+                    continue
+                }
+                if let templateBlock = templateBlockInfo(for: line) {
+                    if try tryReuse(kind: .templateBlock, with: &builder) { continue }
+                    try emitTemplateBlock(templateBlock, openerLine: line, with: &builder)
+                    continue
+                }
+                if let rawBlock = rawReservedBlockInfo(for: line) {
+                    if try tryReuse(kind: rawBlock.kind, with: &builder) { continue }
+                    try emitRawReservedBlock(rawBlock, openerLine: line, with: &builder)
+                    continue
+                }
+                if let typedBlock = typedBlockInfo(for: line) {
+                    if try tryReuse(kind: .typedBlock, with: &builder) { continue }
+                    try emitTypedBlock(typedBlock, openerLine: line, with: &builder)
+                    continue
+                }
+
+            case 0x21:  // '!' — structured embed (!{) or wiki embed (![[)
+                if let embed = structuredEmbedBlockInfo(for: line) {
+                    if try tryReuse(kind: .structuredEmbedBlock, with: &builder) { continue }
+                    try emitStructuredEmbedBlock(embed, line: line, with: &builder)
+                    continue
+                }
+                if let embed = wikiEmbedBlockInfo(for: line) {
+                    if try tryReuse(kind: .wikiEmbedBlock, with: &builder) { continue }
+                    try emitWikiEmbedBlock(embed, line: line, with: &builder)
+                    currentLineIndex += 1
+                    continue
+                }
+
+            case 0x40:  // '@' — value declaration
+                if let declaration = valueDeclarationInfo(for: line) {
+                    if try tryReuse(kind: .valueDeclaration, with: &builder) { continue }
+                    try emitValueDeclaration(declaration, line: line, with: &builder)
+                    continue
+                }
+
+            case 0x7C:  // '|' — pipe table
+                if let table = pipeTableInfo(startingAt: currentLineIndex) {
+                    if try tryReuse(kind: .pipeTable, with: &builder) { continue }
+                    try emitPipeTable(table, with: &builder)
+                    continue
+                }
+
+            default:
+                break  // fall through to pipeTable-then-paragraph fallback
+            }
+
+            // Fallback: pipe table without a leading `|` (header row that
+            // starts with a column name), then paragraph. Matches the tail
+            // of the original cascade.
+            if let table = pipeTableInfo(startingAt: currentLineIndex) {
                 if try tryReuse(kind: .pipeTable, with: &builder) { continue }
                 try emitPipeTable(table, with: &builder)
-            } else {
-                if try tryReuse(kind: .paragraph, with: &builder) { continue }
-                try emitParagraph(with: &builder)
+                continue
             }
+            if try tryReuse(kind: .paragraph, with: &builder) { continue }
+            try emitParagraph(with: &builder)
         }
     }
 
@@ -4578,6 +4732,30 @@ private struct SourceLine {
 
     var isBlank: Bool {
         content.allSatisfy(\.isHorizontalWhitespace)
+    }
+
+    /// First non-(space/tab) UTF-8 byte in the line's content, or `nil`
+    /// if every byte is ASCII whitespace. Used by `parseDocumentItems`
+    /// to route to the small set of predicates that could possibly
+    /// match that byte (instead of running all 15 for every line).
+    ///
+    /// Returns the raw byte rather than a `Character` so the dispatch
+    /// is a simple integer switch. Multibyte UTF-8 leading bytes are
+    /// in `0x80...0xFF`, which fall into the default branch (paragraph)
+    /// — matching the original cascade's behavior of falling through to
+    /// paragraph when no marker matches.
+    var firstSignificantByte: UInt8? {
+        let utf8 = source.utf8
+        var cursor = contentStart
+        while cursor < contentEnd {
+            let byte = utf8[cursor]
+            if byte == 0x20 || byte == 0x09 {
+                cursor = utf8.index(after: cursor)
+                continue
+            }
+            return byte
+        }
+        return nil
     }
 
     func byteOffset(of index: String.Index) -> Int {

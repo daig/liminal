@@ -480,7 +480,6 @@ public final class LiminalParseSession {
                 context: GreenTreeContext(policy: .parseSession(maxEntries: 16_384))
             )
         }
-
         let result = output.result
         let acceptedReuses = output.acceptedReuses
         context = consume output.context
@@ -524,24 +523,16 @@ public final class LiminalParseSession {
         green: GreenNode<LiminalLanguage>
     ) -> SyntaxNodePath? {
         let identity = green.identity
-        var found: SyntaxNodePath?
-        tree.withRoot { root in
-            _ = root.visitPreorder { node in
-                let nodeRange = node.textRange
-                if nodeRange.start == offset {
-                    let matches = node.green { $0.identity == identity }
-                    if matches {
-                        found = node.childIndexPath()
-                        return .stop
-                    }
-                    return .continue
+        return tree.withRoot { root in
+            root.withFirstNode(
+                startingAt: offset,
+                where: { candidate in
+                    candidate.green { $0.identity == identity }
                 }
-                if nodeRange.end <= offset { return .skipChildren }
-                if nodeRange.start > offset { return .skipChildren }
-                return .continue
-            }
+            ) { match in
+                match.childIndexPath()
+            }?.value
         }
-        return found
     }
 
     /// Replace the subtree at `target` with `replacement`, updating the
