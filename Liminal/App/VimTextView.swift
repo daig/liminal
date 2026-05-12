@@ -13,6 +13,104 @@ import AppKit
 final class VimTextView: NSTextView {
     weak var vimController: VimController?
 
+    /// Mark indicators to paint as colored dots above their characters.
+    /// Coordinator owns the anchor → utf16 location conversion and pushes
+    /// this list whenever the registry changes. The view just paints what
+    /// it's given.
+    var markPositions: [MarkIndicator] = [] {
+        didSet {
+            guard oldValue != markPositions else { return }
+            needsDisplay = true
+        }
+    }
+
+    struct MarkIndicator: Equatable {
+        let utf16Location: Int
+        let letter: Character
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawMarkIndicators(in: dirtyRect)
+    }
+
+    private func drawMarkIndicators(in dirtyRect: NSRect) {
+        guard !markPositions.isEmpty,
+              let layoutManager,
+              let textContainer
+        else { return }
+
+        // Group marks by glyph position so multiple marks at the same
+        // location stack in a grid instead of overlapping.
+        let grouped = Dictionary(grouping: markPositions) { $0.utf16Location }
+        let flipped = isFlipped
+
+        for (location, indicators) in grouped {
+            guard let baseRect = markIndicatorGlyphRect(
+                forUTF16Location: location,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            ) else { continue }
+
+            // Stable visual order: sort by letter so the same mark always
+            // lands in the same grid slot regardless of dictionary order.
+            let sortedIndicators = indicators.sorted { $0.letter < $1.letter }
+            guard let layout = MarkDotLayout.layout(
+                forCount: sortedIndicators.count,
+                anchoredTo: baseRect,
+                flipped: flipped
+            ) else { continue }
+
+            guard layout.bounds.intersects(dirtyRect) else { continue }
+
+            for (rect, indicator) in zip(layout.dotRects, sortedIndicators) {
+                let color = VimMarkPalette.color(for: indicator.letter)
+                color.setFill()
+                NSBezierPath(ovalIn: rect).fill()
+            }
+        }
+    }
+
+    /// Map a UTF-16 location to the on-screen glyph rect (in view
+    /// coordinates). Mirrors the reference's `markIndicatorGlyphRect`:
+    /// uses NSLayoutManager bounding-rect APIs, falls back to the line
+    /// fragment's used rect for empty-glyph positions, and offsets by
+    /// `textContainerOrigin` for view space.
+    private func markIndicatorGlyphRect(
+        forUTF16Location location: Int,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> NSRect? {
+        let text = string as NSString
+        guard text.length > 0 else { return nil }
+
+        let clampedLocation = max(0, min(location, text.length - 1))
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: clampedLocation)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+
+        var glyphRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+        )
+        if glyphRect.isEmpty {
+            let lineUsedRect = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            glyphRect = CGRect(
+                x: max(lineUsedRect.minX, lineUsedRect.maxX - 1),
+                y: lineUsedRect.minY,
+                width: 1,
+                height: lineUsedRect.height
+            )
+        }
+        return glyphRect.offsetBy(
+            dx: textContainerOrigin.x,
+            dy: textContainerOrigin.y
+        )
+    }
+
     override func keyDown(with event: NSEvent) {
         // IME / dead-key composition: NSTextView's keyDown fires before
         // the composed character is committed. Let it through so IME

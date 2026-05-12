@@ -114,6 +114,7 @@ struct LiminalTextView: NSViewRepresentable {
         let theme = LiminalHighlightTheme.default
 
         private var modeObservation: AnyCancellable?
+        private var marksObservation: AnyCancellable?
 
         init(document: LiminalSourceDocument) {
             self.document = document
@@ -127,6 +128,53 @@ struct LiminalTextView: NSViewRepresentable {
                     self?.refreshCursorStyle()
                 }
             }
+            marksObservation = controller.$marks.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshMarkIndicators()
+                }
+            }
+        }
+
+        /// Resolve every live mark against the current tree and push the
+        /// resulting `(utf16Location, letter)` list to the text view so
+        /// `draw(_:)` can paint the dots.
+        func refreshMarkIndicators() {
+            guard let textView else { return }
+            guard let root = document.currentRootSyntax else {
+                textView.markPositions = []
+                return
+            }
+            let source = textView.string
+            let indicators: [VimTextView.MarkIndicator] = document
+                .vimController
+                .marks
+                .marks
+                .compactMap { (letter, anchor) -> VimTextView.MarkIndicator? in
+                    let byteOffset: TextSize
+                    switch anchor.resolve(in: root) {
+                    case .strong(let off), .weak(let off), .recovered(let off):
+                        byteOffset = off
+                    case .lost:
+                        return nil
+                    }
+                    let range = CambiumCore.TextRange(
+                        start: byteOffset,
+                        length: TextSize(0)
+                    )
+                    guard let nsRange = LiminalTextView.byteRangeToNSRange(
+                        range,
+                        in: source
+                    ) else { return nil }
+                    return VimTextView.MarkIndicator(
+                        utf16Location: nsRange.location,
+                        letter: letter
+                    )
+                }
+            textView.markPositions = indicators
+            // Glyph positions may have shifted even when the indicator
+            // tuple is unchanged (e.g., text on a prior line moved); force
+            // a redraw of the visible region to catch that case.
+            textView.needsDisplay = true
         }
 
         /// Block-cursor effect via selection: in Normal mode, the cursor's
