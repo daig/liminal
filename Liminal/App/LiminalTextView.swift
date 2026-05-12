@@ -30,6 +30,15 @@ struct LiminalTextView: NSViewRepresentable {
         textView.textStorage?.delegate = context.coordinator
         context.coordinator.textView = textView
 
+        // Make NSTextView the first responder once the view is in the
+        // window. Without this, SwiftUI's hosting view often holds focus
+        // and menu/keyboard actions (Cmd-S, Cmd-F, Cmd-Z, etc.) don't
+        // reach the text view via the responder chain.
+        DispatchQueue.main.async { [weak textView] in
+            guard let textView else { return }
+            textView.window?.makeFirstResponder(textView)
+        }
+
         return scrollView
     }
 
