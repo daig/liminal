@@ -1,3 +1,5 @@
+import CambiumCore
+import CambiumIncremental
 import Combine
 import Foundation
 
@@ -35,6 +37,17 @@ public final class VimController: ObservableObject {
     /// immediately (no flicker).
     @Published public private(set) var visibleHintSnapshot: VimHintSnapshot?
 
+    /// Set when a command (currently `m` / `` ` ``) is waiting for the
+    /// next key as a character argument. While non-nil, `handle(_:)`
+    /// routes the next key into the consumer instead of the binding
+    /// tree.
+    @Published public private(set) var pendingCharArgument: PendingCharArgument?
+
+    /// Per-document mark store (`m<a-z>` / `` `<a-z> ``). Owned here so
+    /// SwiftUI views observing the controller pick up mark changes
+    /// automatically.
+    @Published public private(set) var marks = MarkRegistry()
+
     public weak var delegate: VimControllerDelegate?
 
     private nonisolated(unsafe) let bindings: VimBindingTree
@@ -67,6 +80,20 @@ public final class VimController: ObservableObject {
         // no-op case). Recomputing derived state at the boundary covers
         // them all uniformly.
         defer { refreshDerived() }
+
+        // Char-argument-pending state takes precedence: the next key is
+        // consumed verbatim and dispatched as the synthesized command.
+        if let pending = pendingCharArgument {
+            pendingCharArgument = nil
+            // <Esc> cancels the pending argument silently.
+            if key == .special(.escape) {
+                return .consumed
+            }
+            if let cmd = pending.resolve(key) {
+                dispatch(cmd)
+            }
+            return .consumed
+        }
 
         switch mode {
         case .normal:
@@ -130,6 +157,7 @@ public final class VimController: ObservableObject {
     private func setMode(_ newMode: VimMode) {
         mode = newMode
         resetPending()
+        pendingCharArgument = nil
     }
 
     // MARK: - Derived state
@@ -140,7 +168,8 @@ public final class VimController: ObservableObject {
         statusPresentation = VimStatusPresentation.make(
             mode: mode,
             pendingKeys: pendingKeys,
-            pendingCount: pendingCount
+            pendingCount: pendingCount,
+            pendingCharArgument: pendingCharArgument
         )
         refreshHintSnapshot()
     }
@@ -211,6 +240,12 @@ public final class VimController: ObservableObject {
             delegate?.structuralMotion(motion, count: count)
         case .toggleTaskAtCursor:
             delegate?.toggleTaskAtCursor()
+        case .awaitMarkName(let op):
+            pendingCharArgument = (op == .set) ? .setMark : .jumpToMark
+        case .setMark(let name):
+            delegate?.setMark(name)
+        case .jumpToMark(let name):
+            delegate?.jumpToMark(name)
         }
     }
 
@@ -285,6 +320,16 @@ public final class VimController: ObservableObject {
             .structuralMotion(.nextSibling, count: $0 ?? 1)
         }
 
+        // Marks. `m<a-z>` sets a mark; `` `<a-z> `` jumps to it. Both
+        // commands arm `pendingCharArgument` so the next key is read
+        // as the mark name rather than the start of another chord.
+        t.bind(.normal, [.char("m")], description: "Set mark a-z") { _ in
+            .awaitMarkName(.set)
+        }
+        t.bind(.normal, [.char("`")], description: "Jump to mark a-z") { _ in
+            .awaitMarkName(.jump)
+        }
+
         // Leader chord
         t.bind(.normal, [.special(.space), .char("t")],
                description: "Toggle task checkbox") { _ in
@@ -292,6 +337,58 @@ public final class VimController: ObservableObject {
         }
 
         return t
+    }
+
+    // MARK: - Mark registry plumbing
+
+    /// Register a CST-anchored mark. Called by the coordinator after
+    /// the controller dispatches `.setMark(name)` (the coordinator owns
+    /// the cursor offset → anchor mapping).
+    public func setMark(_ name: Character, anchor: CSTAnchor) {
+        marks.set(name, anchor: anchor)
+    }
+
+    /// Called by the document after each tree-mutating edit. Forwards
+    /// to the registry so all marks track the latest tree.
+    public func reanchorMarks(
+        oldRoot: RootSyntax,
+        edits: [TextEdit],
+        newRoot: RootSyntax
+    ) {
+        marks.reanchor(oldRoot: oldRoot, edits: edits, newRoot: newRoot)
+    }
+}
+
+/// What kind of character argument the controller is currently waiting
+/// for. Synthesized from the previous command's dispatch (e.g.
+/// `.awaitMarkName(.set)` arms `.setMark`). Consumed by the next
+/// keypress in `handle(_:)`.
+public enum PendingCharArgument: Sendable, Equatable {
+    case setMark
+    case jumpToMark
+
+    /// Human-readable prefix label shown in the status bar (e.g. "m"
+    /// when waiting for the mark name after `m`).
+    public var statusLabel: String {
+        switch self {
+        case .setMark: return "m"
+        case .jumpToMark: return "`"
+        }
+    }
+
+    /// Map the user's next keypress to the final command. Returns nil
+    /// for keypresses that aren't a valid argument (modifier-laden,
+    /// special, or non-letter); the controller silently drops these
+    /// rather than dispatching nonsense.
+    func resolve(_ key: VimKey) -> VimCommand? {
+        guard case .character(let ch) = key.payload,
+              key.modifiers.isEmpty,
+              MarkRegistry.isValidMarkName(ch)
+        else { return nil }
+        switch self {
+        case .setMark:    return .setMark(ch)
+        case .jumpToMark: return .jumpToMark(ch)
+        }
     }
 }
 
@@ -309,4 +406,6 @@ public protocol VimControllerDelegate: AnyObject {
     func moveCursor(motion: CursorMotion, count: Int)
     func structuralMotion(_ motion: StructuralMotion, count: Int)
     func toggleTaskAtCursor()
+    func setMark(_ name: Character)
+    func jumpToMark(_ name: Character)
 }

@@ -8,6 +8,18 @@ public enum VimCommand: Sendable, Equatable {
     case moveCursor(CursorMotion, count: Int)
     case structuralMotion(StructuralMotion, count: Int)
     case toggleTaskAtCursor
+
+    // Marks. `awaitMarkName` arms the char-argument-pending state; the
+    // next keypress is consumed as the mark name and dispatched as
+    // `setMark` or `jumpToMark`.
+    case awaitMarkName(MarkOp)
+    case setMark(Character)
+    case jumpToMark(Character)
+}
+
+public enum MarkOp: Sendable, Equatable, Hashable {
+    case set
+    case jump
 }
 
 /// Cursor motions that don't change the document. Every case is

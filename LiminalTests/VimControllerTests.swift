@@ -323,6 +323,86 @@ struct VimControllerTests {
         _ = c.handle(.char("G"))
         #expect(spy.moveCursorCalls == [.init(motion: .documentEnd, count: 5)])
     }
+
+    // MARK: - Marks (m / `)
+
+    @Test("m arms pendingCharArgument(.setMark)")
+    func mArmsSetMark() {
+        let c = VimController()
+        _ = c.handle(.char("m"))
+        #expect(c.pendingCharArgument == .setMark)
+        // pendingKeys cleared since `m` resolved to a (terminal) command.
+        #expect(c.pendingKeys.isEmpty)
+    }
+
+    @Test("m + a dispatches setMark('a') and clears pending")
+    func mAFlow() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("m"))
+        _ = c.handle(.char("a"))
+        #expect(spy.setMarkCalls == ["a"])
+        #expect(c.pendingCharArgument == nil)
+    }
+
+    @Test("backtick + a dispatches jumpToMark('a')")
+    func backtickAFlow() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("`"))
+        #expect(c.pendingCharArgument == .jumpToMark)
+        _ = c.handle(.char("z"))
+        #expect(spy.jumpToMarkCalls == ["z"])
+        #expect(c.pendingCharArgument == nil)
+    }
+
+    @Test("Esc cancels pending char argument")
+    func escCancelsCharArg() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("m"))
+        #expect(c.pendingCharArgument == .setMark)
+        _ = c.handle(.special(.escape))
+        #expect(c.pendingCharArgument == nil)
+        #expect(spy.setMarkCalls.isEmpty)
+    }
+
+    @Test("non-letter mark name is silently dropped")
+    func invalidMarkNameDropped() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("m"))
+        _ = c.handle(.char("5")) // not a valid mark name
+        #expect(spy.setMarkCalls.isEmpty)
+        #expect(c.pendingCharArgument == nil)
+    }
+
+    @Test("upper-case letter mark name is dropped in v1 (a-z only)")
+    func uppercaseMarkRejected() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("m"))
+        _ = c.handle(.char("A"))
+        #expect(spy.setMarkCalls.isEmpty)
+        #expect(c.pendingCharArgument == nil)
+    }
+
+    @Test("status detail surfaces pending char argument")
+    func statusReflectsCharArg() {
+        let c = VimController()
+        _ = c.handle(.char("m"))
+        #expect(c.statusPresentation.detailText == "m <a-z>")
+    }
 }
 
 @MainActor
@@ -339,6 +419,8 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var moveCursorCalls: [MoveCall] = []
     var structuralMotionCalls: [StructuralCall] = []
     var toggleTaskCallCount = 0
+    var setMarkCalls: [Character] = []
+    var jumpToMarkCalls: [Character] = []
 
     func moveCursor(motion: CursorMotion, count: Int) {
         moveCursorCalls.append(.init(motion: motion, count: count))
@@ -348,5 +430,11 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func toggleTaskAtCursor() {
         toggleTaskCallCount += 1
+    }
+    func setMark(_ name: Character) {
+        setMarkCalls.append(name)
+    }
+    func jumpToMark(_ name: Character) {
+        jumpToMarkCalls.append(name)
     }
 }

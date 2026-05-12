@@ -289,6 +289,38 @@ struct LiminalTextView: NSViewRepresentable {
             setCursorAt(utf16Location: nsRange.location)
         }
 
+        // MARK: - Marks
+
+        /// Encode the current cursor position as a `CSTAnchor` and stash
+        /// it under `name` in the controller's mark registry.
+        func setMark(_ name: Character) {
+            guard let root = document.currentRootSyntax,
+                  let byteOffset = currentCursorByteOffset()
+            else { return }
+            let offset = TextSize(UInt32(byteOffset))
+            guard let anchor = CSTAnchor.atSourceOffset(offset, in: root)
+            else { return }
+            document.vimController.setMark(name, anchor: anchor)
+        }
+
+        /// Resolve a stored mark against the current tree and move the
+        /// cursor there. Lost or unknown marks are silent no-ops.
+        func jumpToMark(_ name: Character) {
+            guard let textView,
+                  let root = document.currentRootSyntax,
+                  let anchor = document.vimController.marks.anchor(named: name)
+            else { return }
+            let byteOffset: TextSize
+            switch anchor.resolve(in: root) {
+            case .strong(let off), .weak(let off), .recovered(let off):
+                byteOffset = off
+            case .lost:
+                return
+            }
+            setCursor(byteOffset: Int(byteOffset.rawValue))
+            textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
         // MARK: - Cursor helpers
 
         private func currentCursorByteOffset() -> Int? {

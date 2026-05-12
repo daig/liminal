@@ -53,12 +53,23 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// Forward a textual edit to the session. Called by `LiminalTextView`'s
     /// `NSTextStorageDelegate` coordinator on user-initiated edits.
     func applyTextEdits(_ edits: [TextEdit]) {
+        let oldRoot = session.parseResult?.rootSyntax
         do {
             try session.applyTextEdits(edits)
         } catch {
             NSLog("LiminalSourceDocument: applyTextEdits failed: \(error)")
+            return
         }
         syncFromSession()
+        if let oldRoot, let newRoot = currentRootSyntax {
+            MainActor.assumeIsolated {
+                vimController.reanchorMarks(
+                    oldRoot: oldRoot,
+                    edits: edits,
+                    newRoot: newRoot
+                )
+            }
+        }
     }
 
     /// `parseResult` is nil after a structural edit (by Phase 5a's design —
@@ -90,6 +101,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         case .unchecked: newMarkerText = "[x]"
         case .checked:   newMarkerText = "[ ]"
         }
+
+        let oldRoot = currentRootSyntax
 
         do {
             try listItemHandle.withCursor { (cursor: borrowing SyntaxNodeCursor<LiminalLanguage>) in
@@ -124,6 +137,15 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         }
 
         syncFromSession()
+        // Toggle is byte-length-preserving ([ ] ↔ [x] both 3 bytes), so
+        // no textual deltas to feed the registry — pass [].
+        if let oldRoot, let newRoot = currentRootSyntax {
+            vimController.reanchorMarks(
+                oldRoot: oldRoot,
+                edits: [],
+                newRoot: newRoot
+            )
+        }
         return true
     }
 

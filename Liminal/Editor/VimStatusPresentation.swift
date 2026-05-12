@@ -23,11 +23,15 @@ public struct VimStatusPresentation: Sendable, Equatable {
     public static func make(
         mode: VimMode,
         pendingKeys: [VimKey],
-        pendingCount: Int?
+        pendingCount: Int?,
+        pendingCharArgument: PendingCharArgument? = nil
     ) -> VimStatusPresentation {
         var parts: [String] = []
         if let count = pendingCount { parts.append("\(count)") }
         parts.append(contentsOf: pendingKeys.map(\.displayString))
+        if let pendingCharArgument {
+            parts.append("\(pendingCharArgument.statusLabel) <a-z>")
+        }
         let detail = parts.isEmpty ? nil : parts.joined(separator: " ")
         return VimStatusPresentation(mode: mode, detailText: detail)
     }
