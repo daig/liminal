@@ -6,14 +6,14 @@ import CambiumIncremental
 //
 // Reusable (atomic, self-bounded by source delimiters):
 //   paragraph, atxHeading, frontmatter, fencedCodeBlock, mathBlock,
-//   commentBlock, codeSpan, mdLink, mdImage, wikilink, wikiEmbed,
+//   commentBlock, thematicBreak, codeSpan, mdLink, mdImage, wikilink, wikiEmbed,
 //   typedInline, structuredEmbed, wikiEmbedBlock, structuredEmbedBlock,
 //   valueDeclaration, typedBlock, htmlBlock, pipeTable, directive,
 //   schemaBlock, templateBlock, and interpolation.
 //
 // Phase 6 wires reuse for the BLOCK-level subset of the above
 // (paragraph, atxHeading, frontmatter, fencedCodeBlock, mathBlock,
-// commentBlock, typedBlock, htmlBlock, pipeTable, directive,
+// commentBlock, thematicBreak, typedBlock, htmlBlock, pipeTable, directive,
 // schemaBlock, templateBlock, wikiEmbedBlock, structuredEmbedBlock,
 // valueDeclaration). Inline reuse (codeSpan, mdLink, mdImage, wikilink,
 // wikiEmbed, typedInline, structuredEmbed, interpolation) is a separate
@@ -291,6 +291,10 @@ struct LiminalCSTParser {
             } else if let declaration = valueDeclarationInfo(for: line) {
                 if try tryReuse(kind: .valueDeclaration, with: &builder) { continue }
                 try emitValueDeclaration(declaration, line: line, with: &builder)
+            } else if let thematicBreak = thematicBreakInfo(for: line) {
+                if try tryReuse(kind: .thematicBreak, with: &builder) { continue }
+                try emitThematicBreak(thematicBreak, line: line, with: &builder)
+                currentLineIndex += 1
             } else if blockQuoteLineInfo(for: line) != nil {
                 try emitBlockQuote(with: &builder)
             } else if let listItem = listItemInfo(for: line) {
@@ -311,6 +315,38 @@ struct LiminalCSTParser {
     ) throws {
         builder.startNode(.blankLine)
         try emitWhitespace(line.contentText, with: &builder)
+        try emitNewline(line.newlineText, with: &builder)
+        try builder.finishNode()
+    }
+
+    private mutating func emitThematicBreak(
+        _ thematicBreak: ThematicBreakInfo,
+        line: SourceLine,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.thematicBreak)
+        try emitWhitespace(thematicBreak.indentText, with: &builder)
+
+        var cursor = thematicBreak.markerStart
+        var whitespaceStart: String.Index?
+        while cursor < line.contentEnd {
+            if source[cursor].isHorizontalWhitespace {
+                if whitespaceStart == nil {
+                    whitespaceStart = cursor
+                }
+            } else {
+                if let start = whitespaceStart {
+                    try emitWhitespace(String(source[start..<cursor]), with: &builder)
+                    whitespaceStart = nil
+                }
+                try builder.staticToken(thematicBreak.markerKind)
+            }
+            cursor = source.index(after: cursor)
+        }
+
+        if let start = whitespaceStart {
+            try emitWhitespace(String(source[start..<line.contentEnd]), with: &builder)
+        }
         try emitNewline(line.newlineText, with: &builder)
         try builder.finishNode()
     }
@@ -2969,6 +3005,7 @@ struct LiminalCSTParser {
             || structuredEmbedBlockInfo(for: line) != nil
             || wikiEmbedBlockInfo(for: line) != nil
             || valueDeclarationInfo(for: line) != nil
+            || thematicBreakInfo(for: line) != nil
             || blockQuoteLineInfo(for: line) != nil
             || listItemInfo(for: line) != nil
     }
@@ -3599,6 +3636,57 @@ struct LiminalCSTParser {
         )
     }
 
+    private func thematicBreakInfo(for line: SourceLine) -> ThematicBreakInfo? {
+        thematicBreakInfo(in: line.content)
+    }
+
+    private func thematicBreakInfo(in content: Substring) -> ThematicBreakInfo? {
+        guard let indentEnd = indentationEnd(in: content),
+              indentEnd < content.endIndex,
+              let markerKind = thematicBreakMarkerKind(for: content[indentEnd])
+        else {
+            return nil
+        }
+
+        let marker = content[indentEnd]
+        var count = 0
+        var cursor = indentEnd
+        while cursor < content.endIndex {
+            if content[cursor].isHorizontalWhitespace {
+                cursor = content.index(after: cursor)
+                continue
+            }
+            guard content[cursor] == marker else {
+                return nil
+            }
+            count += 1
+            cursor = content.index(after: cursor)
+        }
+
+        guard count >= 3 else {
+            return nil
+        }
+
+        return ThematicBreakInfo(
+            indentText: String(content[content.startIndex..<indentEnd]),
+            markerStart: indentEnd,
+            markerKind: markerKind
+        )
+    }
+
+    private func thematicBreakMarkerKind(for marker: Character) -> LiminalKind? {
+        switch marker {
+        case "-":
+            return .dash
+        case "*":
+            return .star
+        case "_":
+            return .underscore
+        default:
+            return nil
+        }
+    }
+
     private func taskMarkerInfo(
         in content: Substring,
         at cursor: String.Index
@@ -3630,19 +3718,10 @@ struct LiminalCSTParser {
         marker: Character,
         markerEnd: String.Index
     ) -> Bool {
-        var count = 1
-        var cursor = markerEnd
-        while cursor < content.endIndex {
-            if content[cursor].isHorizontalWhitespace {
-                cursor = content.index(after: cursor)
-            } else if content[cursor] == marker {
-                count += 1
-                cursor = content.index(after: cursor)
-            } else {
-                return false
-            }
+        guard let markerKind = thematicBreakMarkerKind(for: marker) else {
+            return false
         }
-        return count >= 3
+        return thematicBreakInfo(in: content)?.markerKind == markerKind
     }
 
     private func blockQuoteLineInfo(for line: SourceLine) -> BlockQuoteLineInfo? {
@@ -3700,6 +3779,9 @@ struct LiminalCSTParser {
         if content[start] == ">" {
             return true
         }
+        if startsThematicBreak(in: content) {
+            return true
+        }
         if startsListItem(in: content, at: start) {
             return true
         }
@@ -3722,6 +3804,10 @@ struct LiminalCSTParser {
             return true
         }
         return startsTypedBlock(in: content, at: start)
+    }
+
+    private func startsThematicBreak(in content: Substring) -> Bool {
+        thematicBreakInfo(in: content) != nil
     }
 
     private func startsDirective(in content: Substring, at start: String.Index) -> Bool {
@@ -4436,6 +4522,12 @@ private struct ListItemInfo {
     var taskWhitespaceText: String
     var contentStart: String.Index
     var contentColumn: Int
+}
+
+private struct ThematicBreakInfo {
+    var indentText: String
+    var markerStart: String.Index
+    var markerKind: LiminalKind
 }
 
 private enum ListMarkerFamily: Equatable {
@@ -5421,6 +5513,13 @@ private struct LiminalInlineCSTParser {
         let recoveryPolicy: InlineDelimiterRecoveryPolicy
     }
 
+    private struct AutolinkMatch {
+        let targetStart: String.Index
+        let targetEnd: String.Index
+        let end: String.Index
+        let isAngleBracketed: Bool
+    }
+
     private static let inlineDelimiterSpecs: [InlineDelimiterSpec] = [
         // `**` is listed before `*` to keep the priority rule explicit.
         InlineDelimiterSpec(
@@ -5509,6 +5608,9 @@ private struct LiminalInlineCSTParser {
             } else if source[index] == "\\", canParseEscapedPunctuation() {
                 try flushText(upTo: index, with: &builder)
                 try emitEscapedPunctuation(with: &builder)
+            } else if let autolink = autolinkMatch(at: index) {
+                try flushText(upTo: index, with: &builder)
+                try emitAutolink(autolink, with: &builder)
             } else if source[index..<source.endIndex].hasPrefix("!{"),
                       canParseStructuredEmbed()
             {
@@ -5560,6 +5662,25 @@ private struct LiminalInlineCSTParser {
         try builder.finishNode()
 
         index = source.index(after: punctuationIndex)
+        textStart = index
+    }
+
+    private mutating func emitAutolink(
+        _ match: AutolinkMatch,
+        with builder: inout GreenTreeBuilder<LiminalLanguage>
+    ) throws {
+        builder.startNode(.autolink)
+        if match.isAngleBracketed {
+            try builder.staticToken(.lessThan)
+            index = source.index(after: index)
+        }
+        try builder.token(.linkDestinationText, text: String(source[match.targetStart..<match.targetEnd]))
+        index = match.targetEnd
+        if match.isAngleBracketed {
+            try builder.staticToken(.greaterThan)
+        }
+        index = match.end
+        try builder.finishNode()
         textStart = index
     }
 
@@ -6639,6 +6760,297 @@ private struct LiminalInlineCSTParser {
         return LiminalStructuredScanner(source: source).qnameEnd(from: typeStart) != nil
     }
 
+    private func autolinkMatch(at start: String.Index) -> AutolinkMatch? {
+        guard start < source.endIndex else {
+            return nil
+        }
+
+        if source[start] == "<", let match = angleAutolinkMatch(at: start) {
+            return match
+        }
+
+        guard isValidBareAutolinkStart(start) else {
+            return nil
+        }
+
+        if let match = bareURLAutolinkMatch(at: start, prefix: "https://") {
+            return match
+        }
+        if let match = bareURLAutolinkMatch(at: start, prefix: "http://") {
+            return match
+        }
+        if let match = bareWWWAutolinkMatch(at: start) {
+            return match
+        }
+        return bareEmailAutolinkMatch(at: start)
+    }
+
+    private func angleAutolinkMatch(at start: String.Index) -> AutolinkMatch? {
+        guard !source.isEscaped(start) else {
+            return nil
+        }
+        let targetStart = source.index(after: start)
+        var cursor = targetStart
+        while cursor < source.endIndex {
+            if source[cursor] == ">" {
+                let target = source[targetStart..<cursor]
+                guard isCommonMarkURI(target) || isEmailAddress(target, requiresDot: false) else {
+                    return nil
+                }
+                return AutolinkMatch(
+                    targetStart: targetStart,
+                    targetEnd: cursor,
+                    end: source.index(after: cursor),
+                    isAngleBracketed: true
+                )
+            }
+            if source[cursor] == "<"
+                || source[cursor].isNewlineStart
+                || source[cursor].isASCIIControlOrSpace
+            {
+                return nil
+            }
+            cursor = source.index(after: cursor)
+        }
+        return nil
+    }
+
+    private func isValidBareAutolinkStart(_ start: String.Index) -> Bool {
+        guard !source.isEscaped(start) else {
+            return false
+        }
+        guard start > source.startIndex else {
+            return true
+        }
+        let previous = source.index(before: start)
+        return source[previous].isWhitespace
+            || source[previous] == "*"
+            || source[previous] == "_"
+            || source[previous] == "~"
+            || source[previous] == "("
+    }
+
+    private func bareURLAutolinkMatch(
+        at start: String.Index,
+        prefix: String
+    ) -> AutolinkMatch? {
+        guard hasASCIICaseInsensitivePrefix(prefix, at: start) else {
+            return nil
+        }
+
+        let rawEnd = bareAutolinkRawEnd(from: start)
+        let targetEnd = trimmedBareAutolinkEnd(from: start, rawEnd: rawEnd)
+        let domainStart = source.index(start, offsetBy: prefix.count)
+        guard domainStart < targetEnd else {
+            return nil
+        }
+        let domainEnd = domainEnd(from: domainStart, limitingTo: targetEnd)
+        guard isValidAutolinkDomain(source[domainStart..<domainEnd], requiresPeriod: true) else {
+            return nil
+        }
+
+        return AutolinkMatch(
+            targetStart: start,
+            targetEnd: targetEnd,
+            end: targetEnd,
+            isAngleBracketed: false
+        )
+    }
+
+    private func bareWWWAutolinkMatch(at start: String.Index) -> AutolinkMatch? {
+        guard hasASCIICaseInsensitivePrefix("www.", at: start) else {
+            return nil
+        }
+
+        let rawEnd = bareAutolinkRawEnd(from: start)
+        let targetEnd = trimmedBareAutolinkEnd(from: start, rawEnd: rawEnd)
+        let domainEnd = domainEnd(from: start, limitingTo: targetEnd)
+        guard isValidAutolinkDomain(source[start..<domainEnd], requiresPeriod: true) else {
+            return nil
+        }
+
+        return AutolinkMatch(
+            targetStart: start,
+            targetEnd: targetEnd,
+            end: targetEnd,
+            isAngleBracketed: false
+        )
+    }
+
+    private func bareEmailAutolinkMatch(at start: String.Index) -> AutolinkMatch? {
+        guard source[start].isEmailLocalCharacter else {
+            return nil
+        }
+        let rawEnd = bareAutolinkRawEnd(from: start)
+        let targetEnd = trimmedBareAutolinkEnd(from: start, rawEnd: rawEnd)
+        guard isEmailAddress(source[start..<targetEnd], requiresDot: true) else {
+            return nil
+        }
+        return AutolinkMatch(
+            targetStart: start,
+            targetEnd: targetEnd,
+            end: targetEnd,
+            isAngleBracketed: false
+        )
+    }
+
+    private func bareAutolinkRawEnd(from start: String.Index) -> String.Index {
+        var cursor = start
+        while cursor < source.endIndex,
+              source[cursor] != "<",
+              !source[cursor].isWhitespace,
+              !source[cursor].isASCIIControlOrSpace
+        {
+            cursor = source.index(after: cursor)
+        }
+        return cursor
+    }
+
+    private func trimmedBareAutolinkEnd(
+        from start: String.Index,
+        rawEnd: String.Index
+    ) -> String.Index {
+        var end = rawEnd
+        var changed = true
+        while changed {
+            changed = false
+            while end > start {
+                let previous = source.index(before: end)
+                guard source[previous].isGFMAutolinkTrailingPunctuation else {
+                    break
+                }
+                end = previous
+                changed = true
+            }
+            while hasUnmatchedTrailingCloseParen(from: start, to: end) {
+                end = source.index(before: end)
+                changed = true
+            }
+        }
+        return end
+    }
+
+    private func hasUnmatchedTrailingCloseParen(
+        from start: String.Index,
+        to end: String.Index
+    ) -> Bool {
+        guard end > start, source[source.index(before: end)] == ")" else {
+            return false
+        }
+        var opens = 0
+        var closes = 0
+        var cursor = start
+        while cursor < end {
+            if source[cursor] == "(" {
+                opens += 1
+            } else if source[cursor] == ")" {
+                closes += 1
+            }
+            cursor = source.index(after: cursor)
+        }
+        return closes > opens
+    }
+
+    private func domainEnd(
+        from start: String.Index,
+        limitingTo limit: String.Index
+    ) -> String.Index {
+        var cursor = start
+        while cursor < limit, source[cursor].isAutolinkDomainCharacter {
+            cursor = source.index(after: cursor)
+        }
+        return cursor
+    }
+
+    private func hasASCIICaseInsensitivePrefix(
+        _ prefix: String,
+        at start: String.Index
+    ) -> Bool {
+        var cursor = start
+        for expected in prefix {
+            guard cursor < source.endIndex,
+                  source[cursor].asciiLowercased == expected.asciiLowercased
+            else {
+                return false
+            }
+            cursor = source.index(after: cursor)
+        }
+        return true
+    }
+
+    private func isCommonMarkURI(_ text: Substring) -> Bool {
+        guard let colon = text.firstIndex(of: ":") else {
+            return false
+        }
+        let scheme = text[text.startIndex..<colon]
+        guard (2...32).contains(scheme.count),
+              scheme.first?.isASCIIAlpha == true
+        else {
+            return false
+        }
+        for character in scheme.dropFirst() {
+            guard character.isASCIISchemeCharacter else {
+                return false
+            }
+        }
+        for character in text[text.index(after: colon)..<text.endIndex] {
+            if character == "<" || character == ">" || character.isASCIIControlOrSpace {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func isEmailAddress(_ text: Substring, requiresDot: Bool) -> Bool {
+        guard let at = text.firstIndex(of: "@"),
+              at > text.startIndex,
+              at < text.index(before: text.endIndex),
+              text[text.index(after: at)..<text.endIndex].firstIndex(of: "@") == nil
+        else {
+            return false
+        }
+
+        for character in text[text.startIndex..<at] {
+            guard character.isEmailLocalCharacter else {
+                return false
+            }
+        }
+
+        return isValidAutolinkDomain(
+            text[text.index(after: at)..<text.endIndex],
+            requiresPeriod: requiresDot
+        )
+    }
+
+    private func isValidAutolinkDomain(
+        _ domain: Substring,
+        requiresPeriod: Bool
+    ) -> Bool {
+        guard !domain.isEmpty else {
+            return false
+        }
+        let labels = domain.split(separator: ".", omittingEmptySubsequences: false)
+        if requiresPeriod {
+            guard labels.count >= 2 else {
+                return false
+            }
+        }
+        guard labels.allSatisfy({ !$0.isEmpty }) else {
+            return false
+        }
+        for label in labels {
+            for character in label {
+                guard character.isAutolinkDomainCharacterWithoutDot else {
+                    return false
+                }
+            }
+        }
+        let suffixLabels = labels.suffix(2)
+        return suffixLabels.allSatisfy { label in
+            !label.contains("_")
+        }
+    }
+
     private func inlineDelimiterSpec(at start: String.Index) -> InlineDelimiterSpec? {
         guard start < source.endIndex else {
             return nil
@@ -6791,6 +7203,10 @@ private struct LiminalInlineCSTParser {
         if source[start] == "\\", canParseEscapedPunctuation(at: start) {
             let punctuationIndex = source.index(after: start)
             return source.index(after: punctuationIndex)
+        }
+
+        if let autolink = autolinkMatch(at: start) {
+            return autolink.end
         }
 
         if let end = structuredEmbedEndForSkipping(at: start) {
@@ -7311,6 +7727,72 @@ private extension Character {
 
     var isAnchorStartCharacter: Bool {
         isASCIILetter || isASCIIDigit
+    }
+
+    var isASCIIAlpha: Bool {
+        isASCIILetter
+    }
+
+    var isASCIISchemeCharacter: Bool {
+        isASCIILetter || isASCIIDigit || self == "+" || self == "." || self == "-"
+    }
+
+    var isAutolinkDomainCharacter: Bool {
+        isAutolinkDomainCharacterWithoutDot || self == "."
+    }
+
+    var isAutolinkDomainCharacterWithoutDot: Bool {
+        isASCIILetter || isASCIIDigit || self == "-" || self == "_"
+    }
+
+    var isEmailLocalCharacter: Bool {
+        isASCIILetter
+            || isASCIIDigit
+            || self == "!"
+            || self == "#"
+            || self == "$"
+            || self == "%"
+            || self == "&"
+            || self == "'"
+            || self == "*"
+            || self == "+"
+            || self == "-"
+            || self == "/"
+            || self == "="
+            || self == "?"
+            || self == "^"
+            || self == "_"
+            || self == "`"
+            || self == "{"
+            || self == "|"
+            || self == "}"
+            || self == "~"
+            || self == "."
+    }
+
+    var isGFMAutolinkTrailingPunctuation: Bool {
+        self == "?"
+            || self == "!"
+            || self == "."
+            || self == ","
+            || self == ":"
+            || self == "*"
+            || self == "_"
+            || self == "~"
+    }
+
+    var isASCIIControlOrSpace: Bool {
+        guard let value = asciiValue else {
+            return false
+        }
+        return value <= 32
+    }
+
+    var asciiLowercased: Character {
+        guard let value = asciiValue, (65...90).contains(Int(value)) else {
+            return self
+        }
+        return Character(UnicodeScalar(value + 32)!)
     }
 
     var isScalarTerminator: Bool {

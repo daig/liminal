@@ -43,6 +43,12 @@ public struct LiminalLowerer: Sendable {
             lowerParagraph(paragraph).map { .block(.node($0)) }
         case .atxHeading(let heading):
             lowerHeading(heading).map { .block(.node($0)) }
+        case .thematicBreak(let thematicBreak):
+            .block(.node(LiminalNode(
+                kind: .block,
+                type: "ThematicBreak",
+                source: surface("thematicBreak", thematicBreak.syntax)
+            )))
         case .valueDeclaration(let declaration):
             // Syntactic classification only. Phase 3 schema resolution can
             // reclassify generic constructors once their type kind is known.
@@ -646,6 +652,8 @@ public struct LiminalLowerer: Sendable {
             lowerMarkdownLink(link)
         case .mdImage(let image):
             lowerMarkdownImage(image)
+        case .autolink(let autolink):
+            lowerAutolink(autolink)
         case .wikilink(let wikilink):
             lowerWikilink(wikilink)
         case .wikiEmbed(let embed):
@@ -721,6 +729,18 @@ public struct LiminalLowerer: Sendable {
             type: "Image",
             fields: fields,
             source: surface("mdImage", image.syntax)
+        ))
+    }
+
+    private func lowerAutolink(_ autolink: AutolinkSyntax) -> LiminalInline {
+        .node(LiminalNode(
+            kind: .inline,
+            type: "Link",
+            fields: [
+                field("href", .scalar(.bare(autolink.hrefText)))
+            ],
+            content: .inline([.text(autolink.targetText)]),
+            source: surface("autolink", autolink.syntax)
         ))
     }
 

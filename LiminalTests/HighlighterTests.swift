@@ -43,6 +43,17 @@ struct HighlighterTests {
         #expect(bodySpan.modifiers.contains(.heading))
     }
 
+    @Test("thematic break markers are delimiters")
+    func thematicBreak() throws {
+        let source = "* * *\n"
+        let parsed = try LiminalParser().parse(source)
+        let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
+
+        let markerSpans = spans.filter { byteText($0, in: source) == "*" }
+        #expect(markerSpans.count == 3)
+        #expect(markerSpans.allSatisfy { $0.category == .delimiter })
+    }
+
     // MARK: - Code span
 
     @Test("code span's backticks are delimiter, inner content is codeContent")
@@ -73,6 +84,24 @@ struct HighlighterTests {
         if let openBracket {
             #expect(openBracket.category == .delimiter)
         }
+    }
+
+    @Test("autolink target is linkText and angle brackets are delimiters")
+    func autolink() throws {
+        let source = "see <https://example.org> and www.example.org\n"
+        let parsed = try LiminalParser().parse(source)
+        let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
+
+        let angleTarget = try #require(spans.first { byteText($0, in: source) == "https://example.org" })
+        #expect(angleTarget.category == .linkText)
+
+        let bareTarget = try #require(spans.first { byteText($0, in: source) == "www.example.org" })
+        #expect(bareTarget.category == .linkText)
+
+        let openAngle = try #require(spans.first { byteText($0, in: source) == "<" })
+        let closeAngle = try #require(spans.first { byteText($0, in: source) == ">" })
+        #expect(openAngle.category == .delimiter)
+        #expect(closeAngle.category == .delimiter)
     }
 
     // MARK: - Inline modifiers

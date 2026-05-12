@@ -92,6 +92,7 @@ public enum DocumentItemSyntax: Sendable, Hashable {
     case templateBlock(TemplateBlockSyntax)
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
+    case thematicBreak(ThematicBreakSyntax)
     case valueDeclaration(ValueDeclarationSyntax)
     case typedBlock(TypedBlockSyntax)
     case fencedCodeBlock(FencedCodeBlockSyntax)
@@ -120,6 +121,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             self = .paragraph(ParagraphSyntax(unchecked: syntax))
         case .atxHeading:
             self = .atxHeading(AtxHeadingSyntax(unchecked: syntax))
+        case .thematicBreak:
+            self = .thematicBreak(ThematicBreakSyntax(unchecked: syntax))
         case .valueDeclaration:
             self = .valueDeclaration(ValueDeclarationSyntax(unchecked: syntax))
         case .typedBlock:
@@ -163,6 +166,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.syntax
         case .atxHeading(let item):
             item.syntax
+        case .thematicBreak(let item):
+            item.syntax
         case .valueDeclaration(let item):
             item.syntax
         case .typedBlock(let item):
@@ -204,6 +209,8 @@ public enum DocumentItemSyntax: Sendable, Hashable {
             item.range
         case .atxHeading(let item):
             item.range
+        case .thematicBreak(let item):
+            item.range
         case .valueDeclaration(let item):
             item.range
         case .typedBlock(let item):
@@ -233,6 +240,7 @@ public enum DocumentItemSyntax: Sendable, Hashable {
 public enum BlockSyntax: Sendable, Hashable {
     case paragraph(ParagraphSyntax)
     case atxHeading(AtxHeadingSyntax)
+    case thematicBreak(ThematicBreakSyntax)
     case typedBlock(TypedBlockSyntax)
     case fencedCodeBlock(FencedCodeBlockSyntax)
     case mathBlock(MathBlockSyntax)
@@ -250,6 +258,8 @@ public enum BlockSyntax: Sendable, Hashable {
             self = .paragraph(ParagraphSyntax(unchecked: syntax))
         case .atxHeading:
             self = .atxHeading(AtxHeadingSyntax(unchecked: syntax))
+        case .thematicBreak:
+            self = .thematicBreak(ThematicBreakSyntax(unchecked: syntax))
         case .typedBlock:
             self = .typedBlock(TypedBlockSyntax(unchecked: syntax))
         case .fencedCodeBlock:
@@ -281,6 +291,8 @@ public enum BlockSyntax: Sendable, Hashable {
             block.syntax
         case .atxHeading(let block):
             block.syntax
+        case .thematicBreak(let block):
+            block.syntax
         case .typedBlock(let block):
             block.syntax
         case .fencedCodeBlock(let block):
@@ -309,6 +321,8 @@ public enum BlockSyntax: Sendable, Hashable {
         case .paragraph(let block):
             block.range
         case .atxHeading(let block):
+            block.range
+        case .thematicBreak(let block):
             block.range
         case .typedBlock(let block):
             block.range
@@ -343,6 +357,7 @@ public enum InlineSyntax: Sendable, Hashable {
     case highlight(HighlightSyntax)
     case mdLink(MdLinkSyntax)
     case mdImage(MdImageSyntax)
+    case autolink(AutolinkSyntax)
     case wikilink(WikilinkSyntax)
     case wikiEmbed(WikiEmbedSyntax)
     case typedInline(TypedInlineSyntax)
@@ -370,6 +385,8 @@ public enum InlineSyntax: Sendable, Hashable {
             self = .mdLink(MdLinkSyntax(unchecked: syntax))
         case .mdImage:
             self = .mdImage(MdImageSyntax(unchecked: syntax))
+        case .autolink:
+            self = .autolink(AutolinkSyntax(unchecked: syntax))
         case .wikilink:
             self = .wikilink(WikilinkSyntax(unchecked: syntax))
         case .wikiEmbed:
@@ -409,6 +426,8 @@ public enum InlineSyntax: Sendable, Hashable {
             inline.syntax
         case .mdImage(let inline):
             inline.syntax
+        case .autolink(let inline):
+            inline.syntax
         case .wikilink(let inline):
             inline.syntax
         case .wikiEmbed(let inline):
@@ -445,6 +464,8 @@ public enum InlineSyntax: Sendable, Hashable {
         case .mdLink(let inline):
             inline.range
         case .mdImage(let inline):
+            inline.range
+        case .autolink(let inline):
             inline.range
         case .wikilink(let inline):
             inline.range
@@ -544,6 +565,9 @@ public enum ValueSyntax: Sendable, Hashable {
 
 @CambiumSyntaxNode(LiminalKind.self, for: .blankLine)
 public struct BlankLineSyntax: LiminalSyntaxNode {}
+
+@CambiumSyntaxNode(LiminalKind.self, for: .thematicBreak)
+public struct ThematicBreakSyntax: LiminalSyntaxNode {}
 
 @CambiumSyntaxNode(LiminalKind.self, for: .frontmatter)
 public struct FrontmatterSyntax: LiminalSyntaxNode {
@@ -1479,6 +1503,32 @@ public struct MdImageSyntax: LiminalSyntaxNode {
     }
 }
 
+@CambiumSyntaxNode(LiminalKind.self, for: .autolink)
+public struct AutolinkSyntax: LiminalSyntaxNode {
+    public var targetText: String {
+        targetTextToken?.text ?? ""
+    }
+
+    public var targetTextToken: LiminalTokenSyntax? {
+        firstToken(kind: .linkDestinationText)
+    }
+
+    public var hrefText: String {
+        let target = targetText
+        if target.lowercased().hasPrefix("www.") {
+            return "http://\(target)"
+        }
+        if isEmailTarget(target) {
+            return "mailto:\(target)"
+        }
+        return target
+    }
+
+    private func isEmailTarget(_ target: String) -> Bool {
+        target.contains("@") && !target.lowercased().hasPrefix("mailto:")
+    }
+}
+
 @CambiumSyntaxNode(LiminalKind.self, for: .wikilink)
 public struct WikilinkSyntax: LiminalSyntaxNode {
     public var targetTextToken: LiminalTokenSyntax? {
@@ -1773,6 +1823,8 @@ private extension InlineSyntax {
             link.labelContent?.plainText ?? ""
         case .mdImage(let image):
             image.altContent?.plainText ?? ""
+        case .autolink(let autolink):
+            autolink.targetText
         case .wikilink(let wikilink):
             wikilink.aliasContent?.plainText ?? wikilink.targetText
         case .wikiEmbed(let embed):

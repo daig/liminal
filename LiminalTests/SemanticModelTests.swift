@@ -144,6 +144,45 @@ struct SemanticModelTests {
         #expect(embedBlock.fields.map(\.name.rawValue) == ["target", "payload"])
     }
 
+    @Test("thematic breaks and autolinks lower to semantic nodes")
+    func thematicBreaksAndAutolinksLowerToSemanticNodes() throws {
+        let source = "See https://example.org and www.example.org and user@example.org\n\n***\n"
+        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+
+        #expect(document.blocks.count == 2)
+        let paragraph = try #require(document.blocks.first?.node)
+        guard case .inline(let inlines) = paragraph.content else {
+            Issue.record("expected paragraph inline content")
+            return
+        }
+
+        let links = inlines.compactMap { inline -> LiminalNode? in
+            guard case .node(let node) = inline, node.type.rawValue == "Link" else {
+                return nil
+            }
+            return node
+        }
+        #expect(links.compactMap { $0.fields.first?.value } == [
+            .scalar(.bare("https://example.org")),
+            .scalar(.bare("http://www.example.org")),
+            .scalar(.bare("mailto:user@example.org"))
+        ])
+        #expect(links.compactMap { link -> String? in
+            guard case .inline(let body) = link.content,
+                  case .text(let text) = body.first
+            else { return nil }
+            return text
+        } == [
+            "https://example.org",
+            "www.example.org",
+            "user@example.org"
+        ])
+
+        let thematicBreak = try #require(document.blocks.last?.node)
+        #expect(thematicBreak.type.rawValue == "ThematicBreak")
+        #expect(thematicBreak.fields.isEmpty)
+    }
+
     @Test("paragraph line breaks lower to typed SoftBreak and HardBreak inline nodes")
     func paragraphLineBreaksLowerToTypedSoftAndHardBreakInlineNodes() throws {
         let source = "Soft\nbreak.\nHard\\\nbreak.\n"

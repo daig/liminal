@@ -88,7 +88,7 @@ struct DocumentIndexBuilder {
             }
         case .typedBlock(let block):
             walkSyntaxChildren(of: block.syntax)
-        case .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock:
+        case .thematicBreak, .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock:
             break
         }
     }
@@ -171,6 +171,14 @@ struct DocumentIndexBuilder {
                 alias: link.labelContent?.plainText
             )
             walkInlineContent(link.labelContent)
+        case .autolink(let autolink):
+            appendDestinationReference(
+                targetToken: autolink.targetTextToken,
+                kind: .link,
+                sourceRange: autolink.range,
+                alias: autolink.targetText,
+                targetText: autolink.hrefText
+            )
         case .mdImage(let image):
             // Phase 4.5: markdown images are an asset embed in surface
             // semantics — they substitute a rendered asset for the
@@ -326,12 +334,13 @@ struct DocumentIndexBuilder {
         targetToken: LiminalTokenSyntax?,
         kind: ReferenceKind,
         sourceRange: LiminalSourceRange,
-        alias: String? = nil
+        alias: String? = nil,
+        targetText: String? = nil
     ) {
         guard let targetToken else {
             return
         }
-        let raw = targetToken.text
+        let raw = targetText ?? targetToken.text
         let trimmedAlias: String? = alias.flatMap {
             let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed

@@ -199,6 +199,118 @@ struct SyntaxTests {
         #expect(link.titleTextToken?.text == "Title")
     }
 
+    @Test("parser emits thematic break CST")
+    func parserEmitsThematicBreakCST() throws {
+        let source = "intro\n***\n_ _ _\n- - -\n   ---\noutro\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        #expect(root.documentItems.count == 6)
+        guard case .paragraph = root.documentItems[0],
+              case .thematicBreak = root.documentItems[1],
+              case .thematicBreak = root.documentItems[2],
+              case .thematicBreak = root.documentItems[3],
+              case .thematicBreak = root.documentItems[4],
+              case .paragraph = root.documentItems[5]
+        else {
+            Issue.record("expected paragraphs interrupted by thematic breaks")
+            return
+        }
+    }
+
+    @Test("invalid thematic break candidates remain paragraph text")
+    func invalidThematicBreakCandidatesRemainParagraphText() throws {
+        let source = "--\n++++\n    ---\n---x\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        #expect(root.documentItems.count == 1)
+        guard case .paragraph(let paragraph) = root.documentItems.first else {
+            Issue.record("expected paragraph")
+            return
+        }
+        #expect(paragraph.inlineContent?.plainText == "-- ++++     --- ---x")
+    }
+
+    @Test("frontmatter still takes precedence over opening thematic break")
+    func frontmatterStillTakesPrecedenceOverOpeningThematicBreak() throws {
+        let source = "---\ntitle: Ada\n---\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        #expect(root.documentItems.count == 1)
+        guard case .frontmatter(let frontmatter) = root.documentItems.first else {
+            Issue.record("expected frontmatter")
+            return
+        }
+        #expect(frontmatter.rawYamlText == "title: Ada\n")
+    }
+
+    @Test("parser emits CommonMark and GFM autolink CST")
+    func parserEmitsCommonMarkAndGFMAutolinkCST() throws {
+        let source = "Links <https://example.org/a> <user@example.org> https://example.org/path?q=1. www.example.org user@example.org\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes
+        else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let autolinks = inlineNodes.compactMap { inline -> AutolinkSyntax? in
+            guard case .autolink(let autolink) = inline else { return nil }
+            return autolink
+        }
+        #expect(autolinks.map(\.targetText) == [
+            "https://example.org/a",
+            "user@example.org",
+            "https://example.org/path?q=1",
+            "www.example.org",
+            "user@example.org"
+        ])
+        #expect(autolinks.map(\.hrefText) == [
+            "https://example.org/a",
+            "mailto:user@example.org",
+            "https://example.org/path?q=1",
+            "http://www.example.org",
+            "mailto:user@example.org"
+        ])
+    }
+
+    @Test("invalid autolink candidates remain paragraph text")
+    func invalidAutolinkCandidatesRemainParagraphText() throws {
+        let source = "<span> a@1 http://localhost www. localhost@1\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first else {
+            Issue.record("expected paragraph")
+            return
+        }
+        #expect(paragraph.inlineContent?.inlineNodes.isEmpty == true)
+        #expect(paragraph.inlineContent?.plainText == "<span> a@1 http://localhost www. localhost@1")
+    }
+
+    @Test("GFM autolinks trim trailing punctuation and unmatched parens")
+    func gfmAutolinksTrimTrailingPunctuationAndUnmatchedParens() throws {
+        let source = "See https://example.org/foo). and https://example.org/a_(b)).\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        guard case .paragraph(let paragraph) = root.documentItems.first,
+              let inlineNodes = paragraph.inlineContent?.inlineNodes
+        else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let autolinks = inlineNodes.compactMap { inline -> AutolinkSyntax? in
+            guard case .autolink(let autolink) = inline else { return nil }
+            return autolink
+        }
+        #expect(autolinks.map(\.targetText) == [
+            "https://example.org/foo",
+            "https://example.org/a_(b)"
+        ])
+        #expect(paragraph.inlineContent?.plainText == "See https://example.org/foo). and https://example.org/a_(b)).")
+    }
+
     @Test("Slice 3 parser emits block ID suffixes for paragraphs and headings")
     func slice3ParserEmitsBlockIDSuffixesForParagraphsAndHeadings() throws {
         let source = "Paragraph text ^para-id\n# Heading `code` ^heading-id ###\n"

@@ -636,6 +636,25 @@ struct WorkspaceLinkingTests {
         #expect(vault.alias == "Note")
     }
 
+    @Test("Phase 4.5 indexer emits autolink references with normalized external targets")
+    func phase45IndexerEmitsAutolinkReferences() throws {
+        let source = "See https://example.org and www.example.org and user@example.org.\n"
+        let parsed = try LiminalParser().parse(source)
+        let index = DocumentIndex.build(from: parsed)
+
+        let links = index.references.filter { $0.kind == .link }
+        #expect(links.compactMap(\.target.externalURI) == [
+            "https://example.org",
+            "http://www.example.org",
+            "mailto:user@example.org"
+        ])
+        #expect(links.compactMap(\.alias) == [
+            "https://example.org",
+            "www.example.org",
+            "user@example.org"
+        ])
+    }
+
     @Test("Phase 4.5 indexer emits markdown image references with kind .embed")
     func phase45IndexerEmitsMarkdownImageReferences() throws {
         let source = "Header ![Alt text](cover.png) and ![Remote](https://example.org/img.png).\n"
