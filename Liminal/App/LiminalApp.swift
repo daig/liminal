@@ -21,7 +21,22 @@ struct LiminalApp: App {
                 Divider()
                 FindMenu()
             }
+            CommandMenu("View") {
+                ViewMenu()
+            }
         }
+    }
+}
+
+/// View-menu commands. Just the syntax-highlighting toggle for now.
+private struct ViewMenu: View {
+    @ObservedObject private var prefs = EditorPreferences.shared
+
+    var body: some View {
+        Toggle(isOn: $prefs.highlightingEnabled) {
+            Text("Syntax Highlighting")
+        }
+        .keyboardShortcut("h", modifiers: [.command, .shift])
     }
 }
 

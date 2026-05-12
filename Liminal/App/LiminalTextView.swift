@@ -116,6 +116,7 @@ struct LiminalTextView: NSViewRepresentable {
 
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
+        private var preferencesObservation: AnyCancellable?
 
         init(document: LiminalSourceDocument) {
             self.document = document
@@ -134,6 +135,16 @@ struct LiminalTextView: NSViewRepresentable {
                     self?.refreshMarkIndicators()
                 }
             }
+            // Re-apply (or clear) highlights when the user toggles the
+            // syntax-highlighting preference from the View menu.
+            preferencesObservation = EditorPreferences.shared
+                .$highlightingEnabled
+                .dropFirst() // already in correct state at init
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.applyHighlights()
+                    }
+                }
         }
 
         /// Resolve every live mark against the current tree and push the
@@ -264,7 +275,7 @@ struct LiminalTextView: NSViewRepresentable {
                     replacement: replacement
                 )
                 document.applyTextEdits([edit])
-                applyHighlights()
+                applyHighlights(in: editedRange)
             }
         }
 
@@ -441,30 +452,116 @@ struct LiminalTextView: NSViewRepresentable {
         /// Re-apply highlights to the entire text storage from the current
         /// parse result. Called after every user edit, on initial display,
         /// and when the source is replaced externally (document load).
-        func applyHighlights() {
+        /// Repaint syntax highlights. When `editedRange` is non-nil the
+        /// pass is scoped to the line(s) around the edit (plus one line
+        /// of buffer on each side) — typing into a paragraph in a
+        /// 1.2 MB doc no longer rewrites attributes across the whole
+        /// document. With `editedRange == nil` (initial load, preference
+        /// toggle, programmatic source replace) we still highlight the
+        /// full range.
+        func applyHighlights(in editedRange: NSRange? = nil) {
             guard let textView,
-                  let storage = textView.textStorage,
-                  let parsed = document.session.parseResult
+                  let storage = textView.textStorage
             else { return }
 
-            let spans = highlighter.spans(for: parsed.rootSyntax)
-            let source = storage.string
-            let fullRange = NSRange(location: 0, length: storage.length)
+            let storageLen = storage.length
+            let scope: NSRange
+            if let edit = editedRange, storageLen > 0 {
+                scope = Self.lineNeighborhood(
+                    of: edit,
+                    in: textView.string as NSString,
+                    storageLength: storageLen
+                )
+            } else {
+                scope = NSRange(location: 0, length: storageLen)
+            }
 
             isApplyingProgrammaticEdit = true
             storage.beginEditing()
-            storage.setAttributes(theme.defaultAttributes, range: fullRange)
-            for span in spans {
-                guard let nsRange = LiminalTextView.byteRangeToNSRange(span.range, in: source) else {
-                    continue
+            // Reset to base style first so toggling off cleanly removes
+            // any previously-painted highlight attributes within scope.
+            storage.setAttributes(theme.defaultAttributes, range: scope)
+
+            if EditorPreferences.shared.highlightingEnabled,
+               let parsed = document.session.parseResult {
+                let spans = highlighter.spans(for: parsed.rootSyntax)
+                // One linear pass to build the byte→UTF-16 lookup, then
+                // O(1) per span. Replaces the prior O(N²) byte-walk on
+                // each span which dominated load time on large docs.
+                let offsetMap = OffsetMap(source: storage.string)
+                let scopeStart = scope.location
+                let scopeEnd = scope.location + scope.length
+                for span in spans {
+                    guard let nsRange = offsetMap.nsRange(
+                        forByteStart: span.range.start.rawValue,
+                        length: span.range.length.rawValue
+                    ) else { continue }
+                    // Skip spans entirely outside the scope so we don't
+                    // pay NSTextStorage's attribute-merge cost for runs
+                    // we're not actually changing.
+                    let spanEnd = nsRange.location + nsRange.length
+                    if spanEnd <= scopeStart || nsRange.location >= scopeEnd {
+                        continue
+                    }
+                    let attrs = theme.attributes(
+                        for: span.category,
+                        modifiers: span.modifiers
+                    )
+                    storage.addAttributes(attrs, range: nsRange)
                 }
-                let attrs = theme.attributes(for: span.category, modifiers: span.modifiers)
-                storage.addAttributes(attrs, range: nsRange)
             }
+
             storage.endEditing()
             isApplyingProgrammaticEdit = false
 
             textView.typingAttributes = theme.defaultAttributes
+        }
+
+        /// Expand an NSRange to the line(s) it touches, plus one full
+        /// line of buffer on each side. The buffer captures cross-line
+        /// tokens (e.g., the closing fence of a code block on the next
+        /// line) without re-touching the whole document.
+        private static func lineNeighborhood(
+            of range: NSRange,
+            in source: NSString,
+            storageLength: Int
+        ) -> NSRange {
+            var lineStart = 0
+            var lineEnd = 0
+            source.getLineStart(
+                &lineStart,
+                end: &lineEnd,
+                contentsEnd: nil,
+                for: range
+            )
+            var beforeStart = lineStart
+            if lineStart > 0 {
+                var s = 0
+                var e = 0
+                source.getLineStart(
+                    &s,
+                    end: &e,
+                    contentsEnd: nil,
+                    for: NSRange(location: lineStart - 1, length: 0)
+                )
+                beforeStart = s
+            }
+            var afterEnd = lineEnd
+            if lineEnd < storageLength {
+                var s = 0
+                var e = 0
+                source.getLineStart(
+                    &s,
+                    end: &e,
+                    contentsEnd: nil,
+                    for: NSRange(location: lineEnd, length: 0)
+                )
+                afterEnd = e
+            }
+            return NSRange(
+                location: beforeStart,
+                length: afterEnd - beforeStart
+            )
         }
     }
 
