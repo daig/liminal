@@ -465,70 +465,57 @@ struct LiminalTextView: NSViewRepresentable {
             else { return }
 
             let storageLen = storage.length
-            let scope: NSRange
-            if let edit = editedRange, storageLen > 0 {
-                scope = Self.lineNeighborhood(
-                    of: edit,
-                    in: textView.string as NSString,
-                    storageLength: storageLen
-                )
+            let source = storage.string
+            let parsed = document.session.parseResult
+
+            // Scope decision: the parse already knows which contiguous
+            // byte range it just re-walked (skip-clean-regions' dirty
+            // span, plus boundary halo and sentinel expansion). When the
+            // call site signals a keystroke (`editedRange != nil`) and
+            // the parse produced a `changedByteRange`, use it as the
+            // repaint scope. Otherwise repaint the whole document —
+            // initial display, preference toggle, cold parse, or any
+            // path where the parse fell back to a full rewrite.
+            let scopedByteRange: CambiumCore.TextRange?
+            let offsetMap: OffsetMap
+            let scopeNSRange: NSRange
+            if editedRange != nil,
+               let changed = parsed?.changedByteRange,
+               let map = Self.makeScopedOffsetMap(source: source, byteRange: changed),
+               let nsRange = map.nsRange(
+                forByteStart: changed.start.rawValue,
+                length: changed.length.rawValue
+               )
+            {
+                scopedByteRange = changed
+                offsetMap = map
+                scopeNSRange = nsRange
             } else {
-                scope = NSRange(location: 0, length: storageLen)
+                scopedByteRange = nil
+                offsetMap = OffsetMap(source: source)
+                scopeNSRange = NSRange(location: 0, length: storageLen)
             }
 
             isApplyingProgrammaticEdit = true
             storage.beginEditing()
             // Reset to base style first so toggling off cleanly removes
             // any previously-painted highlight attributes within scope.
-            storage.setAttributes(theme.defaultAttributes, range: scope)
+            storage.setAttributes(theme.defaultAttributes, range: scopeNSRange)
 
             if EditorPreferences.shared.highlightingEnabled,
-               let parsed = document.session.parseResult {
-                let source = storage.string
-                // Translate the NSRange scope to a byte range. For the
-                // per-keystroke path the scope is a few lines around the
-                // edit, so we can prune the tree walker to the
-                // corresponding byte range and emit ~hundreds of spans
-                // instead of every token in the document (which for the
-                // 1.2 MB stress fixture is ~233K). For the full-document
-                // path (`editedRange == nil`) we still walk everything.
+               let parsed
+            {
                 let spans: [HighlightSpan]
-                let scopeByteRange: Range<Int>?
-                if editedRange != nil,
-                   let byteRange = LiminalTextView.utf16RangeToByteRange(scope, in: source)
-                {
-                    let textRange = CambiumCore.TextRange(
-                        start: TextSize(UInt32(byteRange.lowerBound)),
-                        end: TextSize(UInt32(byteRange.upperBound))
-                    )
-                    spans = highlighter.spans(for: parsed.rootSyntax, in: textRange)
-                    scopeByteRange = byteRange
+                if let scope = scopedByteRange {
+                    spans = highlighter.spans(for: parsed.rootSyntax, in: scope)
                 } else {
                     spans = highlighter.spans(for: parsed.rootSyntax)
-                    scopeByteRange = nil
                 }
-                // One linear pass to build the byte→UTF-16 lookup, then
-                // O(1) per span. Replaces the prior O(N²) byte-walk on
-                // each span which dominated load time on large docs.
-                let offsetMap = OffsetMap(source: source)
-                let scopeStart = scope.location
-                let scopeEnd = scope.location + scope.length
-                _ = scopeByteRange  // future: a scope-local offset map would let us avoid the full-source OffsetMap build
                 for span in spans {
                     guard let nsRange = offsetMap.nsRange(
                         forByteStart: span.range.start.rawValue,
                         length: span.range.length.rawValue
                     ) else { continue }
-                    // Skip spans entirely outside the scope so we don't
-                    // pay NSTextStorage's attribute-merge cost for runs
-                    // we're not actually changing. (The scoped span walk
-                    // above already filters most of these out; the check
-                    // here remains a defensive belt for spans that
-                    // straddle the byte-range boundary.)
-                    let spanEnd = nsRange.location + nsRange.length
-                    if spanEnd <= scopeStart || nsRange.location >= scopeEnd {
-                        continue
-                    }
                     let attrs = theme.attributes(
                         for: span.category,
                         modifiers: span.modifiers
@@ -541,6 +528,22 @@ struct LiminalTextView: NSViewRepresentable {
             isApplyingProgrammaticEdit = false
 
             textView.typingAttributes = theme.defaultAttributes
+        }
+
+        /// Build a scope-local OffsetMap covering exactly `byteRange`.
+        /// Returns `nil` when `byteRange` is degenerate or falls outside
+        /// the source's UTF-8 byte count — in which case
+        /// ``applyHighlights(in:)`` falls back to a full-document map.
+        private static func makeScopedOffsetMap(
+            source: String,
+            byteRange: CambiumCore.TextRange
+        ) -> OffsetMap? {
+            let lower = Int(byteRange.start.rawValue)
+            let upper = lower + Int(byteRange.length.rawValue)
+            guard lower >= 0, upper >= lower, upper <= source.utf8.count else {
+                return nil
+            }
+            return OffsetMap(source: source, byteRange: lower..<upper)
         }
 
         /// Expand an NSRange to the line(s) it touches, plus one full

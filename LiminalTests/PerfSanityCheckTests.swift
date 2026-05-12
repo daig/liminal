@@ -133,31 +133,37 @@ struct PerfSanityCheckTests {
             let spansFull = highlighter.spans(for: result.rootSyntax)
             let spansFullElapsed = clock.now - spansFullStart
 
-            // Phase B2: scoped highlight span walk over a 1 KB byte window
-            // centered on the edit — mirrors the keystroke path's
-            // per-edit highlight scope.
-            let scopeHalf = 512
-            let lo = max(0, pos - scopeHalf)
-            let hi = min(byteCount, pos + scopeHalf)
-            let scopeByteRange = CambiumCore.TextRange(
-                start: TextSize(UInt32(lo)),
-                end: TextSize(UInt32(hi))
+            // Phase B2: scoped highlight span walk over the parse's
+            // changedByteRange (the authoritative dirty span from
+            // skip-clean-regions). Mirrors the keystroke path's
+            // per-edit highlight scope after the changedByteRange fix.
+            let scopeByteRange = result.changedByteRange ?? CambiumCore.TextRange(
+                start: TextSize(0),
+                length: TextSize(UInt32(byteCount))
             )
             let spansScopedStart = clock.now
             let spansScoped = highlighter.spans(for: result.rootSyntax, in: scopeByteRange)
             let spansScopedElapsed = clock.now - spansScopedStart
 
-            // Phase C: OffsetMap build over the new source.
-            let mapStart = clock.now
-            let map = OffsetMap(source: session.source)
-            let mapElapsed = clock.now - mapStart
+            // Phase C1: full-source OffsetMap build (pre-fix cost).
+            let mapFullStart = clock.now
+            let mapFull = OffsetMap(source: session.source)
+            let mapFullElapsed = clock.now - mapFullStart
 
-            // Phase D: iterate scoped spans and look up nsRange (mirrors
-            // what applyHighlights does just before adding attributes).
+            // Phase C2: scoped OffsetMap build over the dirty byte range.
+            let scopeLower = Int(scopeByteRange.start.rawValue)
+            let scopeUpper = scopeLower + Int(scopeByteRange.length.rawValue)
+            let mapScopedStart = clock.now
+            let mapScoped = OffsetMap(source: session.source, byteRange: scopeLower..<scopeUpper)
+            let mapScopedElapsed = clock.now - mapScopedStart
+
+            // Phase D: iterate scoped spans and look up nsRange via the
+            // scoped map (mirrors what applyHighlights does just before
+            // adding attributes).
             let lookupStart = clock.now
             var lookups = 0
             for span in spansScoped {
-                _ = map.nsRange(
+                _ = mapScoped.nsRange(
                     forByteStart: span.range.start.rawValue,
                     length: span.range.length.rawValue
                 )
@@ -165,12 +171,16 @@ struct PerfSanityCheckTests {
             }
             let lookupElapsed = clock.now - lookupStart
 
+            _ = mapFull  // referenced so the build cost is included in mapFullElapsed
+
             print(
                 "[keystroke] burst \(i + 1) @ byte \(pos): "
                 + "total=\(totalElapsed) "
+                + "changed=\(result.changedByteRange?.length.rawValue ?? UInt32(byteCount)) bytes "
                 + "spansFull=\(spansFullElapsed) (\(spansFull.count)) "
                 + "spansScoped=\(spansScopedElapsed) (\(spansScoped.count)) "
-                + "map=\(mapElapsed) "
+                + "mapFull=\(mapFullElapsed) "
+                + "mapScoped=\(mapScopedElapsed) "
                 + "lookups=\(lookupElapsed) (\(lookups))"
             )
         }

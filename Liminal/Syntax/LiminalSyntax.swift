@@ -327,13 +327,27 @@ public enum LiminalDiagnosticSeverity: String, Equatable, Sendable {
 public struct LiminalParseResult: Sendable {
     public var tree: SharedSyntaxTree<LiminalLanguage>
     public var diagnostics: [LiminalDiagnostic]
+    /// Byte range of the new source's "dirty span" — the contiguous slice
+    /// of top-level children that this parse actually re-walked. Spans
+    /// outside this range were transplanted verbatim from the previous
+    /// tree and have byte-identical attribution. Consumers driving
+    /// per-edit refreshes (syntax highlighter, decoration providers,
+    /// etc.) should treat this as the authoritative repaint scope.
+    ///
+    /// `nil` when no scope information is available — cold parses, full
+    /// rewrites without edits, and any path where the parse didn't take
+    /// the skip-clean-regions fast path. Consumers should treat `nil`
+    /// as "every byte may have changed" and repaint the whole document.
+    public var changedByteRange: TextRange?
 
     public init(
         tree: SharedSyntaxTree<LiminalLanguage>,
-        diagnostics: [LiminalDiagnostic] = []
+        diagnostics: [LiminalDiagnostic] = [],
+        changedByteRange: TextRange? = nil
     ) {
         self.tree = tree
         self.diagnostics = diagnostics
+        self.changedByteRange = changedByteRange
     }
 
     public var sourceText: String {
@@ -737,7 +751,11 @@ public final class LiminalParseSession {
             bytesAccepted: bytesAccepted
         )
 
-        return LiminalParseResult(tree: tree, diagnostics: subParser.diagnostics)
+        return LiminalParseResult(
+            tree: tree,
+            diagnostics: subParser.diagnostics,
+            changedByteRange: TextRange(start: newDirtyStart, end: newDirtyEnd)
+        )
     }
 
     private static func snapshotTopLevelChildren(
