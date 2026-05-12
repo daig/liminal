@@ -4747,6 +4747,19 @@ private struct SourceLine {
     var firstSignificantByte: UInt8? {
         let utf8 = source.utf8
         var cursor = contentStart
+        // Skip a leading UTF-8 BOM (EF BB BF), so dispatch routes on the
+        // first byte after it. `frontmatterInfo` accepts a BOM-prefixed
+        // line at byte 0; without this, the BOM's first byte (0xEF) would
+        // fall into `default` and frontmatter detection would be missed.
+        if cursor < contentEnd, utf8[cursor] == 0xEF {
+            let second = utf8.index(after: cursor)
+            if second < contentEnd, utf8[second] == 0xBB {
+                let third = utf8.index(after: second)
+                if third < contentEnd, utf8[third] == 0xBF {
+                    cursor = utf8.index(after: third)
+                }
+            }
+        }
         while cursor < contentEnd {
             let byte = utf8[cursor]
             if byte == 0x20 || byte == 0x09 {
