@@ -295,18 +295,26 @@ struct LiminalTextView: NSViewRepresentable {
             textView.scrollRangeToVisible(textView.selectedRange())
         }
 
-        /// Task toggle mutates the textStorage directly via the standard
-        /// NSTextView edit path (`shouldChangeText` + `replaceCharacters`
-        /// + `didChangeText`). The textStorage delegate fires, which
-        /// updates the session via `applyTextEdits`. Crucially, we do NOT
-        /// go through `document.applyTextEdits` directly — that would
-        /// trigger SwiftUI's `updateNSView` to do a full string replace
-        /// after the parse, resetting the cursor to end-of-doc.
+        /// Task toggle: structural CST edit + surgical textStorage sync.
+        ///
+        /// The architecturally-honest path: the action is "flip the state
+        /// of this checkbox," and we know statically that this preserves
+        /// every other token's content and every sibling subtree's
+        /// identity. So we rebuild the listItem subtree with only the
+        /// `.taskMarker` token's text changed, and commit via Phase 5a's
+        /// structural replace primitive. No reparse, no highlight refresh
+        /// (marker attributes are invariant under toggle), no source-to-
+        /// string round-trip.
+        ///
+        /// After the structural edit lands, `session.source` reflects the
+        /// new text but the textStorage still shows the old. We sync the
+        /// 3-byte marker range surgically with the textStorage delegate
+        /// suppressed so the edit doesn't loop back as a textual edit.
         func toggleTaskAtCursor() {
             guard let textView,
-                  let parsed = document.session.parseResult,
+                  let root = document.currentRootSyntax,
                   let offset = currentCursorByteOffset(),
-                  let location = StructureCursor.taskListItem(at: offset, in: parsed.rootSyntax)
+                  let location = StructureCursor.taskListItem(at: offset, in: root)
             else { return }
 
             let newMarker: String
@@ -320,12 +328,24 @@ struct LiminalTextView: NSViewRepresentable {
                 in: textView.string
             ) else { return }
 
+            // Step 1: structural CST edit. `session.lastTree` advances;
+            // `session.source` now has the flipped marker.
+            guard document.structuralToggleTask(listItemHandle: location.listItemHandle)
+            else { return }
+
+            // Step 2: surgically sync the textStorage at the marker range.
+            // `isApplyingProgrammaticEdit` suppresses the textStorage
+            // delegate's reparse path, so this is a one-way sync, not a
+            // round-trip through `applyTextEdits`.
+            isApplyingProgrammaticEdit = true
             if textView.shouldChangeText(in: nsRange, replacementString: newMarker) {
                 textView.replaceCharacters(in: nsRange, with: newMarker)
                 textView.didChangeText()
             }
-            // After the edit, position the cursor on the marker so the
-            // block cursor visibly sits on the freshly-toggled `[x]`/`[ ]`.
+            isApplyingProgrammaticEdit = false
+
+            // Step 3: cursor on the (now-toggled) marker for the block
+            // cursor's benefit.
             setCursorAt(utf16Location: nsRange.location)
         }
 

@@ -62,6 +62,15 @@ public final class LiminalEditorSession {
         parseSession.lastReuseSummary
     }
 
+    /// The tree currently held by the parse session. Populated after the
+    /// first parse and updated by every textual or structural edit. Use
+    /// this when `parseResult` is nil (e.g., after a structural replace,
+    /// which doesn't re-run the parser) but you still need the current
+    /// CST root.
+    public var currentTree: SharedSyntaxTree<LiminalLanguage>? {
+        parseSession.currentTree
+    }
+
     /// Apply textual edits to the current source and re-parse from scratch.
     ///
     /// Edits are expressed in **old-source** UTF-8 byte coordinates per
