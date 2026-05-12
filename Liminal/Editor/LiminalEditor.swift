@@ -58,6 +58,10 @@ public final class LiminalEditorSession {
         return LiminalLowerer().lower(result)
     }
 
+    public var lastReuseSummary: ReuseSummary {
+        parseSession.lastReuseSummary
+    }
+
     /// Apply textual edits to the current source and re-parse from scratch.
     ///
     /// Edits are expressed in **old-source** UTF-8 byte coordinates per
