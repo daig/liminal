@@ -28,6 +28,7 @@ struct LiminalTextView: NSViewRepresentable {
 
         textView.string = document.session.source
         textView.textStorage?.delegate = context.coordinator
+        textView.delegate = context.coordinator
         textView.vimController = document.vimController
 
         context.coordinator.textView = textView
@@ -105,7 +106,7 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextStorageDelegate, VimControllerDelegate {
+    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate {
         let document: LiminalSourceDocument
         weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
@@ -198,6 +199,33 @@ struct LiminalTextView: NSViewRepresentable {
                     textView.setSelectedRange(NSRange(location: current.location, length: 0))
                 }
             }
+        }
+
+        // MARK: - NSTextViewDelegate
+
+        nonisolated func textViewDidChangeSelection(_ notification: Notification) {
+            MainActor.assumeIsolated {
+                refreshInspector()
+            }
+        }
+
+        /// Recompute the inspector snapshot from the current cursor +
+        /// tree. Cheap (one tree walk).
+        func refreshInspector() {
+            guard let textView else {
+                document.cstInspector.refresh(
+                    cursorByteOffset: nil,
+                    root: nil,
+                    source: ""
+                )
+                return
+            }
+            let offset = currentCursorByteOffset()
+            document.cstInspector.refresh(
+                cursorByteOffset: offset,
+                root: document.currentRootSyntax,
+                source: textView.string
+            )
         }
 
         // MARK: - NSTextStorageDelegate

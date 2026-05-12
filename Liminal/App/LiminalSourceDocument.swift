@@ -22,6 +22,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
 
     let session: LiminalEditorSession
     let vimController: VimController
+    let cstInspector: CSTInspector
 
     @Published private(set) var diagnosticsCount: Int = 0
     @Published private(set) var reuseSummary: ReuseSummary = .empty
@@ -29,6 +30,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     init() {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
+        self.cstInspector = CSTInspector()
         syncFromSession()
     }
 
@@ -38,6 +40,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         else { throw CocoaError(.fileReadCorruptFile) }
         self.session = LiminalEditorSession()
         self.vimController = VimController()
+        self.cstInspector = CSTInspector()
         try session.replaceSource(source)
         syncFromSession()
     }
@@ -67,6 +70,16 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                     oldRoot: oldRoot,
                     edits: edits,
                     newRoot: newRoot
+                )
+                // Inspector snapshot is computed against the new root;
+                // the Coordinator will pick it up on the next selection
+                // notification, but text edits also need to trigger an
+                // immediate refresh so the snapshot tracks structural
+                // changes even when the cursor doesn't move.
+                cstInspector.refresh(
+                    cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
+                    root: newRoot,
+                    source: session.source
                 )
             }
         }
@@ -144,6 +157,11 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 oldRoot: oldRoot,
                 edits: [],
                 newRoot: newRoot
+            )
+            cstInspector.refresh(
+                cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
+                root: newRoot,
+                source: session.source
             )
         }
         return true

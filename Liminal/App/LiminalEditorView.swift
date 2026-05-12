@@ -13,6 +13,8 @@ struct LiminalEditorView: View {
             StatusBar(document: document, controller: document.vimController)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
+            Divider()
+            CSTInspectorView(inspector: document.cstInspector)
         }
     }
 }
