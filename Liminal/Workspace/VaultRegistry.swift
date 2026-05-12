@@ -76,6 +76,12 @@ public final class VaultEntry: ObservableObject {
     /// Aggregated index. Refolded on every per-note change.
     @Published public private(set) var linkIndex: VaultLinkIndex = .empty
 
+    /// Hierarchical view of `notes.keys`, sorted folders-first /
+    /// alphabetical. Recomputed alongside `linkIndex` so the
+    /// navigator sidebar can observe it directly without rebuilding
+    /// on every SwiftUI render.
+    @Published public private(set) var fileTree: [FileTreeNode] = []
+
     /// One-shot cold-start latch. The scan runs at most once per
     /// entry lifetime; `beginColdStartScanIfNeeded()` is idempotent.
     private var hasStartedColdStartScan = false
@@ -207,6 +213,10 @@ public final class VaultEntry: ObservableObject {
         linkIndex = VaultLinkIndex.build(
             notes: Array(notes.values),
             documentIndexes: indexes
+        )
+        fileTree = FileTreeBuilder.build(
+            noteURLs: Array(notes.keys),
+            vaultRoot: rootURL
         )
     }
 

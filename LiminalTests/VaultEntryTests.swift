@@ -120,6 +120,22 @@ struct VaultIndexerTests {
         #expect(target?.index.headings.first?.title == "Heading")
     }
 
+    @Test("scanSync recurses into subdirectories")
+    func scanRecursesSubfolders() throws {
+        let root = try makeTempVault(files: [
+            "Top.lim": "top",
+            "subdir/Inner.lim": "inner",
+            "subdir/deeper/Deepest.lim": "deepest",
+            "subdir/skip.txt": "ignored",
+            ".hidden/Hidden.lim": "should not appear (hidden parent)"
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let names = Set(VaultIndexer.scanSync(rootURL: root)
+            .map { $0.url.lastPathComponent })
+        #expect(names == ["Top.lim", "Inner.lim", "Deepest.lim"])
+    }
+
     @Test("scanSync returns empty for a nonexistent directory")
     func scanMissingDirectory() {
         let bogus = URL(fileURLWithPath: "/tmp/no-such-vault-xyz-12345")
@@ -226,6 +242,12 @@ private func makeTempVault(files: [String: String]) throws -> URL {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     for (name, content) in files {
         let url = dir.appendingPathComponent(name)
+        // Allow nested paths in the keys (e.g. "subdir/Note.lim").
+        let parent = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: parent,
+            withIntermediateDirectories: true
+        )
         try content.data(using: .utf8)!.write(to: url)
     }
     return dir

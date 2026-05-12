@@ -10,6 +10,39 @@ struct LiminalEditorView: View {
     let fileURL: URL?
 
     var body: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            editorContent
+        }
+        .onAppear { document.setFileURL(fileURL) }
+        .onChange(of: fileURL) { _, newValue in
+            document.setFileURL(newValue)
+        }
+    }
+
+    @ViewBuilder
+    private var sidebar: some View {
+        if let url = fileURL {
+            VaultNavigatorView(
+                entry: VaultRegistry.shared.entry(for: url),
+                currentDocURL: url
+            )
+            .frame(minWidth: 200, idealWidth: 240)
+        } else {
+            VStack {
+                Text("Save the document to enable\nthe vault navigator.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                Spacer()
+            }
+            .frame(minWidth: 200, idealWidth: 240)
+        }
+    }
+
+    private var editorContent: some View {
         VStack(spacing: 0) {
             LiminalTextView(document: document)
                 .overlay(alignment: .bottom) {
@@ -21,10 +54,6 @@ struct LiminalEditorView: View {
                 .padding(.vertical, 4)
             Divider()
             CSTInspectorView(inspector: document.cstInspector)
-        }
-        .onAppear { document.setFileURL(fileURL) }
-        .onChange(of: fileURL) { _, newValue in
-            document.setFileURL(newValue)
         }
     }
 }

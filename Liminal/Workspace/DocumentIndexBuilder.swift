@@ -34,7 +34,11 @@ struct DocumentIndexBuilder {
         if case .atxHeading(let heading) = item {
             let title = heading.inlineContent?.plainText ?? ""
             if !WikiLinkNormalizer.headingLookupKey(title).isEmpty {
-                headings.append(HeadingAnchor(title: title, sourceOffset: heading.range.start))
+                headings.append(HeadingAnchor(
+                    title: title,
+                    sourceOffset: heading.range.start,
+                    level: heading.level
+                ))
             }
         }
 

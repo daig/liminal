@@ -48,11 +48,18 @@ public struct HeadingAnchor: Equatable, Hashable, Sendable {
     public let title: String
     public let normalizedKey: String
     public let sourceOffset: TextSize
+    /// ATX heading depth (1 for `#`, 2 for `##`, etc.). Outline /
+    /// navigator UIs indent by this. Clamped to 1...6 to match the
+    /// useful CommonMark range; the parser itself accepts longer
+    /// runs and the underlying token preserves them, but anything
+    /// beyond 6 collapses here for display purposes.
+    public let level: Int
 
-    public init(title: String, sourceOffset: TextSize) {
+    public init(title: String, sourceOffset: TextSize, level: Int = 1) {
         self.title = title
         self.normalizedKey = WikiLinkNormalizer.headingLookupKey(title)
         self.sourceOffset = sourceOffset
+        self.level = max(1, min(6, level))
     }
 }
 
