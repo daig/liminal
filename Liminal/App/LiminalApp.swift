@@ -10,7 +10,10 @@ extension UTType {
 struct LiminalApp: App {
     var body: some Scene {
         DocumentGroup(newDocument: LiminalSourceDocument.init) { configuration in
-            LiminalEditorView(document: configuration.document)
+            LiminalEditorView(
+                document: configuration.document,
+                fileURL: configuration.fileURL
+            )
         }
         .commands {
             // SwiftUI's TextEditingCommands provides cut/copy/paste/undo/

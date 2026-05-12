@@ -27,6 +27,49 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     @Published private(set) var diagnosticsCount: Int = 0
     @Published private(set) var reuseSummary: ReuseSummary = .empty
 
+    /// File URL for the document on disk, if any. Populated from the
+    /// view layer (`ReferenceFileDocumentConfiguration.fileURL`) — the
+    /// document layer itself doesn't natively know its URL in SwiftUI's
+    /// document architecture. Nil for untitled new documents until first
+    /// save. Updates on Save As.
+    @Published private(set) var fileURL: URL?
+
+    /// Push the current file URL down from the view layer. Idempotent
+    /// — no-op when unchanged. On a transition (nil → URL, URL → URL',
+    /// URL → nil) updates the `VaultRegistry`: drops us from the old
+    /// vault entry and indexes the current document into the new one.
+    @MainActor
+    func setFileURL(_ url: URL?) {
+        guard fileURL != url else { return }
+        let oldURL = fileURL
+        fileURL = url
+        if let oldURL {
+            VaultRegistry.shared.entry(for: oldURL).remove(oldURL)
+        }
+        indexInVault()
+    }
+
+    /// Re-index the open document into its vault entry. No-op when
+    /// the document is untitled (no URL) or has no CST yet (no parse
+    /// has completed). Uses `currentRootSyntax` so the path works after
+    /// either a textual edit (parse result fresh) or a structural edit
+    /// (parse result nil but `currentTree` advanced).
+    @MainActor
+    private func indexInVault() {
+        guard let url = fileURL,
+              let root = currentRootSyntax
+        else { return }
+        let entry = VaultRegistry.shared.entry(for: url)
+        entry.indexCurrentDocument(
+            url,
+            rootSyntax: root,
+            content: session.source
+        )
+        // Kick off the one-shot vault scan so Cmd-clicks to
+        // not-yet-open notes can resolve. Idempotent across calls.
+        entry.beginColdStartScanIfNeeded()
+    }
+
     init() {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
@@ -64,8 +107,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             return
         }
         syncFromSession()
-        if let oldRoot, let newRoot = currentRootSyntax {
-            MainActor.assumeIsolated {
+        MainActor.assumeIsolated {
+            if let oldRoot, let newRoot = currentRootSyntax {
                 vimController.reanchorMarks(
                     oldRoot: oldRoot,
                     edits: edits,
@@ -82,6 +125,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                     source: session.source
                 )
             }
+            indexInVault()
         }
     }
 
@@ -164,6 +208,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 source: session.source
             )
         }
+        indexInVault()
         return true
     }
 

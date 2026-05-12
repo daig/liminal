@@ -111,8 +111,15 @@ public struct DocumentIndex: Equatable, Sendable {
     }
 
     public static func build(from parseResult: LiminalParseResult) -> DocumentIndex {
+        build(root: parseResult.rootSyntax)
+    }
+
+    /// Build an index directly from a root syntax handle. Lets callers
+    /// re-index after a structural edit (where `LiminalParseResult` is
+    /// nil but `currentTree` advanced) without having to re-parse.
+    public static func build(root: RootSyntax) -> DocumentIndex {
         var builder = DocumentIndexBuilder()
-        return builder.build(root: parseResult.rootSyntax)
+        return builder.build(root: root)
     }
 
     public func reference(containing offset: TextSize) -> DocumentReference? {

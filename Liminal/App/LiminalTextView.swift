@@ -30,6 +30,7 @@ struct LiminalTextView: NSViewRepresentable {
         textView.textStorage?.delegate = context.coordinator
         textView.delegate = context.coordinator
         textView.vimController = document.vimController
+        textView.linkActivationDelegate = context.coordinator
 
         context.coordinator.textView = textView
         document.vimController.delegate = context.coordinator
@@ -106,7 +107,7 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate {
+    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, NavigationSubscriber {
         let document: LiminalSourceDocument
         weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
@@ -117,9 +118,23 @@ struct LiminalTextView: NSViewRepresentable {
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
         private var preferencesObservation: AnyCancellable?
+        private var fileURLObservation: AnyCancellable?
+
+        /// Tracks the URL we're currently subscribed to with the
+        /// router, so we can unsubscribe correctly when the document
+        /// URL changes (e.g. Save As) without leaking stale entries.
+        private var routerSubscriptionURL: URL?
 
         init(document: LiminalSourceDocument) {
             self.document = document
+        }
+
+        deinit {
+            if let url = routerSubscriptionURL {
+                MainActor.assumeIsolated {
+                    NavigationRouter.shared.unsubscribe(self, for: url)
+                }
+            }
         }
 
         // MARK: - Mode observation
@@ -145,6 +160,47 @@ struct LiminalTextView: NSViewRepresentable {
                         self?.applyHighlights()
                     }
                 }
+            // Track the document's URL through the navigation router
+            // so cross-window Cmd-clicks land here when this is the
+            // target. Drains any pending request the router was
+            // holding for this URL.
+            fileURLObservation = document.$fileURL.sink { [weak self] newURL in
+                Task { @MainActor [weak self] in
+                    self?.updateRouterSubscription(to: newURL)
+                }
+            }
+        }
+
+        private func updateRouterSubscription(to newURL: URL?) {
+            if let oldURL = routerSubscriptionURL, oldURL != newURL {
+                NavigationRouter.shared.unsubscribe(self, for: oldURL)
+                routerSubscriptionURL = nil
+            }
+            if let newURL, routerSubscriptionURL != newURL {
+                NavigationRouter.shared.subscribe(self, for: newURL)
+                routerSubscriptionURL = newURL
+            }
+        }
+
+        // MARK: - NavigationSubscriber
+
+        /// Incoming cross-document navigation. The router has already
+        /// matched this request to our document URL; we just resolve
+        /// the anchor against the current `DocumentIndex` and scroll.
+        nonisolated func handleNavigation(_ request: NavigationRequest) {
+            MainActor.assumeIsolated {
+                guard let docIndex = currentDocumentIndex() else {
+                    return
+                }
+                if let anchor = request.anchor,
+                   let byteOffset = docIndex.blockOffset(for: anchor) {
+                    scrollToByteOffset(Int(byteOffset.rawValue))
+                } else {
+                    // Anchor missing or no anchor — land at top so the
+                    // user sees that the navigation took effect.
+                    scrollToByteOffset(0)
+                }
+            }
         }
 
         /// Resolve every live mark against the current tree and push the
@@ -406,6 +462,224 @@ struct LiminalTextView: NSViewRepresentable {
             }
             setCursor(byteOffset: Int(byteOffset.rawValue))
             textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        // MARK: - Cmd-click activation
+
+        /// Cmd-click receiver. Resolve the byte offset under the click,
+        /// look up the innermost reference via `DocumentIndex`, and
+        /// route through the activation policy. Returns `true` to
+        /// claim the click; `false` falls back to NSTextView's default
+        /// cursor placement.
+        ///
+        /// Slice 3 wires within-doc anchor jumps and external URIs.
+        /// Cross-document targets (`open(noteID, anchor)` with
+        /// `noteID != currentURL`), `createNote`, and `showAmbiguous`
+        /// claim the click but no-op until the navigation router and
+        /// ambiguity popover land.
+        func vimTextView(_ view: VimTextView, didCmdClickAt utf16Index: Int) -> Bool {
+            guard let textView,
+                  let url = document.fileURL,
+                  let byteRange = LiminalTextView.utf16RangeToByteRange(
+                      NSRange(location: utf16Index, length: 0),
+                      in: textView.string
+                  ),
+                  let docIndex = currentDocumentIndex()
+            else { return false }
+
+            let canonicalURL = VaultRegistry.canonicalNoteURL(for: url)
+            let entry = VaultRegistry.shared.entry(for: url)
+            guard let result = CmdClickHandler.decision(
+                atByteOffset: TextSize(UInt32(byteRange.lowerBound)),
+                documentURL: canonicalURL,
+                documentIndex: docIndex,
+                vaultLinkIndex: entry.linkIndex
+            ) else { return false }
+
+            return activate(
+                decision: result.decision,
+                in: docIndex,
+                currentURL: canonicalURL,
+                clickUTF16Index: utf16Index
+            )
+        }
+
+        /// Pull the cached `DocumentIndex` from the vault entry, or
+        /// build it on demand from the current root if the cache hasn't
+        /// caught up. Returns nil only when there is no CST at all
+        /// (e.g., parse never completed).
+        private func currentDocumentIndex() -> DocumentIndex? {
+            if let url = document.fileURL {
+                let entry = VaultRegistry.shared.entry(for: url)
+                let canonical = VaultRegistry.canonicalNoteURL(for: url)
+                if let cached = entry.indexes[canonical] {
+                    return cached
+                }
+            }
+            // Cache miss or untitled: build fresh from the CST.
+            guard let root = document.currentRootSyntax else { return nil }
+            return DocumentIndex.build(root: root)
+        }
+
+        private func activate(
+            decision: LinkActivationDecision,
+            in docIndex: DocumentIndex,
+            currentURL: URL,
+            clickUTF16Index: Int
+        ) -> Bool {
+            switch decision {
+            case .openExternal(let url):
+                NSWorkspace.shared.open(url)
+                return true
+
+            case .open(let noteID, let anchor):
+                if noteID == currentURL {
+                    if let anchor, let byteOffset = docIndex.blockOffset(for: anchor) {
+                        scrollToByteOffset(Int(byteOffset.rawValue))
+                    } else if anchor != nil {
+                        // Anchor missing despite within-doc target —
+                        // jump to top so the user sees something
+                        // happened.
+                        scrollToByteOffset(0)
+                    }
+                    return true
+                }
+                NavigationRouter.shared.navigate(to: noteID, anchor: anchor)
+                return true
+
+            case .createNote(let relativePath):
+                createAndOpenNote(
+                    relativePath: relativePath,
+                    vaultRoot: VaultRegistry.canonicalVaultRoot(for: currentURL)
+                )
+                return true
+
+            case .showAmbiguous(let candidates):
+                showAmbiguityMenu(
+                    candidates: candidates,
+                    at: clickUTF16Index,
+                    currentURL: currentURL
+                )
+                return true
+
+            case .noAction:
+                return true
+            }
+        }
+
+        /// Pop up an `NSMenu` listing each candidate note (vault-
+        /// relative path). Selecting one re-issues an explicit
+        /// navigation through the router. Anchored at the
+        /// clicked-character's glyph rect in the text view's local
+        /// coordinates.
+        private func showAmbiguityMenu(
+            candidates: [URL],
+            at utf16Index: Int,
+            currentURL: URL
+        ) {
+            guard let textView else { return }
+            let menu = NSMenu(title: "Open which note?")
+            for url in candidates {
+                let item = NSMenuItem(
+                    title: vaultRelativeDisplayPath(for: url, currentURL: currentURL),
+                    action: #selector(activateAmbiguousCandidate(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = url
+                menu.addItem(item)
+            }
+            let anchor = pointForCharacter(utf16Index, in: textView)
+            menu.popUp(positioning: nil, at: anchor, in: textView)
+        }
+
+        @objc private func activateAmbiguousCandidate(_ sender: NSMenuItem) {
+            guard let url = sender.representedObject as? URL else { return }
+            NavigationRouter.shared.navigate(to: url, anchor: nil)
+        }
+
+        /// Vault-relative display string for a candidate URL. Falls
+        /// back to the file's last path component if the URL isn't
+        /// actually under the current vault root.
+        private func vaultRelativeDisplayPath(for url: URL, currentURL: URL) -> String {
+            let vaultRoot = VaultRegistry.canonicalVaultRoot(for: currentURL)
+            let prefix = vaultRoot.path.hasSuffix("/") ? vaultRoot.path : vaultRoot.path + "/"
+            if url.path.hasPrefix(prefix) {
+                return String(url.path.dropFirst(prefix.count))
+            }
+            return url.lastPathComponent
+        }
+
+        /// Local-coordinate position to anchor a popup menu at the
+        /// glyph for `utf16Index`. Falls back to the text view's
+        /// origin if the layout manager can't produce a rect.
+        private func pointForCharacter(_ utf16Index: Int, in textView: NSTextView) -> NSPoint {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer
+            else { return .zero }
+            let textLength = (textView.string as NSString).length
+            let clampedIndex = max(0, min(utf16Index, max(textLength - 1, 0)))
+            guard textLength > 0 else { return textView.textContainerOrigin }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: clampedIndex)
+            let rect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            return NSPoint(
+                x: rect.origin.x + textView.textContainerOrigin.x,
+                y: rect.origin.y + rect.height + textView.textContainerOrigin.y
+            )
+        }
+
+        /// Materialize an unresolved wikilink target as a real
+        /// `.lim` file inside the current vault, then route a
+        /// navigation through the router so the new doc opens.
+        /// Subdirectories in `relativePath` are created as needed.
+        private func createAndOpenNote(relativePath: String, vaultRoot: URL) {
+            let path = relativePath.lowercased().hasSuffix(".lim")
+                ? relativePath
+                : relativePath + ".lim"
+            let newFileURL = vaultRoot.appendingPathComponent(path)
+            let parent = newFileURL.deletingLastPathComponent()
+
+            do {
+                try FileManager.default.createDirectory(
+                    at: parent,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                NSLog("LiminalTextView: createDirectory failed for \(parent.path): \(error)")
+                return
+            }
+
+            if !FileManager.default.fileExists(atPath: newFileURL.path) {
+                let created = FileManager.default.createFile(
+                    atPath: newFileURL.path,
+                    contents: Data(),
+                    attributes: nil
+                )
+                if !created {
+                    NSLog("LiminalTextView: createFile failed for \(newFileURL.path)")
+                    return
+                }
+            }
+            NavigationRouter.shared.navigate(to: newFileURL, anchor: nil)
+        }
+
+        /// Move the cursor (and viewport) to a byte offset within the
+        /// current document. Used by Cmd-click within-doc anchor jumps
+        /// and (slice 5) by incoming `NavigationRequest`s targeted at
+        /// this open document.
+        func scrollToByteOffset(_ byteOffset: Int) {
+            guard let textView else { return }
+            let range = CambiumCore.TextRange(
+                start: TextSize(UInt32(max(0, byteOffset))),
+                length: TextSize(0)
+            )
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: textView.string)
+            else { return }
+            setCursorAt(utf16Location: nsRange.location)
+            textView.scrollRangeToVisible(NSRange(location: nsRange.location, length: 0))
         }
 
         // MARK: - Cursor helpers

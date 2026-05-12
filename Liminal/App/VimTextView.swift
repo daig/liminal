@@ -13,6 +13,12 @@ import AppKit
 final class VimTextView: NSTextView {
     weak var vimController: VimController?
 
+    /// Receives Cmd-click activations. The Coordinator implements this;
+    /// when it returns `true`, the view considers the click handled and
+    /// does NOT fall through to NSTextView's normal cursor-placement /
+    /// drag-tracking behavior.
+    weak var linkActivationDelegate: VimTextViewLinkActivationDelegate?
+
     /// Mark indicators to paint as colored dots above their characters.
     /// Coordinator owns the anchor → utf16 location conversion and pushes
     /// this list whenever the registry changes. The view just paints what
@@ -111,6 +117,25 @@ final class VimTextView: NSTextView {
         )
     }
 
+    /// Cmd-click intercepts: if the delegate claims the click, swallow
+    /// it (no cursor placement, no drag tracking). Otherwise fall
+    /// through to NSTextView's default. Excludes double-click and
+    /// modifier combos beyond plain Cmd so word/line selection still
+    /// works.
+    override func mouseDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command,
+           event.clickCount == 1,
+           let delegate = linkActivationDelegate {
+            let pointInView = convert(event.locationInWindow, from: nil)
+            let utf16Index = characterIndexForInsertion(at: pointInView)
+            if delegate.vimTextView(self, didCmdClickAt: utf16Index) {
+                return
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         // IME / dead-key composition: NSTextView's keyDown fires before
         // the composed character is committed. Let it through so IME
@@ -142,6 +167,14 @@ final class VimTextView: NSTextView {
         guard vimController?.mode == .insert else { return }
         super.insertText(string, replacementRange: replacementRange)
     }
+}
+
+/// Cmd-click receiver. Returns `true` to claim the click (no
+/// cursor placement, no drag); `false` to let the text view fall
+/// through to its normal mouse handling.
+@MainActor
+protocol VimTextViewLinkActivationDelegate: AnyObject {
+    func vimTextView(_ view: VimTextView, didCmdClickAt utf16Index: Int) -> Bool
 }
 
 extension VimKey {

@@ -3,6 +3,12 @@ import SwiftUI
 struct LiminalEditorView: View {
     @ObservedObject var document: LiminalSourceDocument
 
+    /// File URL passed down from the `DocumentGroup`'s
+    /// `ReferenceFileDocumentConfiguration.fileURL`. Nil for untitled
+    /// documents. Forwarded to the document so workspace components
+    /// (vault registration, navigation) can reach it.
+    let fileURL: URL?
+
     var body: some View {
         VStack(spacing: 0) {
             LiminalTextView(document: document)
@@ -15,6 +21,10 @@ struct LiminalEditorView: View {
                 .padding(.vertical, 4)
             Divider()
             CSTInspectorView(inspector: document.cstInspector)
+        }
+        .onAppear { document.setFileURL(fileURL) }
+        .onChange(of: fileURL) { _, newValue in
+            document.setFileURL(newValue)
         }
     }
 }
