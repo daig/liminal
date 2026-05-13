@@ -5,6 +5,20 @@
 public enum VimCommand: Sendable, Equatable {
     case enterInsertMode(at: InsertPosition)
     case enterNormalMode
+    case enterVisualMode(VisualKind)
+
+    /// `y` in visual: copy selection to system clipboard, return to
+    /// normal at the start of the previous selection.
+    case yankSelection
+    /// `d` in visual: yank then delete; return to normal at the
+    /// position the selection used to start.
+    case deleteSelection
+    /// `c` in visual: delete the selection then enter insert mode
+    /// at the deletion site.
+    case changeSelection
+    /// `p` / `P` in normal: paste from system clipboard. `after`
+    /// distinguishes `p` (after cursor / below line) from `P`.
+    case paste(after: Bool)
     case moveCursor(CursorMotion, count: Int)
     case structuralMotion(StructuralMotion, count: Int)
     case viewportMotion(ViewportMotion, count: Int)
@@ -24,11 +38,78 @@ public enum VimCommand: Sendable, Equatable {
     case awaitMarkName(MarkOp)
     case setMark(Character)
     case jumpToMark(Character)
+
+    /// `d` / `c` / `y` in normal: arm the operator-pending state. The
+    /// dispatch interceptor consumes the next motion (or doubled
+    /// operator) into a single `.applyOperator` and routes that to the
+    /// delegate; this case itself never reaches the delegate. The
+    /// `preCount` carries any digit count typed before the operator
+    /// (`3d` → preCount = 3). Default 1.
+    case enterPendingOperator(VimOperator, preCount: Int)
+
+    /// Resolved operator + target + count. Dispatched both by the
+    /// operator-pending interceptor (after `dw` / `dd` / `cw` / etc.)
+    /// and by the single-key shortcuts (`x` / `X` / `D` / `C` / `Y`).
+    /// The delegate is responsible for materializing the range and
+    /// applying the edit.
+    case applyOperator(VimOperator, target: OperatorTarget, count: Int)
+}
+
+/// Vim's three text-mutating operators. Indent / case / format
+/// operators are deliberately absent from v1 (they have a different
+/// output type — whitespace, casing, layout — and warrant their own
+/// `OperatorRange.Result` shape).
+public enum VimOperator: Sendable, Equatable, Hashable {
+    case delete  // d / x / X / D
+    case change  // c / C
+    case yank    // y / Y
+
+    /// Single-letter label surfaced in the status bar while the
+    /// operator is pending (e.g. `"d"` after `d`).
+    public var statusLabel: String {
+        switch self {
+        case .delete: return "d"
+        case .change: return "c"
+        case .yank:   return "y"
+        }
+    }
+}
+
+/// What an operator should consume — either a motion target (the
+/// usual `dw` / `cb` / `y$` shape), or one of the canonical "implicit
+/// target" shapes that vim collapses into a single keystroke
+/// (`dd` / `x` / `D` / etc.).
+public enum OperatorTarget: Sendable, Equatable, Hashable {
+    /// Operator + motion (`dw`, `cb`, `y$`, ...). The delegate
+    /// computes the motion target and builds a range from cursor →
+    /// target subject to the motion's inclusivity.
+    case motion(CursorMotion)
+    /// Operator + display-line motion (`dgj`, `cg$`, ...).
+    case displayLineMotion(DisplayLineMotion)
+    /// Operator + structural motion (`d]]`, `cgh`, ...).
+    case structuralMotion(StructuralMotion)
+    /// Operator + viewport motion (`dH`, `dL`, ...).
+    case viewportMotion(ViewportMotion)
+    /// Doubled operator (`dd` / `cc` / `yy`) — count is the number of
+    /// lines starting at the cursor's line.
+    case currentLine
+    /// `x` / `X` — the count chars at the cursor (or before it).
+    case charsAtCursor(before: Bool)
+    /// `D` / `C` — from the cursor to line content end.
+    case toLineEnd
 }
 
 public enum MarkOp: Sendable, Equatable, Hashable {
     case set
     case jump
+}
+
+/// Which visual-mode flavor to enter. Each maps 1:1 to a VimMode
+/// case (`.visual` / `.visualLine` / `.visualBlock`).
+public enum VisualKind: Sendable, Equatable, Hashable {
+    case charwise   // v
+    case linewise   // V
+    case blockwise  // Ctrl-v
 }
 
 /// Where to position the cursor (and which preliminary edit, if

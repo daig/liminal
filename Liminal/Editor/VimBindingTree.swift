@@ -98,5 +98,30 @@ extension VimBindingTree {
         case partial
         case none
     }
+
+    /// Convenience for bindings that should resolve identically in
+    /// multiple modes — typically motions, which are valid in
+    /// `.normal` and any visual mode. Equivalent to a `bind` per
+    /// mode but lets call sites express the cross-mode set once.
+    public mutating func bindInModes(
+        _ modes: [VimMode],
+        _ sequence: [VimKey],
+        description: String,
+        command: @escaping @Sendable (Int?) -> VimCommand
+    ) {
+        for mode in modes {
+            bind(mode, sequence, description: description, command: command)
+        }
+    }
+}
+
+extension VimMode {
+    /// Modes that share normal mode's motion vocabulary. Visual
+    /// modes use motions to extend the selection rather than place
+    /// the cursor; the binding tree treats them as peers of
+    /// `.normal` for motion dispatch.
+    public static let motionAccepting: [VimMode] = [
+        .normal, .visual, .visualLine, .visualBlock
+    ]
 }
 

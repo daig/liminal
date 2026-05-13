@@ -24,10 +24,21 @@ public struct VimStatusPresentation: Sendable, Equatable {
         mode: VimMode,
         pendingKeys: [VimKey],
         pendingCount: Int?,
-        pendingCharArgument: PendingCharArgument? = nil
+        pendingCharArgument: PendingCharArgument? = nil,
+        pendingOperator: PendingOperator? = nil
     ) -> VimStatusPresentation {
         var parts: [String] = []
-        if let count = pendingCount { parts.append("\(count)") }
+        if let pendingOperator {
+            // `3 d`, `3 d 2`, `d`. Pre-count of 1 is implicit and
+            // suppressed so a bare `d` doesn't display as `"1 d"`.
+            if pendingOperator.preCount > 1 {
+                parts.append("\(pendingOperator.preCount)")
+            }
+            parts.append(pendingOperator.kind.statusLabel)
+            if let count = pendingCount { parts.append("\(count)") }
+        } else {
+            if let count = pendingCount { parts.append("\(count)") }
+        }
         parts.append(contentsOf: pendingKeys.map(\.displayString))
         if let pendingCharArgument {
             parts.append("\(pendingCharArgument.statusLabel) <a-z>")

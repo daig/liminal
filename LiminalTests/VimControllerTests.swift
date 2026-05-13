@@ -563,12 +563,23 @@ private final class VimDelegateSpy: VimControllerDelegate {
         let count: Int
     }
 
+    struct ApplyOperatorCall: Equatable {
+        let op: VimOperator
+        let target: OperatorTarget
+        let count: Int
+    }
+
     var moveCursorCalls: [MoveCall] = []
     var structuralMotionCalls: [StructuralCall] = []
     var viewportMotionCalls: [ViewportCall] = []
     var displayLineMotionCalls: [DisplayLineCall] = []
     var goToDefinitionCallCount = 0
     var prepareForInsertCalls: [InsertPosition] = []
+    var enterVisualModeCalls: [VisualKind] = []
+    var yankSelectionCallCount = 0
+    var deleteSelectionCallCount = 0
+    var pasteCalls: [Bool] = []
+    var applyOperatorCalls: [ApplyOperatorCall] = []
     var toggleTaskCallCount = 0
     var setMarkCalls: [Character] = []
     var jumpToMarkCalls: [Character] = []
@@ -590,6 +601,25 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func prepareForInsert(at position: InsertPosition) {
         prepareForInsertCalls.append(position)
+    }
+    func enterVisualMode(kind: VisualKind) {
+        enterVisualModeCalls.append(kind)
+    }
+    func yankSelection() {
+        yankSelectionCallCount += 1
+    }
+    func deleteSelection() {
+        deleteSelectionCallCount += 1
+    }
+    func paste(after: Bool) {
+        pasteCalls.append(after)
+    }
+    func applyOperator(
+        _ op: VimOperator,
+        target: OperatorTarget,
+        count: Int
+    ) {
+        applyOperatorCalls.append(.init(op: op, target: target, count: count))
     }
     func toggleTaskAtCursor() {
         toggleTaskCallCount += 1

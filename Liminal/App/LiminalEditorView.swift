@@ -323,15 +323,21 @@ private struct ModeBadge: View {
 
     private var label: String {
         switch mode {
-        case .normal: return "NORMAL"
-        case .insert: return "INSERT"
+        case .normal:      return "NORMAL"
+        case .insert:      return "INSERT"
+        case .visual:      return "VISUAL"
+        case .visualLine:  return "V-LINE"
+        case .visualBlock: return "V-BLOCK"
         }
     }
 
     private var background: Color {
         switch mode {
-        case .normal: return .blue
-        case .insert: return .green
+        case .normal:      return .blue
+        case .insert:      return .green
+        case .visual:      return .purple
+        case .visualLine:  return .pink
+        case .visualBlock: return .orange
         }
     }
 }

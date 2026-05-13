@@ -136,6 +136,15 @@ struct LiminalTextView: NSViewRepresentable {
         /// URL changes (e.g. Save As) without leaking stale entries.
         private var routerSubscriptionURL: URL?
 
+        /// Visual-mode anchor for the charwise / linewise variants.
+        /// Set when `v` / `V` is pressed; cleared on exit. UTF-16
+        /// offset where the visual selection started.
+        private var visualAnchorUTF16: Int?
+
+        /// Visual-block anchor as (line, column). The block's other
+        /// corner is the cursor's current (line, column).
+        private var visualBlockAnchor: (line: Int, column: Int)?
+
         init(document: LiminalSourceDocument) {
             self.document = document
             self.hoverPreviewController = HoverPreviewController(document: document)
@@ -149,9 +158,18 @@ struct LiminalTextView: NSViewRepresentable {
         // MARK: - Mode observation
 
         func installModeObservers(on controller: VimController) {
-            modeObservation = controller.$mode.sink { [weak self] _ in
+            modeObservation = controller.$mode.sink { [weak self] newMode in
                 Task { @MainActor [weak self] in
-                    self?.refreshCursorStyle()
+                    guard let self else { return }
+                    if !newMode.isVisual {
+                        // Leaving any visual mode → drop anchors so
+                        // the next motion in normal mode places the
+                        // cursor cleanly instead of trying to extend
+                        // a stale selection.
+                        self.visualAnchorUTF16 = nil
+                        self.visualBlockAnchor = nil
+                    }
+                    self.refreshCursorStyle()
                 }
             }
             marksObservation = controller.$marks.sink { [weak self] _ in
@@ -289,6 +307,10 @@ struct LiminalTextView: NSViewRepresentable {
                 if current.length != 0 {
                     textView.setSelectedRange(NSRange(location: current.location, length: 0))
                 }
+            case .visual, .visualLine, .visualBlock:
+                // Visual modes own their selection — leave it alone
+                // and let the per-motion extend logic manage it.
+                break
             }
         }
 
@@ -909,6 +931,194 @@ struct LiminalTextView: NSViewRepresentable {
             setCursorAt(utf16Location: plan.cursorAfter)
         }
 
+        // MARK: - Yank / delete / paste
+
+        /// Compute the (text, kind, ranges, cursor-after-yank
+        /// position) tuple for the current visual selection. The
+        /// shape depends on which visual mode we're in. Returns
+        /// nil when there's no active visual mode.
+        private struct VisualSnapshot {
+            let text: String
+            let kind: YankKind
+            let ranges: [NSRange] // for delete: replace each in reverse
+            let cursorAfter: Int  // start of the selection (vim convention)
+        }
+        private func snapshotVisualSelection() -> VisualSnapshot? {
+            guard let textView else { return nil }
+            let nsString = textView.string as NSString
+            let mode = document.vimController.mode
+            switch mode {
+            case .visual:
+                let r = textView.selectedRange()
+                guard r.length > 0 else { return nil }
+                return VisualSnapshot(
+                    text: nsString.substring(with: r),
+                    kind: .characterwise,
+                    ranges: [r],
+                    cursorAfter: r.location
+                )
+            case .visualLine:
+                let r = textView.selectedRange()
+                guard r.length > 0 else { return nil }
+                return VisualSnapshot(
+                    text: nsString.substring(with: r),
+                    kind: .linewise,
+                    ranges: [r],
+                    cursorAfter: r.location
+                )
+            case .visualBlock:
+                let ranges = (textView.selectedRanges as? [NSValue])?
+                    .map(\.rangeValue) ?? []
+                guard !ranges.isEmpty else { return nil }
+                let rows = ranges.map { nsString.substring(with: $0) }
+                return VisualSnapshot(
+                    text: rows.joined(separator: "\n"),
+                    kind: .blockwise,
+                    ranges: ranges,
+                    cursorAfter: ranges.first?.location ?? 0
+                )
+            case .normal, .insert:
+                return nil
+            }
+        }
+
+        func yankSelection() {
+            guard let snap = snapshotVisualSelection() else { return }
+            yankText(snap.text, kind: snap.kind)
+            // Mode flip back to .normal happens in the controller's
+            // dispatch; cursor placement here so it lands at the
+            // start of the previous selection.
+            setCursorAt(utf16Location: snap.cursorAfter)
+        }
+
+        func deleteSelection() {
+            guard let snap = snapshotVisualSelection() else { return }
+            deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
+            setCursorAt(utf16Location: snap.cursorAfter)
+        }
+
+        /// Write `text` to the system pasteboard with `kind`. No-op for
+        /// empty strings. Shared by visual yank, operator-pending yank,
+        /// and the delete-yank step inside `deleteRanges`.
+        private func yankText(_ text: String, kind: YankKind) {
+            guard !text.isEmpty else { return }
+            SystemPasteboard.write(text: text, kind: kind)
+        }
+
+        /// Delete the contents of `ranges`. If `text` is non-nil, copy
+        /// it to the pasteboard first (vim's delete-implies-yank). Ranges
+        /// are replaced in descending order so earlier deletions don't
+        /// shift later range indices.
+        private func deleteRanges(
+            _ ranges: [NSRange],
+            yankAs kind: YankKind,
+            text: String?
+        ) {
+            guard let textView, !ranges.isEmpty else { return }
+            if let text { yankText(text, kind: kind) }
+            for range in ranges.sorted(by: { $0.location > $1.location }) {
+                guard range.length > 0 else { continue }
+                if textView.shouldChangeText(in: range, replacementString: "") {
+                    textView.replaceCharacters(in: range, with: "")
+                    textView.didChangeText()
+                }
+            }
+        }
+
+        /// Apply a normal-mode operator (`d` / `c` / `y`) over a target
+        /// computed by `OperatorRange`. The controller flips to insert
+        /// mode after this returns when `op == .change`, so the cursor
+        /// must already be at the deletion site by then.
+        func applyOperator(
+            _ op: VimOperator,
+            target: OperatorTarget,
+            count: Int
+        ) {
+            guard let textView else { return }
+            let cursor = textView.selectedRange().location
+            let result = OperatorRange.resolve(
+                op: op, target: target,
+                in: textView.string,
+                cursor: cursor,
+                count: count
+            )
+            let nsString = textView.string as NSString
+            let safeRange = NSRange(
+                location: max(0, min(result.range.location, nsString.length)),
+                length: max(0, min(result.range.length,
+                                   nsString.length - result.range.location))
+            )
+            let text = safeRange.length > 0
+                ? nsString.substring(with: safeRange) : ""
+            switch op {
+            case .yank:
+                yankText(text, kind: result.kind)
+                // Vim convention: cursor lands at the start of the
+                // yanked range.
+                setCursorAt(utf16Location: safeRange.location)
+            case .delete:
+                deleteRanges([safeRange], yankAs: result.kind, text: text)
+                positionCursorAfterDelete(
+                    at: safeRange.location, kind: result.kind
+                )
+            case .change:
+                deleteRanges([safeRange], yankAs: result.kind, text: text)
+                // For change, cursor sits at the deletion start; the
+                // controller flips to insert mode immediately after
+                // this returns and calls prepareForInsert(.atCursor).
+                textView.setSelectedRange(
+                    NSRange(location: safeRange.location, length: 0)
+                )
+            }
+        }
+
+        /// After a charwise delete, cursor lands at the deletion start
+        /// — but if that position is now past the new line's content
+        /// end (e.g., after `D`), back up to the line's last char.
+        /// Linewise deletes leave the cursor at the start of the line
+        /// where deletion ended (vim aligns to first non-blank; we
+        /// settle for line start as a reasonable v1).
+        private func positionCursorAfterDelete(at location: Int, kind: YankKind) {
+            guard let textView else { return }
+            let nsString = textView.string as NSString
+            switch kind {
+            case .characterwise, .blockwise:
+                var start = 0, contentEnd = 0, end = 0
+                let safe = max(0, min(location, nsString.length))
+                nsString.getLineStart(
+                    &start, end: &end, contentsEnd: &contentEnd,
+                    for: NSRange(location: safe, length: 0)
+                )
+                let adjusted = (location >= contentEnd && contentEnd > start)
+                    ? contentEnd - 1 : location
+                setCursorAt(utf16Location: adjusted)
+            case .linewise:
+                setCursorAt(utf16Location: location)
+            }
+        }
+
+        func paste(after: Bool) {
+            guard let textView,
+                  let entry = SystemPasteboard.read()
+            else { return }
+            let cursor = textView.selectedRange().location
+            let plan = PasteEngine.plan(
+                text: entry.text,
+                kind: entry.kind,
+                in: textView.string,
+                cursor: cursor,
+                after: after
+            )
+            if textView.shouldChangeText(
+                in: plan.range,
+                replacementString: plan.replacement
+            ) {
+                textView.replaceCharacters(in: plan.range, with: plan.replacement)
+                textView.didChangeText()
+            }
+            setCursorAt(utf16Location: plan.cursorAfter)
+        }
+
         /// Pull the cached `DocumentIndex` from the vault entry, or
         /// build it on demand from the current root if the cache hasn't
         /// caught up. Returns nil only when there is no CST at all
@@ -1141,14 +1351,184 @@ struct LiminalTextView: NSViewRepresentable {
             guard let textView else { return }
             let textLength = (textView.string as NSString).length
             let clampedLocation = max(0, min(utf16Location, textLength))
-            let length: Int
             switch document.vimController.mode {
             case .normal:
-                length = (clampedLocation < textLength) ? 1 : 0
+                let length = (clampedLocation < textLength) ? 1 : 0
+                textView.setSelectedRange(
+                    NSRange(location: clampedLocation, length: length)
+                )
             case .insert:
-                length = 0
+                textView.setSelectedRange(
+                    NSRange(location: clampedLocation, length: 0)
+                )
+            case .visual:
+                extendCharwiseSelection(toUTF16: clampedLocation)
+            case .visualLine:
+                extendLinewiseSelection(toUTF16: clampedLocation)
+            case .visualBlock:
+                extendBlockwiseSelection(toUTF16: clampedLocation)
             }
-            textView.setSelectedRange(NSRange(location: clampedLocation, length: length))
+        }
+
+        // MARK: - Visual mode entry + selection extension
+
+        /// Seed the visual-mode anchor and expand the selection for
+        /// the kind we just entered. Called by the controller after
+        /// it has flipped to the corresponding visual mode.
+        func enterVisualMode(kind: VisualKind) {
+            guard let textView else { return }
+            let cursor = textView.selectedRange().location
+            switch kind {
+            case .charwise:
+                visualAnchorUTF16 = cursor
+                visualBlockAnchor = nil
+                extendCharwiseSelection(toUTF16: cursor)
+            case .linewise:
+                visualAnchorUTF16 = cursor
+                visualBlockAnchor = nil
+                extendLinewiseSelection(toUTF16: cursor)
+            case .blockwise:
+                let (line, column) = lineAndColumn(
+                    forUTF16: cursor,
+                    in: textView.string as NSString
+                )
+                visualBlockAnchor = (line, column)
+                visualAnchorUTF16 = nil
+                extendBlockwiseSelection(toUTF16: cursor)
+            }
+        }
+
+        /// Charwise selection: spans `[min(anchor, head), max + 1)`.
+        /// Vim's visual is inclusive of the head cell, hence the +1.
+        private func extendCharwiseSelection(toUTF16 head: Int) {
+            guard let textView, let anchor = visualAnchorUTF16 else { return }
+            let textLength = (textView.string as NSString).length
+            let lo = max(0, min(anchor, head))
+            let hi = max(anchor, head)
+            let endExclusive = min(hi + 1, textLength)
+            let length = max(0, endExclusive - lo)
+            textView.setSelectedRange(NSRange(location: lo, length: length))
+        }
+
+        /// Linewise selection: snap to whole-line range from the
+        /// anchor's line.start to the head's line.end (inclusive of
+        /// the trailing newline so multi-line yanks behave right).
+        private func extendLinewiseSelection(toUTF16 head: Int) {
+            guard let textView, let anchor = visualAnchorUTF16 else { return }
+            let nsString = textView.string as NSString
+            let anchorLine = lineRange(at: anchor, in: nsString)
+            let headLine = lineRange(at: head, in: nsString)
+            let lo = min(anchorLine.start, headLine.start)
+            let hi = max(anchorLine.end, headLine.end)
+            textView.setSelectedRange(NSRange(location: lo, length: hi - lo))
+        }
+
+        /// Blockwise selection: per-row UTF-16 ranges between the
+        /// anchor and head columns, clamped to each line's content
+        /// length. Rendered as discontiguous selection.
+        private func extendBlockwiseSelection(toUTF16 head: Int) {
+            guard let textView, let anchor = visualBlockAnchor else { return }
+            let nsString = textView.string as NSString
+            let (headLine, headCol) = lineAndColumn(forUTF16: head, in: nsString)
+            let minLine = min(anchor.line, headLine)
+            let maxLine = max(anchor.line, headLine)
+            let minCol = min(anchor.column, headCol)
+            let maxCol = max(anchor.column, headCol)
+
+            var ranges: [NSValue] = []
+            ranges.reserveCapacity(maxLine - minLine + 1)
+            for ln in minLine...maxLine {
+                guard let info = lineRange(forLineIndex: ln, in: nsString)
+                else { continue }
+                let lineLen = info.contentEnd - info.start
+                let colStart = min(minCol, lineLen)
+                let colEnd = min(maxCol + 1, lineLen)
+                let length = max(0, colEnd - colStart)
+                ranges.append(NSValue(range: NSRange(
+                    location: info.start + colStart,
+                    length: length
+                )))
+            }
+            if !ranges.isEmpty {
+                textView.selectedRanges = ranges
+            }
+        }
+
+        // MARK: - Line geometry helpers (UTF-16, NSString-based)
+
+        private func lineRange(
+            at utf16Location: Int,
+            in nsString: NSString
+        ) -> (start: Int, contentEnd: Int, end: Int) {
+            var start = 0
+            var contentEnd = 0
+            var end = 0
+            let safe = max(0, min(utf16Location, nsString.length))
+            nsString.getLineStart(
+                &start, end: &end, contentsEnd: &contentEnd,
+                for: NSRange(location: safe, length: 0)
+            )
+            return (start, contentEnd, end)
+        }
+
+        /// (line index, column) for a UTF-16 offset. Line index is
+        /// 0-based; column is 0-based UTF-16 offset within the line.
+        private func lineAndColumn(
+            forUTF16 utf16Location: Int,
+            in nsString: NSString
+        ) -> (line: Int, column: Int) {
+            let safe = max(0, min(utf16Location, nsString.length))
+            var line = 0
+            var cursor = 0
+            while cursor < safe {
+                var s = 0, e = 0
+                nsString.getLineStart(
+                    &s, end: &e, contentsEnd: nil,
+                    for: NSRange(location: cursor, length: 0)
+                )
+                if e <= cursor || e > safe { break }
+                cursor = e
+                line += 1
+            }
+            // Column: distance from this line's start.
+            var lineStart = 0
+            nsString.getLineStart(
+                &lineStart, end: nil, contentsEnd: nil,
+                for: NSRange(location: safe, length: 0)
+            )
+            return (line, safe - lineStart)
+        }
+
+        /// Walk to the Nth line from the start of the document and
+        /// return its (start, contentEnd, end). Returns nil when N
+        /// exceeds the document's line count.
+        private func lineRange(
+            forLineIndex target: Int,
+            in nsString: NSString
+        ) -> (start: Int, contentEnd: Int, end: Int)? {
+            guard target >= 0, nsString.length > 0 else {
+                return target == 0 ? (0, 0, 0) : nil
+            }
+            var cursor = 0
+            var current = 0
+            while cursor < nsString.length {
+                var s = 0, c = 0, e = 0
+                nsString.getLineStart(
+                    &s, end: &e, contentsEnd: &c,
+                    for: NSRange(location: cursor, length: 0)
+                )
+                if current == target { return (s, c, e) }
+                if e <= cursor { return nil }
+                cursor = e
+                current += 1
+            }
+            // Past the last line terminator: a trailing empty line
+            // exists if the doc ends in `\n`. Otherwise no more
+            // lines.
+            if current == target {
+                return (nsString.length, nsString.length, nsString.length)
+            }
+            return nil
         }
 
         /// Re-apply highlights to the entire text storage from the current

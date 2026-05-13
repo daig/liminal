@@ -43,6 +43,13 @@ public final class VimController: ObservableObject {
     /// tree.
     @Published public private(set) var pendingCharArgument: PendingCharArgument?
 
+    /// Set after `d` / `c` / `y` in normal mode: an operator is waiting
+    /// for its target. Subsequent keys still route through the binding
+    /// tree (so digit counts and chord prefixes work normally), but the
+    /// dispatch interceptor wraps the resolved command into an
+    /// `.applyOperator(...)` and routes that to the delegate instead.
+    @Published public private(set) var pendingOperator: PendingOperator?
+
     /// Per-document mark store (`m<a-z>` / `` `<a-z> ``). Owned here so
     /// SwiftUI views observing the controller pick up mark changes
     /// automatically.
@@ -95,8 +102,23 @@ public final class VimController: ObservableObject {
             return .consumed
         }
 
+        // Operator-pending Esc cancels silently. Any other key flows
+        // through normal dispatch — counts still accumulate, chords
+        // still resolve — and the interceptor in `dispatch(_:)`
+        // post-processes the resolved command.
+        if pendingOperator != nil, key == .special(.escape) {
+            pendingOperator = nil
+            resetPending()
+            return .consumed
+        }
+
         switch mode {
-        case .normal:
+        case .normal, .visual, .visualLine, .visualBlock:
+            // Visual modes share normal mode's key-handling shape:
+            // count digits, then binding-tree resolution. The
+            // binding tree itself segregates per-mode bindings, so
+            // motions in visual dispatch their own commands and
+            // y/d/c only resolve when actually in a visual mode.
             return handleNormal(key)
         case .insert:
             return handleInsert(key)
@@ -116,7 +138,10 @@ public final class VimController: ObservableObject {
         }
 
         let tentative = pendingKeys + [key]
-        switch bindings.resolve(tentative, mode: .normal, count: pendingCount) {
+        // Resolve under the current mode so visual modes pick up
+        // their own bindings (y/d/c/Esc) and motions registered
+        // across all motion-accepting modes still match.
+        switch bindings.resolve(tentative, mode: mode, count: pendingCount) {
         case .command(let command):
             resetPending()
             dispatch(command)
@@ -158,6 +183,7 @@ public final class VimController: ObservableObject {
         mode = newMode
         resetPending()
         pendingCharArgument = nil
+        pendingOperator = nil
     }
 
     // MARK: - Derived state
@@ -169,7 +195,8 @@ public final class VimController: ObservableObject {
             mode: mode,
             pendingKeys: pendingKeys,
             pendingCount: pendingCount,
-            pendingCharArgument: pendingCharArgument
+            pendingCharArgument: pendingCharArgument,
+            pendingOperator: pendingOperator
         )
         refreshHintSnapshot()
     }
@@ -229,6 +256,49 @@ public final class VimController: ObservableObject {
     // MARK: - Command interpreter
 
     private func dispatch(_ command: VimCommand) {
+        // Operator-pending interceptor: when an operator is armed, the
+        // resolved command is wrapped into an .applyOperator(...) and
+        // dispatched as that. Three cases:
+        //   1) Same operator key again (`dd` / `cc` / `yy`) → linewise
+        //   2) Resolved command maps to an OperatorTarget (a motion) →
+        //      operator + motion. Vim's `cw → ce` quirk is applied here.
+        //   3) Anything else → silently cancel pending; the original
+        //      command is NOT executed (matches vim).
+        if let pending = pendingOperator {
+            // Doubling check first: enterPendingOperator with the same
+            // kind means the user typed the operator twice. The pre-
+            // count from the second operator entry (e.g., `2dd`'s
+            // second `d`) is multiplied with our existing preCount.
+            if case let .enterPendingOperator(kind, postPreCount) = command,
+               kind == pending.kind {
+                let count = combineCounts(pending.preCount, postPreCount)
+                pendingOperator = nil
+                resetPending()
+                dispatchResolvedOperator(
+                    pending.kind, target: .currentLine, count: count
+                )
+                return
+            }
+            if let target = operatorTarget(from: command) {
+                // Counts for motions are baked into the resolved
+                // command by the binding closure (which already
+                // consumed pendingCount); extract from the command,
+                // then multiply with our pre-operator count.
+                let postCount = countFromCommand(command) ?? 1
+                let count = combineCounts(pending.preCount, postCount)
+                let resolvedTarget = applyChangeWordQuirk(pending.kind, target)
+                pendingOperator = nil
+                resetPending()
+                dispatchResolvedOperator(
+                    pending.kind, target: resolvedTarget, count: count
+                )
+                return
+            }
+            // Unrecognized continuation: cancel pending, drop the key.
+            pendingOperator = nil
+            resetPending()
+            return
+        }
         switch command {
         case .enterInsertMode(let position):
             // Flip mode FIRST so any text inserts the delegate
@@ -240,6 +310,32 @@ public final class VimController: ObservableObject {
             delegate?.prepareForInsert(at: position)
         case .enterNormalMode:
             setMode(.normal)
+        case .enterVisualMode(let kind):
+            // Flip mode FIRST so the Coordinator's visual-mode
+            // selection logic (anchor + initial selection) runs in
+            // the right context. The delegate seeds the anchor and
+            // expands the selection appropriately for the kind.
+            switch kind {
+            case .charwise:  setMode(.visual)
+            case .linewise:  setMode(.visualLine)
+            case .blockwise: setMode(.visualBlock)
+            }
+            delegate?.enterVisualMode(kind: kind)
+        case .yankSelection:
+            delegate?.yankSelection()
+            setMode(.normal)
+        case .deleteSelection:
+            delegate?.deleteSelection()
+            setMode(.normal)
+        case .changeSelection:
+            // Delete first, then enter insert mode. Mode flip lives
+            // here so the delegate's `prepareForInsert` runs in
+            // insert context (consistent with the i/a/I/A path).
+            delegate?.deleteSelection()
+            setMode(.insert)
+            delegate?.prepareForInsert(at: .atCursor)
+        case .paste(let after):
+            delegate?.paste(after: after)
         case .moveCursor(let motion, let count):
             delegate?.moveCursor(motion: motion, count: count)
         case .structuralMotion(let motion, let count):
@@ -258,7 +354,84 @@ public final class VimController: ObservableObject {
             delegate?.setMark(name)
         case .jumpToMark(let name):
             delegate?.jumpToMark(name)
+        case .enterPendingOperator(let kind, let preCount):
+            // Arm the operator. The interceptor at the top of dispatch
+            // takes over from here; this case is only reached when the
+            // operator is being entered fresh (no existing pending).
+            pendingOperator = PendingOperator(kind: kind, preCount: preCount)
+        case .applyOperator(let op, let target, let count):
+            // Direct operator dispatch (single-key shortcuts: x/X/D/C/Y).
+            dispatchResolvedOperator(op, target: target, count: count)
         }
+    }
+
+    /// Forward an operator+target+count to the delegate. `c` flips into
+    /// insert mode after the delete-portion completes (mirroring the
+    /// existing visual-mode `changeSelection` flow).
+    private func dispatchResolvedOperator(
+        _ op: VimOperator,
+        target: OperatorTarget,
+        count: Int
+    ) {
+        delegate?.applyOperator(op, target: target, count: count)
+        if op == .change {
+            setMode(.insert)
+            delegate?.prepareForInsert(at: .atCursor)
+        }
+    }
+
+    /// Map a resolved binding-tree command to an `OperatorTarget`, or
+    /// nil if the command isn't a motion the operator can consume.
+    private func operatorTarget(from command: VimCommand) -> OperatorTarget? {
+        switch command {
+        case .moveCursor(let motion, _):
+            return .motion(motion)
+        case .displayLineMotion(let motion, _):
+            return .displayLineMotion(motion)
+        case .structuralMotion(let motion, _):
+            return .structuralMotion(motion)
+        case .viewportMotion(let motion, _):
+            return .viewportMotion(motion)
+        default:
+            return nil
+        }
+    }
+
+    /// Extract the count baked into a motion command by the binding
+    /// closure. Returns nil for non-motion commands.
+    private func countFromCommand(_ command: VimCommand) -> Int? {
+        switch command {
+        case .moveCursor(_, let count),
+             .displayLineMotion(_, let count),
+             .structuralMotion(_, let count),
+             .viewportMotion(_, let count):
+            return count
+        default:
+            return nil
+        }
+    }
+
+    /// Combine a pre-operator count and a post-operator count (`3d2w`
+    /// → 6). The Int.max sentinel that `G` uses for "no explicit
+    /// count" passes through unchanged so it doesn't overflow.
+    private func combineCounts(_ pre: Int, _ post: Int) -> Int {
+        if post == Int.max || pre == Int.max { return Int.max }
+        return pre * post
+    }
+
+    /// Vim's traditional ergonomic quirk: `cw` behaves like `ce` (and
+    /// `cW` like `cE`) — the change operator with a "next word" motion
+    /// includes the word's last char and stops there, instead of
+    /// devouring the trailing whitespace before the next word. The
+    /// substitution happens here so the rest of the pipeline doesn't
+    /// have to know about it.
+    private func applyChangeWordQuirk(
+        _ op: VimOperator, _ target: OperatorTarget
+    ) -> OperatorTarget {
+        guard op == .change, case .motion(.wordForwardStart) = target else {
+            return target
+        }
+        return .motion(.wordForwardEnd)
     }
 
     // MARK: - Default bindings
@@ -295,6 +468,80 @@ public final class VimController: ObservableObject {
             .enterNormalMode
         }
 
+        // Visual mode entry from normal. Ctrl-v uses VimKey's
+        // modifier-tagged character form.
+        t.bind(.normal, [.char("v")], description: "Visual (charwise)") { _ in
+            .enterVisualMode(.charwise)
+        }
+        t.bind(.normal, [.char("V")], description: "Visual line") { _ in
+            .enterVisualMode(.linewise)
+        }
+        t.bind(.normal, [.char("v", modifiers: [.control])],
+               description: "Visual block") { _ in
+            .enterVisualMode(.blockwise)
+        }
+
+        // Esc returns to normal from any visual mode.
+        let visualModes: [VimMode] = [.visual, .visualLine, .visualBlock]
+        for mode in visualModes {
+            t.bind(mode, [.special(.escape)],
+                   description: "Back to Normal") { _ in .enterNormalMode }
+            t.bind(mode, [.char("y")],
+                   description: "Yank selection") { _ in .yankSelection }
+            t.bind(mode, [.char("d")],
+                   description: "Delete selection") { _ in .deleteSelection }
+            t.bind(mode, [.char("c")],
+                   description: "Change selection") { _ in .changeSelection }
+        }
+
+        // Paste in normal mode.
+        t.bind(.normal, [.char("p")],
+               description: "Paste after cursor") { _ in .paste(after: true) }
+        t.bind(.normal, [.char("P")],
+               description: "Paste before cursor") { _ in .paste(after: false) }
+
+        // Operator-pending entries. `d` / `c` / `y` arm the controller's
+        // pendingOperator; the dispatch interceptor consumes the next
+        // motion (or doubled operator) and routes a single
+        // `.applyOperator` to the delegate. The visual-mode bindings
+        // for `y` / `d` / `c` (registered earlier) take precedence in
+        // visual modes — these here are normal-only.
+        t.bind(.normal, [.char("d")], description: "Delete operator") {
+            .enterPendingOperator(.delete, preCount: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("c")], description: "Change operator") {
+            .enterPendingOperator(.change, preCount: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("y")], description: "Yank operator") {
+            .enterPendingOperator(.yank, preCount: $0 ?? 1)
+        }
+
+        // Single-key edit shortcuts. These dispatch directly through
+        // `.applyOperator(...)` without arming the operator-pending
+        // state — they're sugar for a fixed (op, target) pair.
+        t.bind(.normal, [.char("x")], description: "Delete char at cursor") {
+            .applyOperator(.delete, target: .charsAtCursor(before: false), count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("X")], description: "Delete char before cursor") {
+            .applyOperator(.delete, target: .charsAtCursor(before: true), count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("D")], description: "Delete to line end") {
+            .applyOperator(.delete, target: .toLineEnd, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("C")], description: "Change to line end") {
+            .applyOperator(.change, target: .toLineEnd, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("Y")], description: "Yank line") {
+            .applyOperator(.yank, target: .currentLine, count: $0 ?? 1)
+        }
+
+        // Motions register across normal + every visual mode. In
+        // visual modes the same key sequence extends the selection
+        // instead of moving the cursor (the Coordinator's
+        // `setCursorAt` chokepoint dispatches on mode). The
+        // `motionAccepting` set lives on `VimMode`.
+        let motionModes = VimMode.motionAccepting
+
         // Basic motion — h/j/k/l and arrows are aliases for the same
         // commands; arrow keys also work in Insert mode (they fall through
         // to NSTextView's normal handling since they're unbound there).
@@ -303,75 +550,77 @@ public final class VimController: ObservableObject {
         let downMotion:  @Sendable (Int?) -> VimCommand = { .moveCursor(.down,  count: $0 ?? 1) }
         let upMotion:    @Sendable (Int?) -> VimCommand = { .moveCursor(.up,    count: $0 ?? 1) }
 
-        t.bind(.normal, [.char("h")],            description: "Move left",  command: leftMotion)
-        t.bind(.normal, [.special(.left)],       description: "Move left",  command: leftMotion)
-        t.bind(.normal, [.char("l")],            description: "Move right", command: rightMotion)
-        t.bind(.normal, [.special(.right)],      description: "Move right", command: rightMotion)
-        t.bind(.normal, [.char("j")],            description: "Move down",  command: downMotion)
-        t.bind(.normal, [.special(.down)],       description: "Move down",  command: downMotion)
-        t.bind(.normal, [.char("k")],            description: "Move up",    command: upMotion)
-        t.bind(.normal, [.special(.up)],         description: "Move up",    command: upMotion)
+        t.bindInModes(motionModes, [.char("h")],       description: "Move left",  command: leftMotion)
+        t.bindInModes(motionModes, [.special(.left)],  description: "Move left",  command: leftMotion)
+        t.bindInModes(motionModes, [.char("l")],       description: "Move right", command: rightMotion)
+        t.bindInModes(motionModes, [.special(.right)], description: "Move right", command: rightMotion)
+        t.bindInModes(motionModes, [.char("j")],       description: "Move down",  command: downMotion)
+        t.bindInModes(motionModes, [.special(.down)],  description: "Move down",  command: downMotion)
+        t.bindInModes(motionModes, [.char("k")],       description: "Move up",    command: upMotion)
+        t.bindInModes(motionModes, [.special(.up)],    description: "Move up",    command: upMotion)
 
         // Line motion (within the current line — count is ignored).
-        t.bind(.normal, [.char("0")], description: "Line start") { _ in
+        t.bindInModes(motionModes, [.char("0")], description: "Line start") { _ in
             .moveCursor(.lineStart, count: 1)
         }
-        t.bind(.normal, [.char("^")], description: "First non-blank") { _ in
+        t.bindInModes(motionModes, [.char("^")], description: "First non-blank") { _ in
             .moveCursor(.lineFirstNonBlank, count: 1)
         }
-        t.bind(.normal, [.char("$")], description: "Line end") { _ in
+        t.bindInModes(motionModes, [.char("$")], description: "Line end") { _ in
             .moveCursor(.lineEnd, count: 1)
         }
 
         // Word motion (count = number of words).
-        t.bind(.normal, [.char("w")], description: "Next word") {
+        t.bindInModes(motionModes, [.char("w")], description: "Next word") {
             .moveCursor(.wordForwardStart, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("b")], description: "Previous word") {
+        t.bindInModes(motionModes, [.char("b")], description: "Previous word") {
             .moveCursor(.wordBackward, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("e")], description: "Word end") {
+        t.bindInModes(motionModes, [.char("e")], description: "Word end") {
             .moveCursor(.wordForwardEnd, count: $0 ?? 1)
         }
 
         // Document jumps. `gg` defaults to line 1; `G` defaults to the
         // last line. With an explicit count, both jump to that absolute
         // line. The Int.max sentinel encodes "no count given" for `G`.
-        t.bind(.normal, [.char("g"), .char("g")],
-               description: "First line / line N") {
+        t.bindInModes(motionModes, [.char("g"), .char("g")],
+                      description: "First line / line N") {
             .moveCursor(.documentStart, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("G")], description: "Last line / line N") {
+        t.bindInModes(motionModes, [.char("G")], description: "Last line / line N") {
             .moveCursor(.documentEnd, count: $0 ?? Int.max)
         }
 
         // Structural sibling motion
-        t.bind(.normal, [.char("{")], description: "Previous sibling block") {
+        t.bindInModes(motionModes, [.char("{")], description: "Previous sibling block") {
             .structuralMotion(.previousSibling, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("}")], description: "Next sibling block") {
+        t.bindInModes(motionModes, [.char("}")], description: "Next sibling block") {
             .structuralMotion(.nextSibling, count: $0 ?? 1)
         }
 
         // Screen-relative motion. Vim convention: `H` and `L` accept
         // a count meaning "N lines from top / bottom of viewport";
         // `M` ignores any count.
-        t.bind(.normal, [.char("H")], description: "Top of screen / N from top") {
+        t.bindInModes(motionModes, [.char("H")], description: "Top of screen / N from top") {
             .viewportMotion(.screenTop, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("M")], description: "Middle of screen") { _ in
+        t.bindInModes(motionModes, [.char("M")], description: "Middle of screen") { _ in
             .viewportMotion(.screenMiddle, count: 1)
         }
-        t.bind(.normal, [.char("L")], description: "Bottom of screen / N from bottom") {
+        t.bindInModes(motionModes, [.char("L")], description: "Bottom of screen / N from bottom") {
             .viewportMotion(.screenBottom, count: $0 ?? 1)
         }
 
         // CST-aware "go to" motions under the `g` prefix. These join
         // `gg` / `gj` / `gk` / `g0` / `g^` / `g$` already bound
         // below — `g` is vim's polymorphic "given my cursor, take me
-        // somewhere related" namespace.
-        t.bind(.normal, [.char("g"), .char("h")],
-               description: "Enclosing heading") {
+        // somewhere related" namespace. `gh` is a motion (extends in
+        // visual); `gd` is an action (normal-only — there's no
+        // "extend to a navigated link" semantic).
+        t.bindInModes(motionModes, [.char("g"), .char("h")],
+                      description: "Enclosing heading") {
             .structuralMotion(.enclosingHeading, count: $0 ?? 1)
         }
         t.bind(.normal, [.char("g"), .char("d")],
@@ -388,20 +637,20 @@ public final class VimController: ObservableObject {
         //   `[z` / `]z` — vim-canonical for fold start/end. Bind
         //                 when CST folding lands.
         // Don't claim those letters for anything else.
-        t.bind(.normal, [.char("["), .char("[")],
-               description: "Previous heading") {
+        t.bindInModes(motionModes, [.char("["), .char("[")],
+                      description: "Previous heading") {
             .structuralMotion(.previousHeading, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("]"), .char("]")],
-               description: "Next heading") {
+        t.bindInModes(motionModes, [.char("]"), .char("]")],
+                      description: "Next heading") {
             .structuralMotion(.nextHeading, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("["), .char("r")],
-               description: "Previous reference") {
+        t.bindInModes(motionModes, [.char("["), .char("r")],
+                      description: "Previous reference") {
             .structuralMotion(.previousReference, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("]"), .char("r")],
-               description: "Next reference") {
+        t.bindInModes(motionModes, [.char("]"), .char("r")],
+                      description: "Next reference") {
             .structuralMotion(.nextReference, count: $0 ?? 1)
         }
 
@@ -409,24 +658,24 @@ public final class VimController: ObservableObject {
         // operating on soft-wrapped display rows instead of logical
         // source lines. The chord-prefix machinery already accepts
         // `g` because `gg` is bound below.
-        t.bind(.normal, [.char("g"), .char("j")],
-               description: "Down one display line") {
+        t.bindInModes(motionModes, [.char("g"), .char("j")],
+                      description: "Down one display line") {
             .displayLineMotion(.down, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("g"), .char("k")],
-               description: "Up one display line") {
+        t.bindInModes(motionModes, [.char("g"), .char("k")],
+                      description: "Up one display line") {
             .displayLineMotion(.up, count: $0 ?? 1)
         }
-        t.bind(.normal, [.char("g"), .char("0")],
-               description: "Display line start") { _ in
+        t.bindInModes(motionModes, [.char("g"), .char("0")],
+                      description: "Display line start") { _ in
             .displayLineMotion(.start, count: 1)
         }
-        t.bind(.normal, [.char("g"), .char("^")],
-               description: "Display line first non-blank") { _ in
+        t.bindInModes(motionModes, [.char("g"), .char("^")],
+                      description: "Display line first non-blank") { _ in
             .displayLineMotion(.firstNonBlank, count: 1)
         }
-        t.bind(.normal, [.char("g"), .char("$")],
-               description: "Display line end") { _ in
+        t.bindInModes(motionModes, [.char("g"), .char("$")],
+                      description: "Display line end") { _ in
             .displayLineMotion(.end, count: 1)
         }
 
@@ -466,6 +715,20 @@ public final class VimController: ObservableObject {
         newRoot: RootSyntax
     ) {
         marks.reanchor(oldRoot: oldRoot, edits: edits, newRoot: newRoot)
+    }
+}
+
+/// State held while an operator (`d` / `c` / `y`) is waiting for its
+/// target. The next motion command resolves into an `.applyOperator`;
+/// the same operator typed again resolves into the linewise variant.
+/// `Esc` or any unrelated command silently cancels.
+public struct PendingOperator: Sendable, Equatable, Hashable {
+    public let kind: VimOperator
+    public let preCount: Int
+
+    public init(kind: VimOperator, preCount: Int = 1) {
+        self.kind = kind
+        self.preCount = preCount
     }
 }
 
@@ -523,7 +786,45 @@ public protocol VimControllerDelegate: AnyObject {
     /// fired. The controller has already flipped to insert mode by
     /// the time this is called.
     func prepareForInsert(at position: InsertPosition)
+    /// Seed the visual-mode anchor and expand the selection
+    /// appropriately for `kind`. The controller has already flipped
+    /// to the corresponding visual mode by the time this is called.
+    func enterVisualMode(kind: VisualKind)
+    /// Copy the current visual selection to the system pasteboard.
+    /// Caller (controller) is responsible for the mode transition
+    /// back to normal afterwards.
+    func yankSelection()
+    /// Yank then delete the current visual selection. Cursor lands
+    /// at the start of the previous selection.
+    func deleteSelection()
+    /// Paste from the system pasteboard. `after` is `true` for `p`
+    /// (after cursor / below line) and `false` for `P`.
+    func paste(after: Bool)
+    /// Materialize and apply an operator over the indicated target.
+    /// The delegate is responsible for: resolving the affected text
+    /// range from `target` (using the current cursor position),
+    /// writing the affected text to the system pasteboard, applying
+    /// the edit (if `op` is `.delete` or `.change`), and positioning
+    /// the cursor at the start of the operated range. The controller
+    /// flips into insert mode after this returns when `op == .change`,
+    /// so the delegate doesn't need to itself.
+    func applyOperator(
+        _ op: VimOperator,
+        target: OperatorTarget,
+        count: Int
+    )
     func toggleTaskAtCursor()
     func setMark(_ name: Character)
     func jumpToMark(_ name: Character)
+}
+
+extension VimControllerDelegate {
+    /// Default no-op so existing test spies / partial conformers
+    /// don't have to implement this immediately. Production
+    /// conformers (the document) MUST override.
+    public func applyOperator(
+        _ op: VimOperator,
+        target: OperatorTarget,
+        count: Int
+    ) {}
 }
