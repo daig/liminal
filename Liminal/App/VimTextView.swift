@@ -13,6 +13,18 @@ import AppKit
 final class VimTextView: NSTextView {
     weak var vimController: VimController?
 
+    /// The document's CST-aware undo manager. The system menu's
+    /// `undo:` / `redo:` actions walk the responder chain looking for
+    /// an `undoManager`; by exposing the document's manager here we
+    /// route ⌘Z / ⌘⇧Z into our snapshot history. `allowsUndo` stays
+    /// false on the text view so NSTextView doesn't try to register
+    /// its own byte-level undos against the same manager.
+    weak var liminalUndoManager: UndoManager?
+
+    override var undoManager: UndoManager? {
+        liminalUndoManager ?? super.undoManager
+    }
+
     /// Receives Cmd-click activations. The Coordinator implements this;
     /// when it returns `true`, the view considers the click handled and
     /// does NOT fall through to NSTextView's normal cursor-placement /

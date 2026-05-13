@@ -995,6 +995,23 @@ public final class LiminalParseSession {
         lastTree
     }
 
+    /// Install `tree` as the session's current tree without re-parsing.
+    /// Used by undo to restore a prior `SharedSyntaxTree` snapshot
+    /// verbatim — the same green-tree pointer is reinstated, so any
+    /// `CSTAnchor` resolved against the original parse still matches
+    /// pointer-equal node handles.
+    ///
+    /// Subsequent `parse(_:edits:)` calls treat the next edit batch as
+    /// "fresh" (no reuse from prior tree's edit deltas), since the
+    /// installed tree's relationship to any pending edits is undefined.
+    public func installTree(_ tree: SharedSyntaxTree<LiminalLanguage>) {
+        lastTree = tree
+        pendingEditsInvalidated = true
+        // Clear any accumulated reuse records — they refer to the
+        // pre-install tree's identity and are stale now.
+        _ = incrementalSession.consumeAcceptedReuses()
+    }
+
     private static func resolveNewPath(
         in tree: SharedSyntaxTree<LiminalLanguage>,
         offset: TextSize,

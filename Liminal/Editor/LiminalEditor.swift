@@ -131,6 +131,27 @@ public final class LiminalEditorSession {
         return finalizeReplace(output)
     }
 
+    /// Install a snapshot tree wholesale, bypassing the parser. Used
+    /// by undo / redo: the caller already has the target tree (a
+    /// `SharedSyntaxTree` captured at a prior transaction boundary),
+    /// so a reparse is wasteful and would also break anchor identity
+    /// (we'd produce a structurally-equivalent but pointer-distinct
+    /// tree).
+    ///
+    /// Side effects mirror `replaceSubtree`'s `finalizeReplace`:
+    /// `self.source` is replaced with `source` (the snapshot's cached
+    /// source string, equivalent to what the tree itself would
+    /// regenerate), and `self.parseResult` is cleared since its
+    /// diagnostics describe a different tree.
+    public func installSnapshot(
+        tree: SharedSyntaxTree<LiminalLanguage>,
+        source: String
+    ) {
+        parseSession.installTree(tree)
+        self.source = source
+        self.parseResult = nil
+    }
+
     private func finalizeReplace(_ output: StructuralReplaceOutput) -> LiminalEditResult {
         let newSource = output.tree.withRoot { $0.makeString() }
         self.source = newSource

@@ -53,6 +53,12 @@ public enum VimCommand: Sendable, Equatable {
     /// The delegate is responsible for materializing the range and
     /// applying the edit.
     case applyOperator(VimOperator, target: OperatorTarget, count: Int)
+
+    /// Vim's `u` — walk back `count` snapshots in the CST-aware
+    /// undo history.
+    case undo(count: Int)
+    /// Vim's `<C-r>` — walk forward `count` snapshots.
+    case redo(count: Int)
 }
 
 /// Vim's three text-mutating operators. Indent / case / format

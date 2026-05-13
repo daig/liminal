@@ -309,6 +309,12 @@ public final class VimController: ObservableObject {
             setMode(.insert)
             delegate?.prepareForInsert(at: position)
         case .enterNormalMode:
+            // If we were in insert, commit the active insert session
+            // BEFORE flipping mode (so the delegate sees mode == .insert
+            // and uses the right cursor / pre-edit context).
+            if mode == .insert {
+                delegate?.commitInsertSession()
+            }
             setMode(.normal)
         case .enterVisualMode(let kind):
             // Flip mode FIRST so the Coordinator's visual-mode
@@ -362,6 +368,10 @@ public final class VimController: ObservableObject {
         case .applyOperator(let op, let target, let count):
             // Direct operator dispatch (single-key shortcuts: x/X/D/C/Y).
             dispatchResolvedOperator(op, target: target, count: count)
+        case .undo(let count):
+            delegate?.undo(count: count)
+        case .redo(let count):
+            delegate?.redo(count: count)
         }
     }
 
@@ -695,6 +705,16 @@ public final class VimController: ObservableObject {
             .toggleTaskAtCursor
         }
 
+        // CST-aware undo / redo. Routed to the delegate, which calls
+        // into the document's undo manager. Counts loop the call.
+        t.bind(.normal, [.char("u")], description: "Undo") {
+            .undo(count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("r", modifiers: [.control])],
+               description: "Redo") {
+            .redo(count: $0 ?? 1)
+        }
+
         return t
     }
 
@@ -715,6 +735,22 @@ public final class VimController: ObservableObject {
         newRoot: RootSyntax
     ) {
         marks.reanchor(oldRoot: oldRoot, edits: edits, newRoot: newRoot)
+    }
+
+    /// Replace the entire mark store with a snapshot. Used by undo /
+    /// redo: the snapshot's marks point into the snapshot's tree (which
+    /// is being reinstalled at the same time), so they're valid by
+    /// construction — no re-anchoring needed.
+    public func restoreMarks(_ marks: MarkRegistry) {
+        self.marks = marks
+    }
+
+    /// Force normal mode without dispatching `.enterNormalMode`
+    /// (which would invoke the insert-session commit hook). Used by
+    /// the undo/redo install path to land in a predictable mode after
+    /// an arbitrary snapshot is restored.
+    public func forceNormalMode() {
+        setMode(.normal)
     }
 }
 
@@ -813,6 +849,15 @@ public protocol VimControllerDelegate: AnyObject {
         target: OperatorTarget,
         count: Int
     )
+    /// Walk back `count` snapshots in the document's CST-aware undo
+    /// history and install the resulting state.
+    func undo(count: Int)
+    /// Walk forward `count` snapshots and install the resulting state.
+    func redo(count: Int)
+    /// Esc out of insert mode: commit the active insert session as a
+    /// single transaction in the undo history. Called BEFORE the
+    /// controller flips mode back to `.normal`.
+    func commitInsertSession()
     func toggleTaskAtCursor()
     func setMark(_ name: Character)
     func jumpToMark(_ name: Character)
@@ -827,4 +872,7 @@ extension VimControllerDelegate {
         target: OperatorTarget,
         count: Int
     ) {}
+    public func undo(count: Int) {}
+    public func redo(count: Int) {}
+    public func commitInsertSession() {}
 }

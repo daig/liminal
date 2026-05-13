@@ -580,6 +580,9 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var deleteSelectionCallCount = 0
     var pasteCalls: [Bool] = []
     var applyOperatorCalls: [ApplyOperatorCall] = []
+    var undoCalls: [Int] = []
+    var redoCalls: [Int] = []
+    var commitInsertSessionCallCount = 0
     var toggleTaskCallCount = 0
     var setMarkCalls: [Character] = []
     var jumpToMarkCalls: [Character] = []
@@ -621,6 +624,9 @@ private final class VimDelegateSpy: VimControllerDelegate {
     ) {
         applyOperatorCalls.append(.init(op: op, target: target, count: count))
     }
+    func undo(count: Int) { undoCalls.append(count) }
+    func redo(count: Int) { redoCalls.append(count) }
+    func commitInsertSession() { commitInsertSessionCallCount += 1 }
     func toggleTaskAtCursor() {
         toggleTaskCallCount += 1
     }

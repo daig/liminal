@@ -21,7 +21,12 @@ struct LiminalTextView: NSViewRepresentable {
         textView.isAutomaticDataDetectionEnabled = false
         textView.smartInsertDeleteEnabled = false
         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.allowsUndo = true
+        // CST-aware undo lives on the document and is wired into the
+        // responder chain via `liminalUndoManager` below. NSTextView's
+        // own undo would only see byte-level edits and would compete
+        // for the same ⌘Z action — so we disable it here.
+        textView.allowsUndo = false
+        textView.liminalUndoManager = document.undoManager
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.textContainerInset = NSSize(width: 12, height: 12)
@@ -37,6 +42,13 @@ struct LiminalTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.hoverPreviewController.attach(to: textView)
         document.vimController.delegate = context.coordinator
+        // Hook the document's snapshot install path back to the
+        // Coordinator so undo/redo can drive the text view.
+        document.snapshotInstaller = context.coordinator
+        // Seed the initial undo snapshot now that we're on the
+        // MainActor — the document's off-main inits couldn't do this
+        // because seeding touches MainActor-bound state. Idempotent.
+        document.seedInitialUndoSnapshotIfNeeded()
         // Mirror initial mode into the layout manager's cursor style and
         // start watching for changes.
         context.coordinator.installModeObservers(on: document.vimController)
@@ -111,7 +123,7 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, VimTextViewLinkHoverDelegate, NavigationSubscriber {
+    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, VimTextViewLinkHoverDelegate, NavigationSubscriber, CSTSnapshotInstaller {
         let document: LiminalSourceDocument
         weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
@@ -914,6 +926,11 @@ struct LiminalTextView: NSViewRepresentable {
         func prepareForInsert(at position: InsertPosition) {
             guard let textView else { return }
             let cursor = textView.selectedRange().location
+            // Open the insert-session bracket BEFORE applying the
+            // pre-edit so the session covers the o/O/A insertion
+            // transformation as well as any subsequent typing — one
+            // unified undo step on Esc.
+            document.beginInsertSession(at: cursor)
             let plan = CursorMotionEngine.planInsertEntry(
                 for: position,
                 in: textView.string,
@@ -989,12 +1006,82 @@ struct LiminalTextView: NSViewRepresentable {
             // dispatch; cursor placement here so it lands at the
             // start of the previous selection.
             setCursorAt(utf16Location: snap.cursorAfter)
+            // Source unchanged — captureSnapshot will no-op via the
+            // history's source-equality check, so no NSUndoManager
+            // entry is created. Still call it so the cursor/marks
+            // drift is recorded if someday we make those undoable too.
+            captureUndoSnapshot()
         }
 
         func deleteSelection() {
             guard let snap = snapshotVisualSelection() else { return }
             deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
             setCursorAt(utf16Location: snap.cursorAfter)
+            captureUndoSnapshot()
+        }
+
+        /// Capture a CST-aware snapshot of the current document state
+        /// at the current cursor. Routes through the document, which
+        /// no-ops the snapshot if the source is unchanged and only
+        /// registers an NSUndoManager entry when the snapshot actually
+        /// records new state.
+        @MainActor
+        private func captureUndoSnapshot() {
+            let cursor = textView?.selectedRange().location ?? 0
+            document.captureSnapshot(at: cursor)
+        }
+
+        /// Vim `u` — fire `count` undos through the document's undo
+        /// manager. NSUndoManager's `undo()` runs the closure we
+        /// registered, which walks `CSTUndoHistory` one step back and
+        /// drives the view via `applyInstalledSnapshot`.
+        func undo(count: Int) {
+            for _ in 0..<max(1, count) {
+                guard document.undoManager.canUndo else { break }
+                document.undoManager.undo()
+            }
+        }
+
+        func redo(count: Int) {
+            for _ in 0..<max(1, count) {
+                guard document.undoManager.canRedo else { break }
+                document.undoManager.redo()
+            }
+        }
+
+        /// Esc out of insert mode: close the open insert session in
+        /// the undo history. The document records one transaction (or
+        /// drops the session as a no-op if no text changed).
+        func commitInsertSession() {
+            let cursor = textView?.selectedRange().location ?? 0
+            document.commitInsertSession(at: cursor)
+        }
+
+        public func currentCursorForUndo() -> Int {
+            textView?.selectedRange().location ?? 0
+        }
+
+        /// Drive the text view from an installed snapshot: replace the
+        /// entire content with the snapshot's source (suppressing the
+        /// reparse pipeline via `isApplyingProgrammaticEdit`), restore
+        /// the cursor, force the controller into normal mode, and
+        /// refresh derived view state. Called from the document's undo
+        /// closure (`installSnapshotAndUpdateView`).
+        @MainActor
+        public func applyInstalledSnapshot(_ snap: CSTUndoSnapshot) {
+            guard let textView else { return }
+            let prior = isApplyingProgrammaticEdit
+            isApplyingProgrammaticEdit = true
+            textView.string = snap.source
+            isApplyingProgrammaticEdit = prior
+            // Force normal mode so the cursor lands cleanly even if
+            // undo/redo fires while we were in insert or visual.
+            document.vimController.forceNormalMode()
+            let safeCursor = max(0, min(snap.cursor,
+                                        (snap.source as NSString).length))
+            textView.setSelectedRange(NSRange(location: safeCursor, length: 0))
+            refreshCursorStyle()
+            applyHighlights()
         }
 
         /// Write `text` to the system pasteboard with `kind`. No-op for
@@ -1070,6 +1157,16 @@ struct LiminalTextView: NSViewRepresentable {
                     NSRange(location: safeRange.location, length: 0)
                 )
             }
+            // For .change the controller's setMode(.insert) →
+            // prepareForInsert flow opens an insert session right after
+            // this returns; the change-portion's edit becomes the
+            // session's pre-edit and gets folded into one undo step on
+            // commit. So we deliberately do NOT capture here for .change.
+            // For .yank and .delete we capture (yank no-ops out via the
+            // source-equality check).
+            if op != .change {
+                captureUndoSnapshot()
+            }
         }
 
         /// After a charwise delete, cursor lands at the deletion start
@@ -1117,6 +1214,7 @@ struct LiminalTextView: NSViewRepresentable {
                 textView.didChangeText()
             }
             setCursorAt(utf16Location: plan.cursorAfter)
+            captureUndoSnapshot()
         }
 
         /// Pull the cached `DocumentIndex` from the vault entry, or
