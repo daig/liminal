@@ -48,10 +48,13 @@ struct VimBindingTreeTests {
     @Test("mode segregation: same keys, different commands per mode")
     func perModeBindings() {
         var t = VimBindingTree()
-        t.bind(.normal, [.char("i")], description: "Insert") { _ in .enterInsertMode }
+        t.bind(.normal, [.char("i")], description: "Insert") { _ in
+            .enterInsertMode(at: .atCursor)
+        }
         t.bind(.insert, [.special(.escape)], description: "Normal") { _ in .enterNormalMode }
 
-        #expect(t.resolve([.char("i")], mode: .normal, count: nil) == .command(.enterInsertMode))
+        #expect(t.resolve([.char("i")], mode: .normal, count: nil)
+                == .command(.enterInsertMode(at: .atCursor)))
         #expect(t.resolve([.char("i")], mode: .insert, count: nil) == .none)
         #expect(t.resolve([.special(.escape)], mode: .insert, count: nil)
                 == .command(.enterNormalMode))
@@ -105,7 +108,7 @@ struct VimBindingTreeTests {
     func defaultBindingsSmoke() {
         let t = VimController.defaultBindings()
         #expect(t.resolve([.char("i")], mode: .normal, count: nil)
-                == .command(.enterInsertMode))
+                == .command(.enterInsertMode(at: .atCursor)))
         #expect(t.resolve([.special(.escape)], mode: .insert, count: nil)
                 == .command(.enterNormalMode))
         #expect(t.resolve([.char("{")], mode: .normal, count: nil)

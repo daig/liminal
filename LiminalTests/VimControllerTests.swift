@@ -244,6 +244,30 @@ struct VimControllerTests {
         #expect(spy.goToDefinitionCallCount == 1)
     }
 
+    @Test(
+        "insert-mode entry bindings dispatch the right InsertPosition + flip mode",
+        arguments: [
+            ("i", InsertPosition.atCursor),
+            ("a", .afterCursor),
+            ("I", .atLineFirstNonBlank),
+            ("A", .atLineEnd),
+            ("o", .openLineBelow),
+            ("O", .openLineAbove),
+            ("s", .substituteChar),
+            ("S", .substituteLine)
+        ] as [(Character, InsertPosition)]
+    )
+    func insertEntryBindings(_ input: (Character, InsertPosition)) {
+        let (key, expected) = input
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char(key))
+        #expect(c.mode == .insert)
+        #expect(spy.prepareForInsertCalls == [expected])
+    }
+
     // MARK: - Status / hint presentation
 
     @Test("initial state: status mode is normal, detail is nil, no snapshot")
@@ -544,6 +568,7 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var viewportMotionCalls: [ViewportCall] = []
     var displayLineMotionCalls: [DisplayLineCall] = []
     var goToDefinitionCallCount = 0
+    var prepareForInsertCalls: [InsertPosition] = []
     var toggleTaskCallCount = 0
     var setMarkCalls: [Character] = []
     var jumpToMarkCalls: [Character] = []
@@ -562,6 +587,9 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func goToDefinitionAtCursor() {
         goToDefinitionCallCount += 1
+    }
+    func prepareForInsert(at position: InsertPosition) {
+        prepareForInsertCalls.append(position)
     }
     func toggleTaskAtCursor() {
         toggleTaskCallCount += 1

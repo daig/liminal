@@ -230,8 +230,14 @@ public final class VimController: ObservableObject {
 
     private func dispatch(_ command: VimCommand) {
         switch command {
-        case .enterInsertMode:
+        case .enterInsertMode(let position):
+            // Flip mode FIRST so any text inserts the delegate
+            // performs land in insert-mode context (cursor styling,
+            // `insertText` override checks, etc.). The delegate's
+            // `prepareForInsert` then applies any pre-edit (for
+            // `o` / `O` / `s` / `S`) and positions the cursor.
             setMode(.insert)
+            delegate?.prepareForInsert(at: position)
         case .enterNormalMode:
             setMode(.normal)
         case .moveCursor(let motion, let count):
@@ -262,7 +268,28 @@ public final class VimController: ObservableObject {
 
         // Mode transitions
         t.bind(.normal, [.char("i")], description: "Insert at cursor") { _ in
-            .enterInsertMode
+            .enterInsertMode(at: .atCursor)
+        }
+        t.bind(.normal, [.char("a")], description: "Append after cursor") { _ in
+            .enterInsertMode(at: .afterCursor)
+        }
+        t.bind(.normal, [.char("I")], description: "Insert at first non-blank") { _ in
+            .enterInsertMode(at: .atLineFirstNonBlank)
+        }
+        t.bind(.normal, [.char("A")], description: "Append at end of line") { _ in
+            .enterInsertMode(at: .atLineEnd)
+        }
+        t.bind(.normal, [.char("o")], description: "Open line below") { _ in
+            .enterInsertMode(at: .openLineBelow)
+        }
+        t.bind(.normal, [.char("O")], description: "Open line above") { _ in
+            .enterInsertMode(at: .openLineAbove)
+        }
+        t.bind(.normal, [.char("s")], description: "Substitute char") { _ in
+            .enterInsertMode(at: .substituteChar)
+        }
+        t.bind(.normal, [.char("S")], description: "Substitute line") { _ in
+            .enterInsertMode(at: .substituteLine)
         }
         t.bind(.insert, [.special(.escape)], description: "Back to Normal") { _ in
             .enterNormalMode
@@ -491,6 +518,11 @@ public protocol VimControllerDelegate: AnyObject {
     func viewportMotion(_ motion: ViewportMotion, count: Int)
     func displayLineMotion(_ motion: DisplayLineMotion, count: Int)
     func goToDefinitionAtCursor()
+    /// Apply the position-specific work (cursor move, optional
+    /// pre-edit) for the variant of `enterInsertMode` that just
+    /// fired. The controller has already flipped to insert mode by
+    /// the time this is called.
+    func prepareForInsert(at position: InsertPosition)
     func toggleTaskAtCursor()
     func setMark(_ name: Character)
     func jumpToMark(_ name: Character)

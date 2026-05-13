@@ -415,6 +415,147 @@ struct CursorMotionEngineTests {
         )
     }
 
+    // MARK: - Insert entry plans
+
+    @Test("i (atCursor): no edit, cursor unchanged")
+    func insertEntryAtCursor() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .atCursor, in: "abc", cursor: 1
+        )
+        #expect(plan.edit == nil)
+        #expect(plan.cursorAfter == 1)
+    }
+
+    @Test("a (afterCursor): cursor advances by one within the line")
+    func insertEntryAfterCursorMid() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .afterCursor, in: "abc", cursor: 1
+        )
+        #expect(plan.edit == nil)
+        #expect(plan.cursorAfter == 2)
+    }
+
+    @Test("a (afterCursor): clamps to line content end on the last char")
+    func insertEntryAfterCursorClamp() {
+        // "abc\ndef" — cursor on 'c' (position 2). +1 = 3 = contentEnd of first line.
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .afterCursor, in: "abc\ndef", cursor: 2
+        )
+        #expect(plan.cursorAfter == 3)
+    }
+
+    @Test("a (afterCursor): never crosses a newline")
+    func insertEntryAfterCursorNoCrossNewline() {
+        // "abc\ndef" — cursor at end of 'c' (position 3, on the \n). +1 would
+        // cross to next line; clamp to contentEnd = 3.
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .afterCursor, in: "abc\ndef", cursor: 3
+        )
+        #expect(plan.cursorAfter == 3)
+    }
+
+    @Test("I (atLineFirstNonBlank): skips leading whitespace on the line")
+    func insertEntryFirstNonBlank() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .atLineFirstNonBlank, in: "  abc", cursor: 4
+        )
+        #expect(plan.edit == nil)
+        #expect(plan.cursorAfter == 2)
+    }
+
+    @Test("A (atLineEnd): cursor lands at content end (before newline)")
+    func insertEntryAtLineEnd() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .atLineEnd, in: "abc\ndef", cursor: 1
+        )
+        #expect(plan.edit == nil)
+        #expect(plan.cursorAfter == 3)
+    }
+
+    @Test("o (openLineBelow): inserts \\n at content end; cursor on the new empty line")
+    func insertEntryOpenLineBelowMidDoc() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .openLineBelow, in: "abc\ndef", cursor: 1
+        )
+        #expect(plan.edit?.range == NSRange(location: 3, length: 0))
+        #expect(plan.edit?.replacement == "\n")
+        // After insertion: "abc\n\ndef"; cursor at 4 = on the new empty line.
+        #expect(plan.cursorAfter == 4)
+    }
+
+    @Test("o (openLineBelow): EOF case appends \\n; cursor on the new trailing empty line")
+    func insertEntryOpenLineBelowEOF() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .openLineBelow, in: "abc", cursor: 1
+        )
+        #expect(plan.edit?.range == NSRange(location: 3, length: 0))
+        #expect(plan.edit?.replacement == "\n")
+        // After insertion: "abc\n"; cursor at 4 = past EOF on the new line.
+        #expect(plan.cursorAfter == 4)
+    }
+
+    @Test("O (openLineAbove): inserts \\n at line start; cursor on the new empty line")
+    func insertEntryOpenLineAboveMidDoc() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .openLineAbove, in: "abc\ndef", cursor: 5
+        )
+        #expect(plan.edit?.range == NSRange(location: 4, length: 0))
+        #expect(plan.edit?.replacement == "\n")
+        // After insertion: "abc\n\ndef"; cursor at 4 = on the new empty line.
+        #expect(plan.cursorAfter == 4)
+    }
+
+    @Test("O (openLineAbove): top of document inserts \\n at 0")
+    func insertEntryOpenLineAboveTop() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .openLineAbove, in: "abc", cursor: 1
+        )
+        #expect(plan.edit?.range == NSRange(location: 0, length: 0))
+        #expect(plan.edit?.replacement == "\n")
+        #expect(plan.cursorAfter == 0)
+    }
+
+    @Test("s (substituteChar): deletes one char under cursor; cursor stays")
+    func insertEntrySubstituteChar() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .substituteChar, in: "abc", cursor: 1
+        )
+        #expect(plan.edit?.range == NSRange(location: 1, length: 1))
+        #expect(plan.edit?.replacement == "")
+        #expect(plan.cursorAfter == 1)
+    }
+
+    @Test("s on a newline / past content end is a no-op (just enters insert mode)")
+    func insertEntrySubstituteCharBoundary() {
+        // "abc\ndef" — cursor on the \n at position 3. content end is 3,
+        // so the cursor IS at content end → no deletion.
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .substituteChar, in: "abc\ndef", cursor: 3
+        )
+        #expect(plan.edit == nil)
+        #expect(plan.cursorAfter == 3)
+    }
+
+    @Test("S (substituteLine): deletes the entire line content; cursor at line start")
+    func insertEntrySubstituteLine() {
+        // "abc\ndef" cursor on 'e' (position 5). Line: start=4, contentEnd=7.
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .substituteLine, in: "abc\ndef", cursor: 5
+        )
+        #expect(plan.edit?.range == NSRange(location: 4, length: 3))
+        #expect(plan.edit?.replacement == "")
+        #expect(plan.cursorAfter == 4)
+    }
+
+    @Test("S on the only line of a single-line document leaves the line empty")
+    func insertEntrySubstituteLineOnlyLine() {
+        let plan = CursorMotionEngine.planInsertEntry(
+            for: .substituteLine, in: "abc", cursor: 1
+        )
+        #expect(plan.edit?.range == NSRange(location: 0, length: 3))
+        #expect(plan.cursorAfter == 0)
+    }
+
     @Test("display-line range mid-document: g0/g^/g$ all stay on that row")
     func displayLineMidDocument() {
         // Document with three rows; row 2 is offset 4..9 (chars "  xyz")

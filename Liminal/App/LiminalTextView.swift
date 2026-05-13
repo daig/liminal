@@ -884,6 +884,30 @@ struct LiminalTextView: NSViewRepresentable {
             )
         }
 
+        /// Apply the engine's plan for entering insert mode at
+        /// `position`. The pre-edit (if any) goes through
+        /// `replaceCharacters`, which fires the textStorage delegate
+        /// → `applyTextEdits` so the parser stays in sync. Cursor
+        /// then moves to the planned UTF-16 position.
+        func prepareForInsert(at position: InsertPosition) {
+            guard let textView else { return }
+            let cursor = textView.selectedRange().location
+            let plan = CursorMotionEngine.planInsertEntry(
+                for: position,
+                in: textView.string,
+                cursor: cursor
+            )
+            if let edit = plan.edit,
+               textView.shouldChangeText(
+                   in: edit.range,
+                   replacementString: edit.replacement
+               )
+            {
+                textView.replaceCharacters(in: edit.range, with: edit.replacement)
+                textView.didChangeText()
+            }
+            setCursorAt(utf16Location: plan.cursorAfter)
+        }
 
         /// Pull the cached `DocumentIndex` from the vault entry, or
         /// build it on demand from the current root if the cache hasn't

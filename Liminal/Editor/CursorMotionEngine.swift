@@ -8,6 +8,22 @@ import Foundation
 /// engine bridges to NSString for line-boundary work where that's the
 /// natural primitive, and walks the UTF-16 view directly for character
 /// categorization in word motions.
+/// Computed action for entering insert mode at a particular
+/// position. The Coordinator applies the optional pre-edit (via
+/// `replaceCharacters`, which fires the textStorage delegate so
+/// the parser stays in sync) and then sets the cursor.
+public struct InsertEntryPlan: Equatable, Sendable {
+    public let edit: Edit?
+    /// Cursor's UTF-16 position after `edit` (if any) is applied.
+    public let cursorAfter: Int
+
+    public struct Edit: Equatable, Sendable {
+        /// Pre-edit UTF-16 range to replace.
+        public let range: NSRange
+        public let replacement: String
+    }
+}
+
 enum CursorMotionEngine {
 
     static func newOffset(
@@ -239,6 +255,105 @@ enum CursorMotionEngine {
             if current >= lastLineStart { break }
         }
         return lineStarts[lineStarts.count / 2]
+    }
+
+    // MARK: - Insert-mode entry plans
+
+    /// Compute what the editor needs to do to enter insert mode at
+    /// the requested position: an optional pre-edit (for `o`, `O`,
+    /// `s`, `S`) and the cursor's UTF-16 position after the edit.
+    /// Pure logic; the Coordinator applies the plan against the
+    /// live `NSTextView`.
+    static func planInsertEntry(
+        for position: InsertPosition,
+        in text: String,
+        cursor: Int
+    ) -> InsertEntryPlan {
+        let nsString = text as NSString
+        let textLength = nsString.length
+        let safeCursor = max(0, min(cursor, textLength))
+        let info = lineInfo(at: safeCursor, in: nsString)
+
+        switch position {
+        case .atCursor:
+            return InsertEntryPlan(edit: nil, cursorAfter: safeCursor)
+
+        case .afterCursor:
+            // Vim `a` lands one cell past the cursor, but never
+            // past end-of-line content (the trailing `\n` is not
+            // an editable column).
+            return InsertEntryPlan(
+                edit: nil,
+                cursorAfter: min(safeCursor + 1, info.contentEnd)
+            )
+
+        case .atLineFirstNonBlank:
+            return InsertEntryPlan(
+                edit: nil,
+                cursorAfter: lineFirstNonBlank(at: safeCursor, in: nsString)
+            )
+
+        case .atLineEnd:
+            return InsertEntryPlan(edit: nil, cursorAfter: info.contentEnd)
+
+        case .openLineBelow:
+            // Insert "\n" right after the current line's content.
+            // Whether the original line had a terminator or not,
+            // cursor lands `contentEnd + 1` so it sits on the
+            // brand-new empty line — the inserted `\n` ends that
+            // empty line in mid-doc, or trails it at EOF.
+            return InsertEntryPlan(
+                edit: InsertEntryPlan.Edit(
+                    range: NSRange(location: info.contentEnd, length: 0),
+                    replacement: "\n"
+                ),
+                cursorAfter: info.contentEnd + 1
+            )
+
+        case .openLineAbove:
+            // Insert "\n" at the start of the current line; cursor
+            // stays at that position, which is now the start of a
+            // brand-new empty line above the original.
+            return InsertEntryPlan(
+                edit: InsertEntryPlan.Edit(
+                    range: NSRange(location: info.start, length: 0),
+                    replacement: "\n"
+                ),
+                cursorAfter: info.start
+            )
+
+        case .substituteChar:
+            // `s` deletes the char under cursor and enters insert
+            // mode in its place. Bounded by the line's content end
+            // — vim's `s` doesn't eat the trailing `\n`. On an
+            // empty line / past content end, this degenerates to
+            // a plain `i`.
+            guard safeCursor < info.contentEnd else {
+                return InsertEntryPlan(edit: nil, cursorAfter: safeCursor)
+            }
+            return InsertEntryPlan(
+                edit: InsertEntryPlan.Edit(
+                    range: NSRange(location: safeCursor, length: 1),
+                    replacement: ""
+                ),
+                cursorAfter: safeCursor
+            )
+
+        case .substituteLine:
+            // `S` deletes the entire line content (preserving the
+            // line's existence — the `\n` terminator stays) and
+            // enters insert mode at the line start.
+            return InsertEntryPlan(
+                edit: InsertEntryPlan.Edit(
+                    range: NSRange(
+                        location: info.start,
+                        length: info.contentEnd - info.start
+                    ),
+                    replacement: ""
+                ),
+                cursorAfter: info.start
+            )
+        }
     }
 
     // MARK: - Line helpers

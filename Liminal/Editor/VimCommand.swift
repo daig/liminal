@@ -3,7 +3,7 @@
 /// invokes the relevant delegate or internal helper. Adding new commands
 /// is just adding a case here and a binding entry.
 public enum VimCommand: Sendable, Equatable {
-    case enterInsertMode
+    case enterInsertMode(at: InsertPosition)
     case enterNormalMode
     case moveCursor(CursorMotion, count: Int)
     case structuralMotion(StructuralMotion, count: Int)
@@ -29,6 +29,20 @@ public enum VimCommand: Sendable, Equatable {
 public enum MarkOp: Sendable, Equatable, Hashable {
     case set
     case jump
+}
+
+/// Where to position the cursor (and which preliminary edit, if
+/// any, to apply) when entering insert mode. Vim's `i` / `I` /
+/// `a` / `A` / `o` / `O` / `s` / `S` map onto these.
+public enum InsertPosition: Sendable, Equatable, Hashable {
+    case atCursor              // i
+    case afterCursor           // a
+    case atLineFirstNonBlank   // I
+    case atLineEnd             // A
+    case openLineBelow         // o
+    case openLineAbove         // O
+    case substituteChar        // s
+    case substituteLine        // S
 }
 
 /// Cursor motions that don't change the document. Every case is
