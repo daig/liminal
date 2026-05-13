@@ -17,11 +17,18 @@ import SwiftUI
 /// shows on a second row; node/edge counts live in a footer strip.
 struct VaultGraphView: View {
     @ObservedObject var entry: VaultEntry
+
+    /// The active note for this tab, sourced from `WorkspaceTab.fileURL`
+    /// via the prop chain `WorkspaceSidebar → VaultSidebarView →
+    /// VaultGraphView`. The graph's blue "selected" highlight and
+    /// Neighbors-mode pivot read from this directly — they do NOT
+    /// shadow it with local @State, because that's the bug we just
+    /// fixed. Writes go through `NavigationRouter`, which loops back
+    /// here by updating the tab's `fileURL`.
     let currentDocURL: URL?
 
     @StateObject private var simulator = GraphSimulator()
     @State private var modeKind: ModeKind = .full
-    @State private var centerNoteURL: URL?
 
     // Drag state. `draggedNode` is set while the cursor is on a node;
     // its position is pinned in the simulation and updated to follow
@@ -37,12 +44,12 @@ struct VaultGraphView: View {
         var id: String { rawValue }
     }
 
-    /// Active center: the user's most-recent click/selection if any,
-    /// otherwise the document the editor is currently focused on,
-    /// otherwise the alphabetically-first note. The fallback chain
-    /// keeps Neighbors mode always-meaningful even on first open.
+    /// Active center: whatever note the editor is focused on for this
+    /// tab. Falls back to the alphabetically-first note only on cold
+    /// start, when no document is loaded yet — keeps Neighbors mode
+    /// always-meaningful. No local override; see the doc on
+    /// `currentDocURL` for why.
     private var resolvedCenterURL: URL? {
-        if let centerNoteURL { return centerNoteURL }
         if let currentDocURL {
             return VaultRegistry.canonicalNoteURL(for: currentDocURL)
         }
@@ -107,7 +114,18 @@ struct VaultGraphView: View {
                 .foregroundStyle(.secondary)
             Picker("Center", selection: Binding(
                 get: { resolvedCenterURL },
-                set: { centerNoteURL = $0 }
+                // Picking a center is conceptually identical to clicking
+                // a node — both should set the active note for the tab.
+                // Route through NavigationRouter so the editor follows
+                // and the graph re-reads its center from the prop.
+                set: { newURL in
+                    guard let newURL else { return }
+                    NavigationRouter.shared.navigate(
+                        to: newURL,
+                        anchor: nil,
+                        disposition: .replaceInCurrentTab
+                    )
+                }
             )) {
                 ForEach(sorted) { note in
                     Text(note.relativePathWithoutExtension)
@@ -211,11 +229,11 @@ struct VaultGraphView: View {
             }
     }
 
-    /// Tap: highlight + navigate. Updates `centerNoteURL` so the
-    /// selection is visible in both modes; in neighbors mode this
-    /// also pivots the displayed subgraph.
+    /// Tap: navigate. The blue highlight + neighbor pivot follow
+    /// automatically because `resolvedCenterURL` reads from
+    /// `currentDocURL`, which the navigation will update via the
+    /// tab's `fileURL`. No local-state bookkeeping needed.
     private func handleTap(on url: URL) {
-        centerNoteURL = url
         NavigationRouter.shared.navigate(
             to: url,
             anchor: nil,
