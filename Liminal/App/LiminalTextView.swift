@@ -381,25 +381,262 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         func structuralMotion(_ motion: StructuralMotion, count: Int) {
-            guard let textView,
-                  let parsed = document.session.parseResult
-            else { return }
+            guard let textView else { return }
             let steps = max(1, count)
+            let startOffset = currentCursorByteOffset() ?? 0
 
-            var byteOffset = currentCursorByteOffset() ?? 0
-            for _ in 0..<steps {
-                let next: Int?
-                switch motion {
-                case .previousSibling:
-                    next = StructureCursor.previousSibling(of: byteOffset, in: parsed.rootSyntax)
-                case .nextSibling:
-                    next = StructureCursor.nextSibling(of: byteOffset, in: parsed.rootSyntax)
+            switch motion {
+            case .previousSibling, .nextSibling:
+                guard let parsed = document.session.parseResult else { return }
+                var byteOffset = startOffset
+                for _ in 0..<steps {
+                    let next: Int?
+                    switch motion {
+                    case .previousSibling:
+                        next = StructureCursor.previousSibling(of: byteOffset, in: parsed.rootSyntax)
+                    case .nextSibling:
+                        next = StructureCursor.nextSibling(of: byteOffset, in: parsed.rootSyntax)
+                    default: next = nil
+                    }
+                    guard let next else { break }
+                    byteOffset = next
                 }
-                guard let next else { break }
-                byteOffset = next
+                setCursor(byteOffset: byteOffset)
+
+            case .enclosingHeading:
+                guard let docIndex = currentDocumentIndex(),
+                      let heading = docIndex.heading(
+                          enclosing: TextSize(UInt32(startOffset))
+                      )
+                else { return }
+                let target = headingFirstNonBlank(at: heading, in: textView.string)
+                setCursor(byteOffset: target)
+
+            case .previousHeading, .nextHeading:
+                guard let docIndex = currentDocumentIndex() else { return }
+                var byteOffset = startOffset
+                for _ in 0..<steps {
+                    let nextHeading: HeadingAnchor?
+                    if motion == .previousHeading {
+                        nextHeading = docIndex.heading(
+                            before: TextSize(UInt32(byteOffset))
+                        )
+                    } else {
+                        nextHeading = docIndex.heading(
+                            after: TextSize(UInt32(byteOffset))
+                        )
+                    }
+                    guard let nextHeading else { break }
+                    byteOffset = headingFirstNonBlank(
+                        at: nextHeading,
+                        in: textView.string
+                    )
+                }
+                setCursor(byteOffset: byteOffset)
+
+            case .previousReference, .nextReference:
+                guard let docIndex = currentDocumentIndex() else { return }
+                var byteOffset = startOffset
+                for _ in 0..<steps {
+                    let nextRef: DocumentReference?
+                    if motion == .previousReference {
+                        nextRef = docIndex.reference(
+                            before: TextSize(UInt32(byteOffset))
+                        )
+                    } else {
+                        nextRef = docIndex.reference(
+                            after: TextSize(UInt32(byteOffset))
+                        )
+                    }
+                    guard let nextRef else { break }
+                    byteOffset = Int(nextRef.sourceRange.start.rawValue)
+                }
+                setCursor(byteOffset: byteOffset)
             }
-            setCursor(byteOffset: byteOffset)
+
             textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        /// Resolve a heading anchor's "land here" byte offset:
+        /// first non-blank of the heading line (past the `#`
+        /// markers + whitespace). Reuses NSString's line API so we
+        /// don't have to rebuild the lineFirstNonBlank logic from
+        /// the engine — `CursorMotionEngine` is UTF-16-indexed,
+        /// the heading offset is UTF-8.
+        private func headingFirstNonBlank(
+            at heading: HeadingAnchor,
+            in source: String
+        ) -> Int {
+            let byteOffset = Int(heading.sourceOffset.rawValue)
+            // Convert byte offset → UTF-16 → walk line forward to first
+            // non-`#`, non-whitespace char → convert back to byte offset.
+            let utf8 = source.utf8
+            guard byteOffset >= 0, byteOffset <= utf8.count else { return byteOffset }
+            let startIdx = utf8.index(utf8.startIndex, offsetBy: byteOffset)
+            var cursor = startIdx
+            // Skip any run of `#` markers.
+            while cursor < utf8.endIndex, utf8[cursor] == 0x23 /* # */ {
+                cursor = utf8.index(after: cursor)
+            }
+            // Skip whitespace (space, tab) on the line.
+            while cursor < utf8.endIndex {
+                let byte = utf8[cursor]
+                if byte == 0x20 || byte == 0x09 {
+                    cursor = utf8.index(after: cursor)
+                    continue
+                }
+                if byte == 0x0A || byte == 0x0D { break } // EOL: heading body empty
+                break
+            }
+            return utf8.distance(from: utf8.startIndex, to: cursor)
+        }
+
+        /// Vim's `H` / `M` / `L` — jump to top/middle/bottom of the
+        /// visible viewport. Pulls the visible glyph range from the
+        /// layout manager, converts to characters, and hands the
+        /// rest to `CursorMotionEngine`. No scroll needed: the
+        /// target is already on screen by definition.
+        func viewportMotion(_ motion: ViewportMotion, count: Int) {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer
+            else { return }
+
+            let glyphRange = layoutManager.glyphRange(
+                forBoundingRect: textView.visibleRect,
+                in: textContainer
+            )
+            let charRange = layoutManager.characterRange(
+                forGlyphRange: glyphRange,
+                actualGlyphRange: nil
+            )
+            let target = CursorMotionEngine.newOffset(
+                for: motion,
+                in: textView.string,
+                visibleCharRange: charRange,
+                count: count
+            )
+            setCursorAt(utf16Location: target)
+        }
+
+        /// Vim's `gj` / `gk` / `g0` / `g^` / `g$` — display-line
+        /// motions over soft-wrapped rows. The "current display
+        /// line" is the line fragment at the cursor; `gj` / `gk`
+        /// step to neighbor fragments preserving the cursor's
+        /// preferred x; `g0` / `g^` / `g$` snap within the current
+        /// fragment via the engine.
+        func displayLineMotion(_ motion: DisplayLineMotion, count: Int) {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer
+            else { return }
+            let charIndex = textView.selectedRange().location
+
+            switch motion {
+            case .start, .firstNonBlank, .end:
+                guard let lineRange = displayLineCharRange(
+                    at: charIndex,
+                    layoutManager: layoutManager
+                ) else { return }
+                let target = CursorMotionEngine.newOffset(
+                    for: motion,
+                    in: textView.string,
+                    displayLineRange: lineRange
+                )
+                setCursorAt(utf16Location: target)
+                textView.scrollRangeToVisible(textView.selectedRange())
+
+            case .down, .up:
+                let steps = max(1, count)
+                let direction: VerticalDisplayDirection =
+                    (motion == .down) ? .down : .up
+                var current = charIndex
+                for _ in 0..<steps {
+                    guard let next = neighborDisplayLineCharIndex(
+                        from: current,
+                        direction: direction,
+                        layoutManager: layoutManager,
+                        textContainer: textContainer
+                    ) else { break }
+                    if next == current { break }
+                    current = next
+                }
+                setCursorAt(utf16Location: current)
+                textView.scrollRangeToVisible(textView.selectedRange())
+            }
+        }
+
+        private enum VerticalDisplayDirection { case up, down }
+
+        /// Character range covering the display line that contains
+        /// `charIndex`. Returns nil if the layout manager can't
+        /// resolve a fragment (empty text, bad index).
+        private func displayLineCharRange(
+            at charIndex: Int,
+            layoutManager: NSLayoutManager
+        ) -> NSRange? {
+            guard layoutManager.numberOfGlyphs > 0 else { return nil }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
+            let safeGlyph = min(glyphIndex, layoutManager.numberOfGlyphs - 1)
+            var lineGlyphRange = NSRange()
+            _ = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: safeGlyph,
+                effectiveRange: &lineGlyphRange
+            )
+            return layoutManager.characterRange(
+                forGlyphRange: lineGlyphRange,
+                actualGlyphRange: nil
+            )
+        }
+
+        /// Find the character at the cursor's preferred x in the
+        /// neighbor display line. Returns nil at document
+        /// boundaries (no neighbor fragment to step into).
+        private func neighborDisplayLineCharIndex(
+            from charIndex: Int,
+            direction: VerticalDisplayDirection,
+            layoutManager: NSLayoutManager,
+            textContainer: NSTextContainer
+        ) -> Int? {
+            guard layoutManager.numberOfGlyphs > 0 else { return nil }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
+            let safeGlyph = min(glyphIndex, layoutManager.numberOfGlyphs - 1)
+
+            var currentRange = NSRange()
+            let currentRect = layoutManager.lineFragmentRect(
+                forGlyphAt: safeGlyph,
+                effectiveRange: &currentRange
+            )
+            // Preferred x = cursor's x within the container.
+            let glyphLocation = layoutManager.location(forGlyphAt: safeGlyph)
+            let preferredX = currentRect.minX + glyphLocation.x
+
+            // Neighbor glyph: step one past the current fragment
+            // (down) or one before its start (up).
+            let neighborGlyph: Int
+            switch direction {
+            case .down:
+                let candidate = currentRange.location + currentRange.length
+                guard candidate < layoutManager.numberOfGlyphs else { return nil }
+                neighborGlyph = candidate
+            case .up:
+                guard currentRange.location > 0 else { return nil }
+                neighborGlyph = currentRange.location - 1
+            }
+
+            var neighborRange = NSRange()
+            let neighborRect = layoutManager.lineFragmentRect(
+                forGlyphAt: neighborGlyph,
+                effectiveRange: &neighborRange
+            )
+            // Probe at preferred x, vertically inside the neighbor
+            // fragment. `glyphIndex(for:in:)` returns the closest
+            // glyph regardless of distance — exactly what we want
+            // since `preferredX` may exceed the neighbor's used
+            // width (short line).
+            let probe = NSPoint(x: preferredX, y: neighborRect.midY)
+            let foundGlyph = layoutManager.glyphIndex(for: probe, in: textContainer)
+            return layoutManager.characterIndexForGlyph(at: foundGlyph)
         }
 
         /// Task toggle: structural CST edit + surgical textStorage sync.
@@ -521,30 +758,90 @@ struct LiminalTextView: NSViewRepresentable {
             // so it doesn't linger over the action.
             hoverPreviewController.cancelForClick()
             guard let textView,
-                  let url = document.fileURL,
                   let byteRange = LiminalTextView.utf16RangeToByteRange(
                       NSRange(location: utf16Index, length: 0),
                       in: textView.string
-                  ),
+                  )
+            else { return false }
+            return activateReference(
+                atByteOffset: TextSize(UInt32(byteRange.lowerBound)),
+                anchorUTF16Index: utf16Index,
+                disposition: NavigationDisposition.click(modifierFlags: modifierFlags)
+            )
+        }
+
+        /// Shared activation core: given a source byte offset (where
+        /// to look for a reference) and a UTF-16 anchor index (where
+        /// to anchor the ambiguity popover, if it appears), resolve
+        /// the reference under the byte offset and route through the
+        /// activation policy. Returns `true` if a reference was
+        /// found and dispatched.
+        ///
+        /// Used by both the mouse path (`vimTextView(_:didCmdClickAt:...)`)
+        /// and the keyboard path (`gd`).
+        @discardableResult
+        private func activateReference(
+            atByteOffset byteOffset: TextSize,
+            anchorUTF16Index: Int,
+            disposition: NavigationDisposition
+        ) -> Bool {
+            guard let url = document.fileURL,
                   let docIndex = currentDocumentIndex()
             else { return false }
-
             let canonicalURL = VaultRegistry.canonicalNoteURL(for: url)
             let entry = VaultRegistry.shared.entry(for: url)
             guard let result = CmdClickHandler.decision(
-                atByteOffset: TextSize(UInt32(byteRange.lowerBound)),
+                atByteOffset: byteOffset,
                 documentURL: canonicalURL,
                 documentIndex: docIndex,
                 vaultLinkIndex: entry.linkIndex
             ) else { return false }
-
             return activate(
                 decision: result.decision,
                 in: docIndex,
                 currentURL: canonicalURL,
-                clickUTF16Index: utf16Index,
-                disposition: NavigationDisposition.click(modifierFlags: modifierFlags)
+                clickUTF16Index: anchorUTF16Index,
+                disposition: disposition
             )
+        }
+
+        /// `gd`: keyboard equivalent of Cmd-click. Read the cursor's
+        /// byte offset, anchor any ambiguity popover at the cursor's
+        /// UTF-16 position, dispatch via the same activation core
+        /// the mouse path uses. Always replaces in the current tab
+        /// (the new-tab disposition is a mouse-only Cmd+Shift
+        /// affordance).
+        func goToDefinitionAtCursor() {
+            guard let textView,
+                  let byteOffset = currentCursorByteOffset()
+            else { return }
+            let utf16Index = textView.selectedRange().location
+            activateReference(
+                atByteOffset: TextSize(UInt32(byteOffset)),
+                anchorUTF16Index: utf16Index,
+                disposition: .replaceInCurrentTab
+            )
+        }
+
+        /// `gx`: open the external URL at cursor via the system
+        /// handler. Silent no-op if the cursor isn't on a reference,
+        /// or the reference isn't external.
+        func openURLAtCursor() {
+            guard let url = document.fileURL,
+                  let docIndex = currentDocumentIndex(),
+                  let byteOffset = currentCursorByteOffset()
+            else { return }
+            let canonicalURL = VaultRegistry.canonicalNoteURL(for: url)
+            let entry = VaultRegistry.shared.entry(for: url)
+            guard let result = CmdClickHandler.decision(
+                atByteOffset: TextSize(UInt32(byteOffset)),
+                documentURL: canonicalURL,
+                documentIndex: docIndex,
+                vaultLinkIndex: entry.linkIndex
+            ) else { return }
+            if case .openExternal(let url) = result.decision {
+                NSWorkspace.shared.open(url)
+            }
         }
 
         /// Pull the cached `DocumentIndex` from the vault entry, or

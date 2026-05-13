@@ -238,6 +238,14 @@ public final class VimController: ObservableObject {
             delegate?.moveCursor(motion: motion, count: count)
         case .structuralMotion(let motion, let count):
             delegate?.structuralMotion(motion, count: count)
+        case .viewportMotion(let motion, let count):
+            delegate?.viewportMotion(motion, count: count)
+        case .displayLineMotion(let motion, let count):
+            delegate?.displayLineMotion(motion, count: count)
+        case .goToDefinitionAtCursor:
+            delegate?.goToDefinitionAtCursor()
+        case .openURLAtCursor:
+            delegate?.openURLAtCursor()
         case .toggleTaskAtCursor:
             delegate?.toggleTaskAtCursor()
         case .awaitMarkName(let op):
@@ -318,6 +326,87 @@ public final class VimController: ObservableObject {
         }
         t.bind(.normal, [.char("}")], description: "Next sibling block") {
             .structuralMotion(.nextSibling, count: $0 ?? 1)
+        }
+
+        // Screen-relative motion. Vim convention: `H` and `L` accept
+        // a count meaning "N lines from top / bottom of viewport";
+        // `M` ignores any count.
+        t.bind(.normal, [.char("H")], description: "Top of screen / N from top") {
+            .viewportMotion(.screenTop, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("M")], description: "Middle of screen") { _ in
+            .viewportMotion(.screenMiddle, count: 1)
+        }
+        t.bind(.normal, [.char("L")], description: "Bottom of screen / N from bottom") {
+            .viewportMotion(.screenBottom, count: $0 ?? 1)
+        }
+
+        // CST-aware "go to" motions under the `g` prefix. These join
+        // `gg` / `gj` / `gk` / `g0` / `g^` / `g$` already bound
+        // below — `g` is vim's polymorphic "given my cursor, take me
+        // somewhere related" namespace.
+        t.bind(.normal, [.char("g"), .char("h")],
+               description: "Enclosing heading") {
+            .structuralMotion(.enclosingHeading, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("g"), .char("d")],
+               description: "Go to definition") { _ in
+            .goToDefinitionAtCursor
+        }
+        t.bind(.normal, [.char("g"), .char("x")],
+               description: "Open URL at cursor") { _ in
+            .openURLAtCursor
+        }
+
+        // Bracket-prefix sequential navigation: `[<x>` / `]<x>` walk
+        // previous/next of category X. Counts repeat. Letters chosen
+        // to avoid widely-deployed plugin bindings (vim-unimpaired,
+        // gitsigns, treesitter-textobjects, LSP). Reservations:
+        //   `[d` / `]d` — LSP-canonical for diagnostics. Bind when
+        //                 schema validation surfaces in the UI.
+        //   `[z` / `]z` — vim-canonical for fold start/end. Bind
+        //                 when CST folding lands.
+        // Don't claim those letters for anything else.
+        t.bind(.normal, [.char("["), .char("[")],
+               description: "Previous heading") {
+            .structuralMotion(.previousHeading, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("]"), .char("]")],
+               description: "Next heading") {
+            .structuralMotion(.nextHeading, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("["), .char("r")],
+               description: "Previous reference") {
+            .structuralMotion(.previousReference, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("]"), .char("r")],
+               description: "Next reference") {
+            .structuralMotion(.nextReference, count: $0 ?? 1)
+        }
+
+        // Display-line ("visual") motion. Like j/k/0/^/$ but
+        // operating on soft-wrapped display rows instead of logical
+        // source lines. The chord-prefix machinery already accepts
+        // `g` because `gg` is bound below.
+        t.bind(.normal, [.char("g"), .char("j")],
+               description: "Down one display line") {
+            .displayLineMotion(.down, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("g"), .char("k")],
+               description: "Up one display line") {
+            .displayLineMotion(.up, count: $0 ?? 1)
+        }
+        t.bind(.normal, [.char("g"), .char("0")],
+               description: "Display line start") { _ in
+            .displayLineMotion(.start, count: 1)
+        }
+        t.bind(.normal, [.char("g"), .char("^")],
+               description: "Display line first non-blank") { _ in
+            .displayLineMotion(.firstNonBlank, count: 1)
+        }
+        t.bind(.normal, [.char("g"), .char("$")],
+               description: "Display line end") { _ in
+            .displayLineMotion(.end, count: 1)
         }
 
         // Marks. `m<a-z>` sets a mark; `` `<a-z> `` jumps to it. Both
@@ -405,6 +494,10 @@ public enum KeyHandled: Sendable, Equatable {
 public protocol VimControllerDelegate: AnyObject {
     func moveCursor(motion: CursorMotion, count: Int)
     func structuralMotion(_ motion: StructuralMotion, count: Int)
+    func viewportMotion(_ motion: ViewportMotion, count: Int)
+    func displayLineMotion(_ motion: DisplayLineMotion, count: Int)
+    func goToDefinitionAtCursor()
+    func openURLAtCursor()
     func toggleTaskAtCursor()
     func setMark(_ name: Character)
     func jumpToMark(_ name: Character)

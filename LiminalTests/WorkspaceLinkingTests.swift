@@ -695,6 +695,108 @@ struct WorkspaceLinkingTests {
         )
     }
 
+    // MARK: - DocumentIndex navigation helpers (gh / [[ / ]] / [r / ]r)
+
+    @Test("heading(enclosing:) returns the heading whose section contains the offset")
+    func headingEnclosing() {
+        let h1 = HeadingAnchor(title: "One", sourceOffset: 0, level: 1)
+        let h2 = HeadingAnchor(title: "Two", sourceOffset: 100, level: 2)
+        let h3 = HeadingAnchor(title: "Three", sourceOffset: 200, level: 1)
+        let index = DocumentIndex(headings: [h1, h2, h3])
+
+        // Inside section 1 → h1
+        #expect(index.heading(enclosing: 50) == h1)
+        // Inside section 2 → h2
+        #expect(index.heading(enclosing: 150) == h2)
+        // On the heading line itself → that heading (cursor is "in" its section)
+        #expect(index.heading(enclosing: 100) == h2)
+        // Past the last heading → h3 (still in its section)
+        #expect(index.heading(enclosing: 999) == h3)
+    }
+
+    @Test("heading(enclosing:) returns nil before any heading")
+    func headingEnclosingPreamble() {
+        let h1 = HeadingAnchor(title: "One", sourceOffset: 50, level: 1)
+        let index = DocumentIndex(headings: [h1])
+        #expect(index.heading(enclosing: 10) == nil)
+    }
+
+    @Test("heading(before:) is strictly less; on a heading line returns the previous one")
+    func headingBefore() {
+        let h1 = HeadingAnchor(title: "One", sourceOffset: 0, level: 1)
+        let h2 = HeadingAnchor(title: "Two", sourceOffset: 100, level: 2)
+        let index = DocumentIndex(headings: [h1, h2])
+
+        // On h2 → returns h1 (strictly before)
+        #expect(index.heading(before: 100) == h1)
+        // Just past h1 → still h1
+        #expect(index.heading(before: 50) == h1)
+        // At first heading → nil (nothing before)
+        #expect(index.heading(before: 0) == nil)
+    }
+
+    @Test("heading(after:) is strictly greater")
+    func headingAfter() {
+        let h1 = HeadingAnchor(title: "One", sourceOffset: 50, level: 1)
+        let h2 = HeadingAnchor(title: "Two", sourceOffset: 150, level: 2)
+        let index = DocumentIndex(headings: [h1, h2])
+
+        // Before any heading → first heading
+        #expect(index.heading(after: 0) == h1)
+        // On h1 → h2 (strictly past h1)
+        #expect(index.heading(after: 50) == h2)
+        // Inside section 1 (between h1 and h2) → h2
+        #expect(index.heading(after: 100) == h2)
+        // On h2 → nil (no further heading)
+        #expect(index.heading(after: 150) == nil)
+        // Past last → nil
+        #expect(index.heading(after: 999) == nil)
+    }
+
+    @Test("reference(before:) walks references in source order, strictly less")
+    func referenceBefore() {
+        let r1 = DocumentReference(
+            kind: .link, target: WikiTarget.parse("A"),
+            sourceRange: LiminalSourceRange(start: 10, length: 5)
+        )
+        let r2 = DocumentReference(
+            kind: .link, target: WikiTarget.parse("B"),
+            sourceRange: LiminalSourceRange(start: 50, length: 5)
+        )
+        let index = DocumentIndex(references: [r1, r2])
+
+        // Just past r1's start → r1
+        #expect(index.reference(before: 30)?.target.notePath == "A")
+        // On r2's start → r1 (strictly before)
+        #expect(index.reference(before: 50)?.target.notePath == "A")
+        // Past both → r2 (last preceding)
+        #expect(index.reference(before: 100)?.target.notePath == "B")
+        // Before any → nil
+        #expect(index.reference(before: 0) == nil)
+    }
+
+    @Test("reference(after:) returns the first reference strictly past the offset")
+    func referenceAfter() {
+        let r1 = DocumentReference(
+            kind: .link, target: WikiTarget.parse("A"),
+            sourceRange: LiminalSourceRange(start: 10, length: 5)
+        )
+        let r2 = DocumentReference(
+            kind: .link, target: WikiTarget.parse("B"),
+            sourceRange: LiminalSourceRange(start: 50, length: 5)
+        )
+        let index = DocumentIndex(references: [r1, r2])
+
+        // Before r1 → r1
+        #expect(index.reference(after: 0)?.target.notePath == "A")
+        // Between r1 and r2 → r2
+        #expect(index.reference(after: 30)?.target.notePath == "B")
+        // On r2's start → nil (strictly past)
+        #expect(index.reference(after: 50) == nil)
+        // Past last → nil
+        #expect(index.reference(after: 999) == nil)
+    }
+
     private func makeNote(relativePath: String, content: String = "") -> LiminalNote {
         LiminalNote(
             url: URL(fileURLWithPath: "/tmp/liminal-tests/\(relativePath)"),

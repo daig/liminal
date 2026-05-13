@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Liminal
 
@@ -194,5 +195,245 @@ struct CursorMotionEngineTests {
     func offsetClampedAtStart() {
         let offset = CursorMotionEngine.newOffset(for: .lineStart, in: "abc", from: 100, count: 1)
         #expect(offset == 0)
+    }
+
+    // MARK: - Viewport (H/M/L)
+
+    @Test("H lands on first non-blank of the top visible line")
+    func screenTopLandsOnFirstNonBlank() {
+        // Lines: 0:"abc", 4:"  def", 11:"ghi"
+        // Visible char range covers all three lines.
+        let text = "abc\n  def\nghi"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenTop, in: text, visibleCharRange: visible, count: 1
+        )
+        #expect(offset == 0) // 'a'
+    }
+
+    @Test("H respects count: 2H goes to second visible line, first non-blank")
+    func screenTopCountTwo() {
+        let text = "abc\n  def\nghi"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenTop, in: text, visibleCharRange: visible, count: 2
+        )
+        // Line 2 is "  def" (start=4, contentEnd=9); first non-blank is 'd' at 6.
+        #expect(offset == 6)
+    }
+
+    @Test("H clamped to last visible line when count exceeds visible lines")
+    func screenTopOverCount() {
+        let text = "a\nb\nc\nd"
+        // Visible range covers only the first three lines (0..5).
+        let visible = NSRange(location: 0, length: 5)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenTop, in: text, visibleCharRange: visible, count: 99
+        )
+        // Line 3 is "c" at offset 4. 99H clamps to bottom of visible.
+        #expect(offset == 4)
+    }
+
+    @Test("L lands on first non-blank of the bottom visible line")
+    func screenBottomLandsOnFirstNonBlank() {
+        let text = "abc\ndef\n  xyz"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenBottom, in: text, visibleCharRange: visible, count: 1
+        )
+        // Bottom line "  xyz" starts at 8; first non-blank is 'x' at 10.
+        #expect(offset == 10)
+    }
+
+    @Test("L respects count: 2L goes to second-from-bottom visible line")
+    func screenBottomCountTwo() {
+        let text = "a\nb\nc\nd"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenBottom, in: text, visibleCharRange: visible, count: 2
+        )
+        // 4 visible lines; 2L → second from bottom = line 3 ("c") at offset 4.
+        #expect(offset == 4)
+    }
+
+    @Test("L clamped to first visible line when count exceeds visible lines")
+    func screenBottomOverCount() {
+        let text = "a\nb\nc"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenBottom, in: text, visibleCharRange: visible, count: 99
+        )
+        // 99L clamps to top of visible — 'a' at 0.
+        #expect(offset == 0)
+    }
+
+    @Test("M lands on the middle visible line")
+    func screenMiddle() {
+        let text = "a\nb\nc\nd\ne"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let offset = CursorMotionEngine.newOffset(
+            for: .screenMiddle, in: text, visibleCharRange: visible, count: 1
+        )
+        // 5 visible lines: middle is line 3 ("c") at offset 4.
+        #expect(offset == 4)
+    }
+
+    @Test("M ignores count")
+    func screenMiddleIgnoresCount() {
+        let text = "a\nb\nc\nd\ne"
+        let visible = NSRange(location: 0, length: text.utf16.count)
+        let withCount = CursorMotionEngine.newOffset(
+            for: .screenMiddle, in: text, visibleCharRange: visible, count: 99
+        )
+        let withoutCount = CursorMotionEngine.newOffset(
+            for: .screenMiddle, in: text, visibleCharRange: visible, count: 1
+        )
+        #expect(withCount == withoutCount)
+    }
+
+    @Test("viewport motion: visible range starts mid-document")
+    func viewportRangeMidDocument() {
+        // Doc has 5 lines; only lines 2-4 ("c","d","e") are visible.
+        let text = "a\nb\nc\nd\ne"
+        // Line 'c' starts at 4, line 'e' ends at 9 (no trailing newline).
+        let visible = NSRange(location: 4, length: 5)
+        let topOffset = CursorMotionEngine.newOffset(
+            for: .screenTop, in: text, visibleCharRange: visible, count: 1
+        )
+        #expect(topOffset == 4) // 'c'
+        let bottomOffset = CursorMotionEngine.newOffset(
+            for: .screenBottom, in: text, visibleCharRange: visible, count: 1
+        )
+        #expect(bottomOffset == 8) // 'e'
+        let middleOffset = CursorMotionEngine.newOffset(
+            for: .screenMiddle, in: text, visibleCharRange: visible, count: 1
+        )
+        #expect(middleOffset == 6) // 'd'
+    }
+
+    @Test("viewport motion: empty visible range falls back to 0")
+    func viewportEmptyVisible() {
+        let text = "abc"
+        let visible = NSRange(location: 0, length: 0)
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .screenTop, in: text, visibleCharRange: visible, count: 1
+            ) == 0
+        )
+    }
+
+    @Test("viewport motion: empty text returns 0")
+    func viewportEmptyText() {
+        let visible = NSRange(location: 0, length: 0)
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .screenMiddle, in: "", visibleCharRange: visible, count: 1
+            ) == 0
+        )
+    }
+
+    // MARK: - Display line (g0/g^/g$)
+
+    @Test("g0 returns the start of the display line range")
+    func displayLineStart() {
+        let text = "abcdefghij"
+        // Synthesize a display line covering chars 3...8 (e.g. a soft-wrap).
+        let range = NSRange(location: 3, length: 6)
+        let offset = CursorMotionEngine.newOffset(
+            for: .start, in: text, displayLineRange: range
+        )
+        #expect(offset == 3)
+    }
+
+    @Test("g^ skips leading whitespace inside the display line")
+    func displayLineFirstNonBlank() {
+        let text = "   xyz"
+        let range = NSRange(location: 0, length: 6)
+        let offset = CursorMotionEngine.newOffset(
+            for: .firstNonBlank, in: text, displayLineRange: range
+        )
+        #expect(offset == 3) // 'x'
+    }
+
+    @Test("g^ on an all-whitespace display line lands at the row's last column")
+    func displayLineFirstNonBlankAllWhitespace() {
+        let text = "    "
+        let range = NSRange(location: 0, length: 4)
+        let offset = CursorMotionEngine.newOffset(
+            for: .firstNonBlank, in: text, displayLineRange: range
+        )
+        #expect(offset == 3) // last char in the row
+    }
+
+    @Test("g$ lands on the last visible char (skipping trailing newline)")
+    func displayLineEndSkipsNewline() {
+        let text = "abc\n"
+        let range = NSRange(location: 0, length: 4) // includes \n
+        let offset = CursorMotionEngine.newOffset(
+            for: .end, in: text, displayLineRange: range
+        )
+        #expect(offset == 2) // 'c', not the newline at 3
+    }
+
+    @Test("g$ on a soft-wrapped row (no trailing newline) lands on the last char")
+    func displayLineEndSoftWrap() {
+        let text = "abcdef"
+        let range = NSRange(location: 0, length: 3) // soft wrap after 'c'
+        let offset = CursorMotionEngine.newOffset(
+            for: .end, in: text, displayLineRange: range
+        )
+        #expect(offset == 2) // 'c'
+    }
+
+    @Test("g0 on an empty display line returns the location unchanged")
+    func displayLineStartEmptyRange() {
+        let text = "abc"
+        let range = NSRange(location: 1, length: 0)
+        let offset = CursorMotionEngine.newOffset(
+            for: .start, in: text, displayLineRange: range
+        )
+        #expect(offset == 1)
+    }
+
+    @Test("g0/g^/g$ on empty text return 0")
+    func displayLineEmptyText() {
+        let range = NSRange(location: 0, length: 0)
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .start, in: "", displayLineRange: range
+            ) == 0
+        )
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .firstNonBlank, in: "", displayLineRange: range
+            ) == 0
+        )
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .end, in: "", displayLineRange: range
+            ) == 0
+        )
+    }
+
+    @Test("display-line range mid-document: g0/g^/g$ all stay on that row")
+    func displayLineMidDocument() {
+        // Document with three rows; row 2 is offset 4..9 (chars "  xyz")
+        let text = "abc\n  xyz\n123"
+        let range = NSRange(location: 4, length: 6) // "  xyz\n"
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .start, in: text, displayLineRange: range
+            ) == 4
+        )
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .firstNonBlank, in: text, displayLineRange: range
+            ) == 6 // 'x'
+        )
+        #expect(
+            CursorMotionEngine.newOffset(
+                for: .end, in: text, displayLineRange: range
+            ) == 8 // 'z' (skips the trailing '\n' at 9)
+        )
     }
 }

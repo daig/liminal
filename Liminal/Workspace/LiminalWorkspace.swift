@@ -133,6 +133,41 @@ public struct DocumentIndex: Equatable, Sendable {
         innermostReference(in: references, containing: offset) { $0.sourceRange }
     }
 
+    /// Vim `gh`: the heading whose section contains `offset`. The
+    /// last heading whose source offset is at or before `offset` —
+    /// when the cursor is on a heading line itself, that same
+    /// heading is returned (the cursor is already "in its section").
+    public func heading(enclosing offset: TextSize) -> HeadingAnchor? {
+        headings.last { $0.sourceOffset <= offset }
+    }
+
+    /// Vim `[[`: the most recent heading strictly before `offset`.
+    /// On a heading line, returns the previous heading; if there is
+    /// no preceding heading, returns nil.
+    public func heading(before offset: TextSize) -> HeadingAnchor? {
+        headings.last { $0.sourceOffset < offset }
+    }
+
+    /// Vim `]]`: the first heading strictly after `offset`. Returns
+    /// nil past the document's last heading.
+    public func heading(after offset: TextSize) -> HeadingAnchor? {
+        headings.first { $0.sourceOffset > offset }
+    }
+
+    /// Vim `[r`: the most recent reference (any kind) whose source
+    /// range starts strictly before `offset`. Walks `references` in
+    /// the order the indexer emitted them, which is source order.
+    public func reference(before offset: TextSize) -> DocumentReference? {
+        references.last { $0.sourceRange.start < offset }
+    }
+
+    /// Vim `]r`: the first reference whose source range starts
+    /// strictly after `offset`. Returns nil past the last
+    /// reference.
+    public func reference(after offset: TextSize) -> DocumentReference? {
+        references.first { $0.sourceRange.start > offset }
+    }
+
     public func blockOffset(for anchor: LinkNavigationAnchor) -> TextSize? {
         switch anchor {
         case .heading(let heading):

@@ -129,6 +129,132 @@ struct VimControllerTests {
         #expect(spy.structuralMotionCalls.last == .init(motion: .previousSibling, count: 2))
     }
 
+    @Test("H/M/L viewport motions delegate with the right count semantics")
+    func viewportMotionsDelegated() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("H"))
+        #expect(spy.viewportMotionCalls.last == .init(motion: .screenTop, count: 1))
+
+        _ = c.handle(.char("3"))
+        _ = c.handle(.char("H"))
+        #expect(spy.viewportMotionCalls.last == .init(motion: .screenTop, count: 3))
+
+        _ = c.handle(.char("L"))
+        #expect(spy.viewportMotionCalls.last == .init(motion: .screenBottom, count: 1))
+
+        _ = c.handle(.char("9"))
+        _ = c.handle(.char("L"))
+        #expect(spy.viewportMotionCalls.last == .init(motion: .screenBottom, count: 9))
+
+        // M ignores any count.
+        _ = c.handle(.char("5"))
+        _ = c.handle(.char("M"))
+        #expect(spy.viewportMotionCalls.last == .init(motion: .screenMiddle, count: 1))
+    }
+
+    @Test("g-prefix display-line motions delegate with the right semantics")
+    func displayLineMotionsDelegated() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        // gj / gk: count repeats.
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("j"))
+        #expect(spy.displayLineMotionCalls.last == .init(motion: .down, count: 1))
+
+        _ = c.handle(.char("4"))
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("k"))
+        #expect(spy.displayLineMotionCalls.last == .init(motion: .up, count: 4))
+
+        // g0 / g^ / g$: count ignored (vim convention).
+        _ = c.handle(.char("9"))
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("0"))
+        #expect(spy.displayLineMotionCalls.last == .init(motion: .start, count: 1))
+
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("^"))
+        #expect(spy.displayLineMotionCalls.last == .init(motion: .firstNonBlank, count: 1))
+
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("$"))
+        #expect(spy.displayLineMotionCalls.last == .init(motion: .end, count: 1))
+    }
+
+    @Test("gg still resolves to documentStart even with the new g-prefix bindings")
+    func ggStillWorks() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("g"))
+        #expect(spy.moveCursorCalls.last == .init(motion: .documentStart, count: 1))
+    }
+
+    @Test("gh dispatches enclosingHeading; counts repeat for prev/next heading")
+    func headingMotionsDelegated() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("h"))
+        #expect(spy.structuralMotionCalls.last == .init(motion: .enclosingHeading, count: 1))
+
+        _ = c.handle(.char("["))
+        _ = c.handle(.char("["))
+        #expect(spy.structuralMotionCalls.last == .init(motion: .previousHeading, count: 1))
+
+        _ = c.handle(.char("3"))
+        _ = c.handle(.char("]"))
+        _ = c.handle(.char("]"))
+        #expect(spy.structuralMotionCalls.last == .init(motion: .nextHeading, count: 3))
+    }
+
+    @Test("[r / ]r dispatch reference motions with counts")
+    func referenceMotionsDelegated() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("["))
+        _ = c.handle(.char("r"))
+        #expect(spy.structuralMotionCalls.last == .init(motion: .previousReference, count: 1))
+
+        _ = c.handle(.char("5"))
+        _ = c.handle(.char("]"))
+        _ = c.handle(.char("r"))
+        #expect(spy.structuralMotionCalls.last == .init(motion: .nextReference, count: 5))
+    }
+
+    @Test("gd dispatches goToDefinitionAtCursor")
+    func gdDelegated() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("d"))
+        #expect(spy.goToDefinitionCallCount == 1)
+    }
+
+    @Test("gx dispatches openURLAtCursor")
+    func gxDelegated() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("x"))
+        #expect(spy.openURLCallCount == 1)
+    }
+
     // MARK: - Status / hint presentation
 
     @Test("initial state: status mode is normal, detail is nil, no snapshot")
@@ -415,9 +541,21 @@ private final class VimDelegateSpy: VimControllerDelegate {
         let motion: StructuralMotion
         let count: Int
     }
+    struct ViewportCall: Equatable {
+        let motion: ViewportMotion
+        let count: Int
+    }
+    struct DisplayLineCall: Equatable {
+        let motion: DisplayLineMotion
+        let count: Int
+    }
 
     var moveCursorCalls: [MoveCall] = []
     var structuralMotionCalls: [StructuralCall] = []
+    var viewportMotionCalls: [ViewportCall] = []
+    var displayLineMotionCalls: [DisplayLineCall] = []
+    var goToDefinitionCallCount = 0
+    var openURLCallCount = 0
     var toggleTaskCallCount = 0
     var setMarkCalls: [Character] = []
     var jumpToMarkCalls: [Character] = []
@@ -427,6 +565,18 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func structuralMotion(_ motion: StructuralMotion, count: Int) {
         structuralMotionCalls.append(.init(motion: motion, count: count))
+    }
+    func viewportMotion(_ motion: ViewportMotion, count: Int) {
+        viewportMotionCalls.append(.init(motion: motion, count: count))
+    }
+    func displayLineMotion(_ motion: DisplayLineMotion, count: Int) {
+        displayLineMotionCalls.append(.init(motion: motion, count: count))
+    }
+    func goToDefinitionAtCursor() {
+        goToDefinitionCallCount += 1
+    }
+    func openURLAtCursor() {
+        openURLCallCount += 1
     }
     func toggleTaskAtCursor() {
         toggleTaskCallCount += 1

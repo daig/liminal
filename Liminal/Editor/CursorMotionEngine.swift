@@ -74,6 +74,173 @@ enum CursorMotionEngine {
         }
     }
 
+    /// Resolve a viewport-relative motion to a UTF-16 offset. The
+    /// caller hands us the visible character range from
+    /// `NSLayoutManager` and we translate to a target line, then
+    /// land on its first non-blank (vim's convention for `H`/`M`/`L`).
+    ///
+    /// `count`:
+    ///   - `screenTop`: line `count - 1` below the top visible line.
+    ///   - `screenBottom`: line `count - 1` above the bottom visible
+    ///     line.
+    ///   - `screenMiddle`: ignored (vim semantics).
+    static func newOffset(
+        for motion: ViewportMotion,
+        in text: String,
+        visibleCharRange: NSRange,
+        count: Int = 1
+    ) -> Int {
+        let nsString = text as NSString
+        guard nsString.length > 0 else { return 0 }
+        guard visibleCharRange.length > 0 else { return 0 }
+
+        let firstVisible = max(0, min(visibleCharRange.location, nsString.length - 1))
+        let lastVisible = max(
+            firstVisible,
+            min(visibleCharRange.location + visibleCharRange.length - 1,
+                nsString.length - 1)
+        )
+
+        let firstLineStart = lineInfo(at: firstVisible, in: nsString).start
+        let lastLineStart = lineInfo(at: lastVisible, in: nsString).start
+
+        let targetLineStart: Int
+        switch motion {
+        case .screenTop:
+            targetLineStart = lineStart(
+                offsetFrom: firstLineStart,
+                lines: max(0, count - 1),
+                direction: .down,
+                limitLineStart: lastLineStart,
+                in: nsString
+            )
+        case .screenBottom:
+            targetLineStart = lineStart(
+                offsetFrom: lastLineStart,
+                lines: max(0, count - 1),
+                direction: .up,
+                limitLineStart: firstLineStart,
+                in: nsString
+            )
+        case .screenMiddle:
+            targetLineStart = midpointLineStart(
+                between: firstLineStart,
+                and: lastLineStart,
+                in: nsString
+            )
+        }
+
+        return lineFirstNonBlank(at: targetLineStart, in: nsString)
+    }
+
+    /// Resolve a display-line edge motion (`g0` / `g^` / `g$`) over
+    /// a display line whose character range the caller has already
+    /// extracted from `NSLayoutManager`. Pure logic; the layout
+    /// query lives in the Coordinator since it can't be cleanly
+    /// mocked.
+    ///
+    /// `down` and `up` cannot be resolved without layout metrics
+    /// (preferred-x in the destination line fragment), so this
+    /// helper traps them — the Coordinator handles those directly.
+    static func newOffset(
+        for motion: DisplayLineMotion,
+        in text: String,
+        displayLineRange: NSRange
+    ) -> Int {
+        let nsString = text as NSString
+        let textLength = nsString.length
+        guard textLength > 0 else { return 0 }
+        guard displayLineRange.length > 0 else { return displayLineRange.location }
+
+        let lineStart = displayLineRange.location
+        let lineEndOpen = min(lineStart + displayLineRange.length, textLength)
+
+        switch motion {
+        case .start:
+            return lineStart
+        case .firstNonBlank:
+            var i = lineStart
+            while i < lineEndOpen {
+                let ch = nsString.character(at: i)
+                if !isWhitespace(ch) { break }
+                i += 1
+            }
+            // All-whitespace display row: land at the row's end so
+            // the cursor stays on the row instead of at its start.
+            if i == lineEndOpen { return max(lineStart, lineEndOpen - 1) }
+            return i
+        case .end:
+            // Land on the last *visible* character of the row. If
+            // the row terminates with a newline (a hard-wrap, not a
+            // soft one), back over it so the cursor sits on
+            // content, matching vim's `$` semantics.
+            var end = lineEndOpen - 1
+            if end >= lineStart, end < textLength,
+               nsString.character(at: end) == 0x0A {
+                end -= 1
+            }
+            return max(lineStart, end)
+        case .down, .up:
+            // Layout-bound; caller routes these through the
+            // NSLayoutManager-driven path.
+            return displayLineRange.location
+        }
+    }
+
+    /// Walk `lines` lines from `start` toward `direction`, but never
+    /// past `limitLineStart`. Returns the start of the resulting
+    /// line.
+    private enum WalkDirection { case up, down }
+
+    private static func lineStart(
+        offsetFrom start: Int,
+        lines: Int,
+        direction: WalkDirection,
+        limitLineStart: Int,
+        in nsString: NSString
+    ) -> Int {
+        var current = start
+        for _ in 0..<lines {
+            let info = lineInfo(at: current, in: nsString)
+            switch direction {
+            case .down:
+                guard info.end < nsString.length else { return current }
+                let nextStart = lineInfo(at: info.end, in: nsString).start
+                if nextStart > limitLineStart { return current }
+                current = nextStart
+            case .up:
+                guard info.start > 0 else { return current }
+                let prevStart = lineInfo(at: info.start - 1, in: nsString).start
+                if prevStart < limitLineStart { return current }
+                current = prevStart
+            }
+        }
+        return current
+    }
+
+    /// The line whose start offset is closest to the midpoint of
+    /// `firstLineStart` and `lastLineStart`. Walks line-by-line
+    /// from the top — exact line counts beat byte-midpoint math
+    /// because lines vary in length.
+    private static func midpointLineStart(
+        between firstLineStart: Int,
+        and lastLineStart: Int,
+        in nsString: NSString
+    ) -> Int {
+        guard firstLineStart != lastLineStart else { return firstLineStart }
+        // Count total lines in the visible band.
+        var lineStarts: [Int] = [firstLineStart]
+        var current = firstLineStart
+        while current < lastLineStart {
+            let info = lineInfo(at: current, in: nsString)
+            guard info.end < nsString.length else { break }
+            current = info.end
+            lineStarts.append(current)
+            if current >= lastLineStart { break }
+        }
+        return lineStarts[lineStarts.count / 2]
+    }
+
     // MARK: - Line helpers
 
     private static func lineInfo(
