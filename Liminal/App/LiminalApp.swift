@@ -31,7 +31,7 @@ struct LiminalApp: App {
     }
 }
 
-/// View-menu commands. Just the syntax-highlighting toggle for now.
+/// View-menu commands: syntax-highlighting and backlinks-inspector toggles.
 private struct ViewMenu: View {
     @ObservedObject private var prefs = EditorPreferences.shared
 
@@ -40,6 +40,11 @@ private struct ViewMenu: View {
             Text("Syntax Highlighting")
         }
         .keyboardShortcut("h", modifiers: [.command, .shift])
+
+        Toggle(isOn: $prefs.backlinksInspectorVisible) {
+            Text("Backlinks Inspector")
+        }
+        .keyboardShortcut("b", modifiers: [.command, .shift])
     }
 }
 

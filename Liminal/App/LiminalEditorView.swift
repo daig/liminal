@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LiminalEditorView: View {
     @ObservedObject var document: LiminalSourceDocument
+    @ObservedObject private var prefs = EditorPreferences.shared
 
     /// File URL passed down from the `DocumentGroup`'s
     /// `ReferenceFileDocumentConfiguration.fileURL`. Nil for untitled
@@ -13,7 +14,16 @@ struct LiminalEditorView: View {
         NavigationSplitView {
             sidebar
         } detail: {
-            editorContent
+            HStack(spacing: 0) {
+                editorContent
+                if let url = fileURL, prefs.backlinksInspectorVisible {
+                    Divider()
+                    BacklinkInspectorView(
+                        entry: VaultRegistry.shared.entry(for: url),
+                        currentDocURL: url
+                    )
+                }
+            }
         }
         .onAppear { document.setFileURL(fileURL) }
         .onChange(of: fileURL) { _, newValue in
