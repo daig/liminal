@@ -23,6 +23,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     let session: LiminalEditorSession
     let vimController: VimController
     let cstInspector: CSTInspector
+    private let writesThroughToFile: Bool
 
     @Published private(set) var diagnosticsCount: Int = 0
     @Published private(set) var reuseSummary: ReuseSummary = .empty
@@ -74,7 +75,28 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
+        self.writesThroughToFile = false
         syncFromSession()
+    }
+
+    @MainActor
+    convenience init(standaloneFileURL url: URL) throws {
+        guard let data = try? Data(contentsOf: url),
+              let source = String(data: data, encoding: .utf8)
+        else { throw CocoaError(.fileReadCorruptFile) }
+        try self.init(standaloneSource: source, fileURL: url)
+    }
+
+    private init(standaloneSource source: String, fileURL: URL) throws {
+        self.session = LiminalEditorSession()
+        self.vimController = VimController()
+        self.cstInspector = CSTInspector()
+        self.writesThroughToFile = true
+        try session.replaceSource(source)
+        syncFromSession()
+        MainActor.assumeIsolated {
+            setFileURL(fileURL)
+        }
     }
 
     required init(configuration: ReadConfiguration) throws {
@@ -84,6 +106,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
+        self.writesThroughToFile = false
         try session.replaceSource(source)
         syncFromSession()
     }
@@ -126,6 +149,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 )
             }
             indexInVault()
+            writeThroughIfNeeded()
         }
     }
 
@@ -209,7 +233,26 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             )
         }
         indexInVault()
+        writeThroughIfNeeded()
         return true
+    }
+
+    @MainActor
+    @discardableResult
+    func writeToBackingFileIfPossible() -> Bool {
+        guard writesThroughToFile, let fileURL else { return false }
+        do {
+            try Data(session.source.utf8).write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            NSLog("LiminalSourceDocument: write-through failed for \(fileURL.path): \(error)")
+            return false
+        }
+    }
+
+    @MainActor
+    private func writeThroughIfNeeded() {
+        writeToBackingFileIfPossible()
     }
 
     private func syncFromSession() {

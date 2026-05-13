@@ -171,18 +171,21 @@ final class VimTextView: NSTextView {
     }
 
     /// Cmd-click intercepts: if the delegate claims the click, swallow
-    /// it (no cursor placement, no drag tracking). Otherwise fall
-    /// through to NSTextView's default. Excludes double-click and
-    /// modifier combos beyond plain Cmd so word/line selection still
-    /// works.
+    /// it (no cursor placement, no drag tracking). Cmd-Shift-click is
+    /// also claimed so wiki links can open in a workspace tab. Otherwise
+    /// fall through to NSTextView's default.
     override func mouseDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command,
+        if (flags == .command || flags == [.command, .shift]),
            event.clickCount == 1,
            let delegate = linkActivationDelegate {
             let pointInView = convert(event.locationInWindow, from: nil)
             let utf16Index = characterIndexForInsertion(at: pointInView)
-            if delegate.vimTextView(self, didCmdClickAt: utf16Index) {
+            if delegate.vimTextView(
+                self,
+                didCmdClickAt: utf16Index,
+                modifierFlags: event.modifierFlags
+            ) {
                 return
             }
         }
@@ -227,7 +230,11 @@ final class VimTextView: NSTextView {
 /// through to its normal mouse handling.
 @MainActor
 protocol VimTextViewLinkActivationDelegate: AnyObject {
-    func vimTextView(_ view: VimTextView, didCmdClickAt utf16Index: Int) -> Bool
+    func vimTextView(
+        _ view: VimTextView,
+        didCmdClickAt utf16Index: Int,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool
 }
 
 /// Cmd-modifier and mouse-move receiver for the hover preview

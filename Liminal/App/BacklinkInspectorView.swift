@@ -1,3 +1,4 @@
+import AppKit
 import CambiumCore
 import SwiftUI
 
@@ -113,7 +114,8 @@ private struct BacklinkRow: View {
     private func jumpToSource() {
         NavigationRouter.shared.navigate(
             to: reference.sourceNoteID,
-            anchor: .sourceOffset(reference.sourceRange.start)
+            anchor: .sourceOffset(reference.sourceRange.start),
+            disposition: NavigationDisposition.click()
         )
     }
 }

@@ -6,6 +6,7 @@ import SwiftUI
 
 struct LiminalTextView: NSViewRepresentable {
     @ObservedObject var document: LiminalSourceDocument
+    let navigationRequest: NavigationRequest?
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = Self.makeVimTextView()
@@ -60,6 +61,7 @@ struct LiminalTextView: NSViewRepresentable {
             context.coordinator.applyHighlights()
         }
         context.coordinator.refreshCursorStyle()
+        context.coordinator.consumeNavigationRequest(navigationRequest)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -113,6 +115,7 @@ struct LiminalTextView: NSViewRepresentable {
         let document: LiminalSourceDocument
         weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
+        private var lastConsumedNavigationNonce: UUID?
 
         let highlighter = LiminalHighlighter()
         let theme = LiminalHighlightTheme.default
@@ -189,6 +192,14 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         // MARK: - NavigationSubscriber
+
+        func consumeNavigationRequest(_ request: NavigationRequest?) {
+            guard let request,
+                  lastConsumedNavigationNonce != request.nonce
+            else { return }
+            lastConsumedNavigationNonce = request.nonce
+            handleNavigation(request)
+        }
 
         /// Incoming cross-document navigation. The router has already
         /// matched this request to our document URL; we bring our
@@ -499,12 +510,13 @@ struct LiminalTextView: NSViewRepresentable {
         /// claim the click; `false` falls back to NSTextView's default
         /// cursor placement.
         ///
-        /// Slice 3 wires within-doc anchor jumps and external URIs.
-        /// Cross-document targets (`open(noteID, anchor)` with
-        /// `noteID != currentURL`), `createNote`, and `showAmbiguous`
-        /// claim the click but no-op until the navigation router and
-        /// ambiguity popover land.
-        func vimTextView(_ view: VimTextView, didCmdClickAt utf16Index: Int) -> Bool {
+        /// Plain Cmd-click replaces the active workspace tab. Cmd-Shift-click
+        /// routes the same activation into a new workspace tab.
+        func vimTextView(
+            _ view: VimTextView,
+            didCmdClickAt utf16Index: Int,
+            modifierFlags: NSEvent.ModifierFlags
+        ) -> Bool {
             // Click takes over from hover; close any visible popover
             // so it doesn't linger over the action.
             hoverPreviewController.cancelForClick()
@@ -530,7 +542,8 @@ struct LiminalTextView: NSViewRepresentable {
                 decision: result.decision,
                 in: docIndex,
                 currentURL: canonicalURL,
-                clickUTF16Index: utf16Index
+                clickUTF16Index: utf16Index,
+                disposition: NavigationDisposition.click(modifierFlags: modifierFlags)
             )
         }
 
@@ -555,7 +568,8 @@ struct LiminalTextView: NSViewRepresentable {
             decision: LinkActivationDecision,
             in docIndex: DocumentIndex,
             currentURL: URL,
-            clickUTF16Index: Int
+            clickUTF16Index: Int,
+            disposition: NavigationDisposition
         ) -> Bool {
             switch decision {
             case .openExternal(let url):
@@ -563,7 +577,7 @@ struct LiminalTextView: NSViewRepresentable {
                 return true
 
             case .open(let noteID, let anchor):
-                if noteID == currentURL {
+                if disposition == .replaceInCurrentTab, noteID == currentURL {
                     if let anchor, let byteOffset = docIndex.blockOffset(for: anchor) {
                         scrollToByteOffset(Int(byteOffset.rawValue))
                     } else if anchor != nil {
@@ -574,13 +588,18 @@ struct LiminalTextView: NSViewRepresentable {
                     }
                     return true
                 }
-                NavigationRouter.shared.navigate(to: noteID, anchor: anchor)
+                NavigationRouter.shared.navigate(
+                    to: noteID,
+                    anchor: anchor,
+                    disposition: disposition
+                )
                 return true
 
             case .createNote(let relativePath):
                 createAndOpenNote(
                     relativePath: relativePath,
-                    vaultRoot: VaultRegistry.canonicalVaultRoot(for: currentURL)
+                    vaultRoot: VaultRegistry.canonicalVaultRoot(for: currentURL),
+                    disposition: disposition
                 )
                 return true
 
@@ -588,7 +607,8 @@ struct LiminalTextView: NSViewRepresentable {
                 showAmbiguityMenu(
                     candidates: candidates,
                     at: clickUTF16Index,
-                    currentURL: currentURL
+                    currentURL: currentURL,
+                    disposition: disposition
                 )
                 return true
 
@@ -605,7 +625,8 @@ struct LiminalTextView: NSViewRepresentable {
         private func showAmbiguityMenu(
             candidates: [URL],
             at utf16Index: Int,
-            currentURL: URL
+            currentURL: URL,
+            disposition: NavigationDisposition
         ) {
             guard let textView else { return }
             let menu = NSMenu(title: "Open which note?")
@@ -616,7 +637,10 @@ struct LiminalTextView: NSViewRepresentable {
                     keyEquivalent: ""
                 )
                 item.target = self
-                item.representedObject = url
+                item.representedObject = AmbiguousNavigationChoice(
+                    url: url,
+                    disposition: disposition
+                )
                 menu.addItem(item)
             }
             let anchor = pointForCharacter(utf16Index, in: textView)
@@ -624,8 +648,12 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         @objc private func activateAmbiguousCandidate(_ sender: NSMenuItem) {
-            guard let url = sender.representedObject as? URL else { return }
-            NavigationRouter.shared.navigate(to: url, anchor: nil)
+            guard let choice = sender.representedObject as? AmbiguousNavigationChoice else { return }
+            NavigationRouter.shared.navigate(
+                to: choice.url,
+                anchor: nil,
+                disposition: choice.disposition
+            )
         }
 
         /// Vault-relative display string for a candidate URL. Falls
@@ -665,7 +693,11 @@ struct LiminalTextView: NSViewRepresentable {
         /// `.lim` file inside the current vault, then route a
         /// navigation through the router so the new doc opens.
         /// Subdirectories in `relativePath` are created as needed.
-        private func createAndOpenNote(relativePath: String, vaultRoot: URL) {
+        private func createAndOpenNote(
+            relativePath: String,
+            vaultRoot: URL,
+            disposition: NavigationDisposition
+        ) {
             let path = relativePath.lowercased().hasSuffix(".lim")
                 ? relativePath
                 : relativePath + ".lim"
@@ -693,7 +725,11 @@ struct LiminalTextView: NSViewRepresentable {
                     return
                 }
             }
-            NavigationRouter.shared.navigate(to: newFileURL, anchor: nil)
+            NavigationRouter.shared.navigate(
+                to: newFileURL,
+                anchor: nil,
+                disposition: disposition
+            )
         }
 
         /// Move the cursor (and viewport) to a byte offset within the
@@ -947,5 +983,15 @@ struct LiminalTextView: NSViewRepresentable {
         let startUTF16 = utf16.distance(from: utf16.startIndex, to: startUTF16Idx)
         let endUTF16 = utf16.distance(from: utf16.startIndex, to: endUTF16Idx)
         return NSRange(location: startUTF16, length: endUTF16 - startUTF16)
+    }
+}
+
+private final class AmbiguousNavigationChoice: NSObject {
+    let url: URL
+    let disposition: NavigationDisposition
+
+    init(url: URL, disposition: NavigationDisposition) {
+        self.url = url
+        self.disposition = disposition
     }
 }

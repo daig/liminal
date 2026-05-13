@@ -1,16 +1,30 @@
 import AppKit
 import Foundation
 
-/// Cross-window navigation arbiter. Documents subscribe themselves
-/// when their `LiminalSourceDocument` learns its file URL; navigations
-/// targeted at an open document deliver immediately to that
-/// subscriber. When the target isn't open, the request is queued and
-/// `NSDocumentController.openDocument` is asked to open it; the
-/// freshly-loaded document consumes its pending request on subscribe.
+public enum NavigationDisposition: Equatable, Sendable {
+    case replaceInCurrentTab
+    case newTab
+    case newWindow
+
+    static func click(modifierFlags: NSEvent.ModifierFlags = NSEvent.modifierFlags) -> Self {
+        modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift)
+            ? .newTab
+            : .replaceInCurrentTab
+    }
+}
+
+/// Cross-window/workspace navigation arbiter. Workspace windows register
+/// themselves when they become key, and document views subscribe when their
+/// `LiminalSourceDocument` learns its file URL.
 ///
-/// Single source of truth for "which window owns which file URL," so
-/// Cmd-clicks across documents don't accidentally open duplicate
-/// windows.
+/// Default navigations target the active workspace so clicking links replaces
+/// the active note in-place. Explicit new-tab navigations are also handled by
+/// that workspace. Explicit new-window navigations, or navigations made before
+/// any workspace is active, fall back to `NSDocumentController.openDocument`.
+///
+/// Document views still own final anchor application: the workspace chooses
+/// which tab/document should be active, then that tab's text view scrolls to
+/// the requested anchor once it is mounted.
 @MainActor
 public final class NavigationRouter {
     public static let shared = NavigationRouter()
@@ -33,6 +47,7 @@ public final class NavigationRouter {
     /// file just brings its existing window forward (NSDocumentController
     /// dedupes), so resubscribes simply replace the slot.
     private var subscribers: [URL: WeakSubscriber] = [:]
+    private weak var activeWorkspace: (any WorkspaceNavigationSubscriber)?
 
     private struct WeakSubscriber {
         weak var ref: (any NavigationSubscriber)?
@@ -54,25 +69,62 @@ public final class NavigationRouter {
 
     private init() {}
 
-    /// Deliver a navigation to `targetURL`. Already-open subscribers
-    /// receive the request synchronously; otherwise the request is
-    /// queued and `NSDocumentController` is asked to open the file
-    /// (the freshly-loaded document consumes the pending request on
-    /// subscribe). Stale weak entries (subscriber deallocated) are
-    /// cleaned up lazily here.
-    public func navigate(to targetURL: URL, anchor: LinkNavigationAnchor?) {
+    /// Deliver a navigation to `targetURL`. Default and new-tab requests go
+    /// through the active workspace when one exists; explicit new-window
+    /// requests use the document controller path.
+    public func navigate(
+        to targetURL: URL,
+        anchor: LinkNavigationAnchor?,
+        disposition: NavigationDisposition = .replaceInCurrentTab
+    ) {
         let canonical = VaultRegistry.canonicalNoteURL(for: targetURL)
         let request = NavigationRequest(targetURL: canonical, anchor: anchor)
+
+        switch disposition {
+        case .replaceInCurrentTab, .newTab:
+            if let activeWorkspace {
+                activeWorkspace.handleNavigation(request, disposition: disposition)
+                return
+            }
+            openInDocumentWindow(request)
+        case .newWindow:
+            openInDocumentWindow(request)
+        }
+    }
+
+    /// Workspace controllers call this when their containing window becomes
+    /// key, making them the target for subsequent default navigations.
+    public func activateWorkspace(_ workspace: any WorkspaceNavigationSubscriber) {
+        activeWorkspace = workspace
+    }
+
+    /// Clear the active workspace if it is the one currently registered.
+    public func deactivateWorkspace(_ workspace: any WorkspaceNavigationSubscriber) {
+        if let activeWorkspace,
+           activeWorkspace as AnyObject === workspace as AnyObject {
+            self.activeWorkspace = nil
+        }
+    }
+
+    private func openInDocumentWindow(_ request: NavigationRequest) {
+        if deliverToOpenDocument(request) {
+            return
+        }
+        pending[request.targetURL] = request
+        openDocument(request.targetURL)
+    }
+
+    private func deliverToOpenDocument(_ request: NavigationRequest) -> Bool {
+        let canonical = VaultRegistry.canonicalNoteURL(for: request.targetURL)
         if let weak = subscribers[canonical] {
             if let subscriber = weak.ref {
                 subscriber.handleNavigation(request)
-                return
+                return true
             }
             // Stale entry — the subscriber was deallocated.
             subscribers.removeValue(forKey: canonical)
         }
-        pending[canonical] = request
-        openDocument(canonical)
+        return false
     }
 
     /// Register a subscriber for `url`. If a request is already
@@ -100,6 +152,7 @@ public final class NavigationRouter {
     func resetForTesting() {
         pending.removeAll()
         subscribers.removeAll()
+        activeWorkspace = nil
     }
 
     /// Visible for tests — peek at queued requests without
@@ -128,4 +181,9 @@ public struct NavigationRequest: Equatable, Sendable {
 @MainActor
 public protocol NavigationSubscriber: AnyObject {
     func handleNavigation(_ request: NavigationRequest)
+}
+
+@MainActor
+public protocol WorkspaceNavigationSubscriber: AnyObject {
+    func handleNavigation(_ request: NavigationRequest, disposition: NavigationDisposition)
 }

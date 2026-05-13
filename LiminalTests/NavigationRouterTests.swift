@@ -148,6 +148,45 @@ struct NavigationRouterTests {
 
         #expect(subscriber.received.count == 1)
     }
+
+    @Test("default navigation targets the active workspace instead of opening a document window")
+    func defaultNavigationTargetsActiveWorkspace() {
+        let router = NavigationRouter.shared
+        router.resetForTesting()
+        defer { router.resetForTesting() }
+        var openCalls: [URL] = []
+        router.openDocument = { url in openCalls.append(url) }
+
+        let workspace = StubWorkspace()
+        router.activateWorkspace(workspace)
+
+        let url = URL(fileURLWithPath: "/tmp/v/Target.lim")
+        router.navigate(to: url, anchor: .heading("Today"))
+
+        #expect(openCalls.isEmpty)
+        #expect(workspace.received.count == 1)
+        #expect(workspace.received.first?.request.targetURL == VaultRegistry.canonicalNoteURL(for: url))
+        #expect(workspace.received.first?.request.anchor == .heading("Today"))
+        #expect(workspace.received.first?.disposition == .replaceInCurrentTab)
+    }
+
+    @Test("new-window navigation bypasses the active workspace")
+    func newWindowNavigationBypassesActiveWorkspace() {
+        let router = NavigationRouter.shared
+        router.resetForTesting()
+        defer { router.resetForTesting() }
+        var openCalls: [URL] = []
+        router.openDocument = { url in openCalls.append(url) }
+
+        let workspace = StubWorkspace()
+        router.activateWorkspace(workspace)
+
+        let url = URL(fileURLWithPath: "/tmp/v/Target.lim")
+        router.navigate(to: url, anchor: nil, disposition: .newWindow)
+
+        #expect(workspace.received.isEmpty)
+        #expect(openCalls == [VaultRegistry.canonicalNoteURL(for: url)])
+    }
 }
 
 @MainActor
@@ -158,6 +197,21 @@ private final class StubSubscriber: NavigationSubscriber {
     nonisolated func handleNavigation(_ request: NavigationRequest) {
         MainActor.assumeIsolated {
             received.append(request)
+        }
+    }
+}
+
+@MainActor
+private final class StubWorkspace: WorkspaceNavigationSubscriber {
+    var received: [(request: NavigationRequest, disposition: NavigationDisposition)] = []
+    nonisolated init() {}
+
+    nonisolated func handleNavigation(
+        _ request: NavigationRequest,
+        disposition: NavigationDisposition
+    ) {
+        MainActor.assumeIsolated {
+            received.append((request, disposition))
         }
     }
 }

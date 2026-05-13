@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct LiminalEditorView: View {
-    @ObservedObject var document: LiminalSourceDocument
+    @ObservedObject private var document: LiminalSourceDocument
+    @StateObject private var workspace: WorkspaceWindowController
     @ObservedObject private var prefs = EditorPreferences.shared
 
     /// File URL passed down from the `DocumentGroup`'s
@@ -10,60 +12,256 @@ struct LiminalEditorView: View {
     /// (vault registration, navigation) can reach it.
     let fileURL: URL?
 
+    init(document: LiminalSourceDocument, fileURL: URL?) {
+        self.document = document
+        self.fileURL = fileURL
+        _workspace = StateObject(
+            wrappedValue: WorkspaceWindowController(
+                initialDocument: document,
+                initialFileURL: fileURL
+            )
+        )
+    }
+
     var body: some View {
         NavigationSplitView {
             sidebar
         } detail: {
-            HStack(spacing: 0) {
-                editorContent
-                if let url = fileURL, prefs.backlinksInspectorVisible {
-                    Divider()
-                    BacklinkInspectorView(
-                        entry: VaultRegistry.shared.entry(for: url),
-                        currentDocURL: url
-                    )
-                }
-            }
+            detail
         }
-        .onAppear { document.setFileURL(fileURL) }
+        .background(WorkspaceWindowActivationBridge(workspace: workspace))
+        .onAppear {
+            workspace.updateHostDocument(document, fileURL: fileURL)
+            NavigationRouter.shared.activateWorkspace(workspace)
+        }
         .onChange(of: fileURL) { _, newValue in
-            document.setFileURL(newValue)
+            workspace.updateHostDocument(document, fileURL: newValue)
+        }
+        .onDisappear {
+            NavigationRouter.shared.deactivateWorkspace(workspace)
         }
     }
 
     @ViewBuilder
     private var sidebar: some View {
-        if let url = fileURL {
-            VaultNavigatorView(
+        if let tab = workspace.activeTab {
+            WorkspaceSidebar(tab: tab)
+        } else {
+            EmptyWorkspaceSidebar()
+        }
+    }
+
+    private var detail: some View {
+        VStack(spacing: 0) {
+            WorkspaceTabBar(
+                tabs: workspace.tabs,
+                selectedTabID: Binding(
+                    get: { workspace.selectedTabID },
+                    set: { newValue in
+                        if let newValue {
+                            workspace.selectTab(newValue)
+                        }
+                    }
+                ),
+                close: { workspace.closeTab($0) }
+            )
+            Divider()
+            if let tab = workspace.activeTab {
+                WorkspaceDetail(tab: tab, prefs: prefs)
+            }
+        }
+    }
+}
+
+private struct WorkspaceSidebar: View {
+    @ObservedObject var tab: WorkspaceTab
+
+    var body: some View {
+        if let url = tab.fileURL {
+            VaultSidebarView(
                 entry: VaultRegistry.shared.entry(for: url),
                 currentDocURL: url
             )
-            .frame(minWidth: 200, idealWidth: 240)
+            .frame(minWidth: 240, idealWidth: 320)
         } else {
-            VStack {
-                Text("Save the document to enable\nthe vault navigator.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding()
-                Spacer()
+            EmptyWorkspaceSidebar()
+        }
+    }
+}
+
+private struct EmptyWorkspaceSidebar: View {
+    var body: some View {
+        VStack {
+            Text("Save the document to enable\nthe vault navigator.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding()
+            Spacer()
+        }
+        .frame(minWidth: 240, idealWidth: 320)
+    }
+}
+
+private struct WorkspaceDetail: View {
+    @ObservedObject var tab: WorkspaceTab
+    @ObservedObject var prefs: EditorPreferences
+
+    var body: some View {
+        HStack(spacing: 0) {
+            editorContent
+            if let url = tab.fileURL, prefs.backlinksInspectorVisible {
+                Divider()
+                BacklinkInspectorView(
+                    entry: VaultRegistry.shared.entry(for: url),
+                    currentDocURL: url
+                )
             }
-            .frame(minWidth: 200, idealWidth: 240)
         }
     }
 
     private var editorContent: some View {
         VStack(spacing: 0) {
-            LiminalTextView(document: document)
-                .overlay(alignment: .bottom) {
-                    HintOverlayHost(controller: document.vimController)
-                }
+            LiminalTextView(
+                document: tab.document,
+                navigationRequest: tab.navigationRequest
+            )
+            .id(tab.contentIdentity)
+            .overlay(alignment: .bottom) {
+                HintOverlayHost(controller: tab.document.vimController)
+            }
             Divider()
-            StatusBar(document: document, controller: document.vimController)
+            StatusBar(document: tab.document, controller: tab.document.vimController)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
             Divider()
-            CSTInspectorView(inspector: document.cstInspector)
+            CSTInspectorView(inspector: tab.document.cstInspector)
+        }
+    }
+}
+
+private struct WorkspaceTabBar: View {
+    let tabs: [WorkspaceTab]
+    @Binding var selectedTabID: WorkspaceTab.ID?
+    let close: (WorkspaceTab.ID) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 1) {
+                ForEach(tabs) { tab in
+                    WorkspaceTabButton(
+                        tab: tab,
+                        isSelected: selectedTabID == tab.id,
+                        canClose: tabs.count > 1,
+                        select: { selectedTabID = tab.id },
+                        close: { close(tab.id) }
+                    )
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+        }
+        .frame(height: 34)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct WorkspaceTabButton: View {
+    @ObservedObject var tab: WorkspaceTab
+    let isSelected: Bool
+    let canClose: Bool
+    let select: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: select) {
+                HStack(spacing: 5) {
+                    Image(systemName: "doc.text")
+                        .font(.caption)
+                    Text(tab.title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(minWidth: 72, maxWidth: 180, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(background)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+
+            if canClose {
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Close Tab")
+            }
+        }
+    }
+
+    private var background: Color {
+        isSelected
+            ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.22)
+            : Color.clear
+    }
+}
+
+private struct WorkspaceWindowActivationBridge: NSViewRepresentable {
+    let workspace: WorkspaceWindowController
+
+    func makeNSView(context: Context) -> ActivationView {
+        let view = ActivationView()
+        view.onBecomeKey = { [weak workspace] in
+            Task { @MainActor in
+                guard let workspace else { return }
+                NavigationRouter.shared.activateWorkspace(workspace)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: ActivationView, context: Context) {
+        nsView.onBecomeKey = { [weak workspace] in
+            Task { @MainActor in
+                guard let workspace else { return }
+                NavigationRouter.shared.activateWorkspace(workspace)
+            }
+        }
+    }
+
+    final class ActivationView: NSView {
+        var onBecomeKey: (() -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didBecomeKeyNotification,
+                object: nil
+            )
+            guard let window else { return }
+            if window.isKeyWindow {
+                onBecomeKey?()
+            }
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey(_:)),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window,
+            )
+        }
+
+        @objc private func windowDidBecomeKey(_ notification: Notification) {
+            onBecomeKey?()
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
         }
     }
 }

@@ -22,7 +22,17 @@ public final class VaultRegistry {
     /// Look up (or lazily create) the entry for the vault containing
     /// `documentURL`.
     public func entry(for documentURL: URL) -> VaultEntry {
-        let root = Self.canonicalVaultRoot(for: documentURL)
+        entryForCanonical(Self.canonicalVaultRoot(for: documentURL))
+    }
+
+    /// Look up (or lazily create) the entry for a vault root URL
+    /// directly (e.g. when a window is keyed on the vault root, not
+    /// on a document URL inside it).
+    public func entry(forRoot rootURL: URL) -> VaultEntry {
+        entryForCanonical(rootURL.resolvingSymlinksInPath().standardizedFileURL)
+    }
+
+    private func entryForCanonical(_ root: URL) -> VaultEntry {
         if let existing = entries[root] {
             return existing
         }

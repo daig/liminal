@@ -1,3 +1,4 @@
+import AppKit
 import CambiumCore
 import SwiftUI
 
@@ -100,11 +101,19 @@ struct FileNavigatorRow: View {
 
     private func openFile() {
         guard let url = node.url else { return }
-        NavigationRouter.shared.navigate(to: url, anchor: nil)
+        NavigationRouter.shared.navigate(
+            to: url,
+            anchor: nil,
+            disposition: NavigationDisposition.click()
+        )
     }
 
     private func jumpToHeading(_ heading: HeadingAnchor) {
         guard let url = node.url else { return }
-        NavigationRouter.shared.navigate(to: url, anchor: .heading(heading.title))
+        NavigationRouter.shared.navigate(
+            to: url,
+            anchor: .heading(heading.title),
+            disposition: NavigationDisposition.click()
+        )
     }
 }
