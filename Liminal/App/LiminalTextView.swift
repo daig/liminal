@@ -157,6 +157,16 @@ struct LiminalTextView: NSViewRepresentable {
         /// corner is the cursor's current (line, column).
         private var visualBlockAnchor: (line: Int, column: Int)?
 
+        /// Visual-mode head: the moving end of the selection (the end
+        /// the user is extending). Tracked separately because reading
+        /// `textView.selectedRange().location` in a forward-extending
+        /// visual selection always returns the *anchor* (the smaller
+        /// of {anchor, head}) — so without this field, motion handlers
+        /// would compute their next target from the anchor and the
+        /// selection would cap at +1 cell. Updated by every extend
+        /// call; cleared on visual-mode exit.
+        private var visualHeadUTF16: Int?
+
         init(document: LiminalSourceDocument) {
             self.document = document
             self.hoverPreviewController = HoverPreviewController(document: document)
@@ -180,6 +190,7 @@ struct LiminalTextView: NSViewRepresentable {
                         // a stale selection.
                         self.visualAnchorUTF16 = nil
                         self.visualBlockAnchor = nil
+                        self.visualHeadUTF16 = nil
                     }
                     self.refreshCursorStyle()
                 }
@@ -403,7 +414,7 @@ struct LiminalTextView: NSViewRepresentable {
 
         func moveCursor(motion: CursorMotion, count: Int) {
             guard let textView else { return }
-            let currentLocation = textView.selectedRange().location
+            let currentLocation = currentMotionCursorUTF16()
             let newLocation = CursorMotionEngine.newOffset(
                 for: motion,
                 in: textView.string,
@@ -412,6 +423,24 @@ struct LiminalTextView: NSViewRepresentable {
             )
             setCursorAt(utf16Location: newLocation)
             textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        /// Where the cursor is for purposes of motion. In a visual mode
+        /// this is the *head* (the moving end of the selection) — NOT
+        /// the anchor end that `textView.selectedRange().location`
+        /// returns when extending forward. In normal / insert the
+        /// selection start IS the cursor, so this collapses to the same
+        /// value. Every motion handler (h/j/k/l, gj/gk, gg/G, [[/]],
+        /// H/M/L, w/b/e, etc.) must go through this — otherwise
+        /// forward-extending visual selections cap at +1 cell because
+        /// the next motion target keeps recomputing from the anchor.
+        private func currentMotionCursorUTF16() -> Int {
+            guard let textView else { return 0 }
+            if document.vimController.mode.isVisual,
+               let head = visualHeadUTF16 {
+                return head
+            }
+            return textView.selectedRange().location
         }
 
         func structuralMotion(_ motion: StructuralMotion, count: Int) {
@@ -1422,8 +1451,13 @@ struct LiminalTextView: NSViewRepresentable {
 
         private func currentCursorByteOffset() -> Int? {
             guard let textView else { return nil }
-            let selectedRange = textView.selectedRange()
-            let cursorNSRange = NSRange(location: selectedRange.location, length: 0)
+            // Use the head in visual modes so motion handlers (which
+            // call into the byte-offset domain — structural, viewport,
+            // display-line) advance from the moving end of the
+            // selection, not from the anchor. See
+            // `currentMotionCursorUTF16` for the full explanation.
+            let utf16 = currentMotionCursorUTF16()
+            let cursorNSRange = NSRange(location: utf16, length: 0)
             return LiminalTextView.utf16RangeToByteRange(
                 cursorNSRange,
                 in: textView.string
@@ -1476,6 +1510,7 @@ struct LiminalTextView: NSViewRepresentable {
         func enterVisualMode(kind: VisualKind) {
             guard let textView else { return }
             let cursor = textView.selectedRange().location
+            visualHeadUTF16 = cursor
             switch kind {
             case .charwise:
                 visualAnchorUTF16 = cursor
@@ -1501,8 +1536,10 @@ struct LiminalTextView: NSViewRepresentable {
         private func extendCharwiseSelection(toUTF16 head: Int) {
             guard let textView, let anchor = visualAnchorUTF16 else { return }
             let textLength = (textView.string as NSString).length
-            let lo = max(0, min(anchor, head))
-            let hi = max(anchor, head)
+            let clampedHead = max(0, min(head, textLength))
+            visualHeadUTF16 = clampedHead
+            let lo = max(0, min(anchor, clampedHead))
+            let hi = max(anchor, clampedHead)
             let endExclusive = min(hi + 1, textLength)
             let length = max(0, endExclusive - lo)
             textView.setSelectedRange(NSRange(location: lo, length: length))
@@ -1514,8 +1551,10 @@ struct LiminalTextView: NSViewRepresentable {
         private func extendLinewiseSelection(toUTF16 head: Int) {
             guard let textView, let anchor = visualAnchorUTF16 else { return }
             let nsString = textView.string as NSString
+            let clampedHead = max(0, min(head, nsString.length))
+            visualHeadUTF16 = clampedHead
             let anchorLine = lineRange(at: anchor, in: nsString)
-            let headLine = lineRange(at: head, in: nsString)
+            let headLine = lineRange(at: clampedHead, in: nsString)
             let lo = min(anchorLine.start, headLine.start)
             let hi = max(anchorLine.end, headLine.end)
             textView.setSelectedRange(NSRange(location: lo, length: hi - lo))
@@ -1527,7 +1566,9 @@ struct LiminalTextView: NSViewRepresentable {
         private func extendBlockwiseSelection(toUTF16 head: Int) {
             guard let textView, let anchor = visualBlockAnchor else { return }
             let nsString = textView.string as NSString
-            let (headLine, headCol) = lineAndColumn(forUTF16: head, in: nsString)
+            let clampedHead = max(0, min(head, nsString.length))
+            visualHeadUTF16 = clampedHead
+            let (headLine, headCol) = lineAndColumn(forUTF16: clampedHead, in: nsString)
             let minLine = min(anchor.line, headLine)
             let maxLine = max(anchor.line, headLine)
             let minCol = min(anchor.column, headCol)
