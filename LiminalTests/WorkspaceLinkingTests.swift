@@ -753,6 +753,36 @@ struct WorkspaceLinkingTests {
         #expect(index.heading(after: 999) == nil)
     }
 
+    @Test("parentHeading(of:) returns the most recent preceding heading at a shallower level")
+    func parentHeadingAscends() {
+        let h1 = HeadingAnchor(title: "Top", sourceOffset: 0, level: 1)
+        let h2a = HeadingAnchor(title: "Sub A", sourceOffset: 50, level: 2)
+        let h3 = HeadingAnchor(title: "Sub-sub", sourceOffset: 100, level: 3)
+        let h2b = HeadingAnchor(title: "Sub B", sourceOffset: 200, level: 2)
+        let index = DocumentIndex(headings: [h1, h2a, h3, h2b])
+
+        // h3 (level 3) → h2a (the most recent shallower-level preceding it)
+        #expect(index.parentHeading(of: h3) == h2a)
+        // h2a (level 2) → h1 (level 1)
+        #expect(index.parentHeading(of: h2a) == h1)
+        // h2b (level 2) → h1 (skips h2a, h3 — same/deeper level)
+        #expect(index.parentHeading(of: h2b) == h1)
+        // h1 (level 1) → nil (top of the hierarchy)
+        #expect(index.parentHeading(of: h1) == nil)
+    }
+
+    @Test("parentHeading(of:) skips intervening same-level siblings")
+    func parentHeadingSkipsSiblings() {
+        let h1 = HeadingAnchor(title: "Top", sourceOffset: 0, level: 1)
+        let h2a = HeadingAnchor(title: "A", sourceOffset: 10, level: 2)
+        let h2b = HeadingAnchor(title: "B", sourceOffset: 20, level: 2)
+        let h2c = HeadingAnchor(title: "C", sourceOffset: 30, level: 2)
+        let index = DocumentIndex(headings: [h1, h2a, h2b, h2c])
+
+        // From the third sibling, parent climbs all the way to h1.
+        #expect(index.parentHeading(of: h2c) == h1)
+    }
+
     @Test("reference(before:) walks references in source order, strictly less")
     func referenceBefore() {
         let r1 = DocumentReference(

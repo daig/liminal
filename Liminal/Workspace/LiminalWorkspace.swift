@@ -133,12 +133,22 @@ public struct DocumentIndex: Equatable, Sendable {
         innermostReference(in: references, containing: offset) { $0.sourceRange }
     }
 
-    /// Vim `gh`: the heading whose section contains `offset`. The
-    /// last heading whose source offset is at or before `offset` —
-    /// when the cursor is on a heading line itself, that same
-    /// heading is returned (the cursor is already "in its section").
+    /// The heading whose section contains `offset`. The last heading
+    /// whose source offset is at or before `offset` — when the
+    /// cursor is on a heading line itself, that same heading is
+    /// returned.
     public func heading(enclosing offset: TextSize) -> HeadingAnchor? {
         headings.last { $0.sourceOffset <= offset }
+    }
+
+    /// Vim `gh`'s ascend semantics: the parent heading of `heading`,
+    /// i.e., the most recent preceding heading at a *shallower*
+    /// level. Returns nil for a top-level (level-1) heading with no
+    /// preceding heading.
+    public func parentHeading(of heading: HeadingAnchor) -> HeadingAnchor? {
+        headings.last {
+            $0.sourceOffset < heading.sourceOffset && $0.level < heading.level
+        }
     }
 
     /// Vim `[[`: the most recent heading strictly before `offset`.

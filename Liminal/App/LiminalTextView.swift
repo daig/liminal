@@ -404,35 +404,70 @@ struct LiminalTextView: NSViewRepresentable {
                 setCursor(byteOffset: byteOffset)
 
             case .enclosingHeading:
-                guard let docIndex = currentDocumentIndex(),
-                      let heading = docIndex.heading(
-                          enclosing: TextSize(UInt32(startOffset))
-                      )
-                else { return }
-                let target = headingFirstNonBlank(at: heading, in: textView.string)
-                setCursor(byteOffset: target)
+                // `gh` semantics: jump to the heading whose section
+                // contains the cursor. From inside section X's body
+                // → land on X. From on X's heading line → ascend to
+                // X's parent (so successive `gh`s walk up the
+                // hierarchy). Counts repeat the ascend.
+                guard let docIndex = currentDocumentIndex() else { return }
+                let source = textView.string
+                var pivot = startOffset
+                var target: HeadingAnchor?
+                for _ in 0..<steps {
+                    guard let h = docIndex.heading(
+                        enclosing: TextSize(UInt32(pivot))
+                    ) else { break }
+                    let nextTarget: HeadingAnchor?
+                    if isCursorOnHeadingLine(
+                        cursorByte: pivot,
+                        heading: h,
+                        in: source
+                    ) {
+                        nextTarget = docIndex.parentHeading(of: h)
+                    } else {
+                        nextTarget = h
+                    }
+                    guard let next = nextTarget else { break }
+                    target = next
+                    pivot = Int(next.sourceOffset.rawValue)
+                }
+                if let final = target {
+                    setCursor(byteOffset: headingFirstNonBlank(at: final, in: source))
+                }
 
             case .previousHeading, .nextHeading:
+                // `[[` / `]]` semantics: walk between *different*
+                // headings. From inside section X's body, `[[` should
+                // land on X-1, not X — so we pivot through the
+                // enclosing heading first, then take strict-less
+                // against its source offset. After step 1 the cursor
+                // is on a heading and the same logic naturally walks
+                // further back. `]]` doesn't have this asymmetry
+                // (strict-greater already skips the enclosing
+                // heading) but routes through the same path for
+                // symmetry.
                 guard let docIndex = currentDocumentIndex() else { return }
-                var byteOffset = startOffset
+                let source = textView.string
+                var pivot = startOffset
                 for _ in 0..<steps {
                     let nextHeading: HeadingAnchor?
-                    if motion == .previousHeading {
+                    switch motion {
+                    case .previousHeading:
+                        let pivotOffset = docIndex.heading(
+                            enclosing: TextSize(UInt32(pivot))
+                        )?.sourceOffset ?? TextSize(UInt32(pivot))
+                        nextHeading = docIndex.heading(before: pivotOffset)
+                    case .nextHeading:
                         nextHeading = docIndex.heading(
-                            before: TextSize(UInt32(byteOffset))
+                            after: TextSize(UInt32(pivot))
                         )
-                    } else {
-                        nextHeading = docIndex.heading(
-                            after: TextSize(UInt32(byteOffset))
-                        )
+                    default:
+                        nextHeading = nil
                     }
                     guard let nextHeading else { break }
-                    byteOffset = headingFirstNonBlank(
-                        at: nextHeading,
-                        in: textView.string
-                    )
+                    pivot = headingFirstNonBlank(at: nextHeading, in: source)
                 }
-                setCursor(byteOffset: byteOffset)
+                setCursor(byteOffset: pivot)
 
             case .previousReference, .nextReference:
                 guard let docIndex = currentDocumentIndex() else { return }
@@ -455,6 +490,32 @@ struct LiminalTextView: NSViewRepresentable {
             }
 
             textView.scrollRangeToVisible(textView.selectedRange())
+        }
+
+        /// True when `cursorByte` falls on the same source line as
+        /// `heading.sourceOffset`. Used by `gh` to decide between
+        /// "land on this section's heading" (cursor in body) and
+        /// "ascend to parent" (cursor on the heading line itself).
+        private func isCursorOnHeadingLine(
+            cursorByte: Int,
+            heading: HeadingAnchor,
+            in source: String
+        ) -> Bool {
+            let utf8 = source.utf8
+            let headingByte = Int(heading.sourceOffset.rawValue)
+            let lo = min(cursorByte, headingByte)
+            let hi = max(cursorByte, headingByte)
+            guard hi <= utf8.count else { return false }
+            // Walk the bytes between cursor and heading; if any is a
+            // newline, they're on different lines.
+            let loIdx = utf8.index(utf8.startIndex, offsetBy: lo)
+            let hiIdx = utf8.index(utf8.startIndex, offsetBy: hi)
+            var idx = loIdx
+            while idx < hiIdx {
+                if utf8[idx] == 0x0A /* \n */ { return false }
+                idx = utf8.index(after: idx)
+            }
+            return true
         }
 
         /// Resolve a heading anchor's "land here" byte offset:
@@ -823,26 +884,6 @@ struct LiminalTextView: NSViewRepresentable {
             )
         }
 
-        /// `gx`: open the external URL at cursor via the system
-        /// handler. Silent no-op if the cursor isn't on a reference,
-        /// or the reference isn't external.
-        func openURLAtCursor() {
-            guard let url = document.fileURL,
-                  let docIndex = currentDocumentIndex(),
-                  let byteOffset = currentCursorByteOffset()
-            else { return }
-            let canonicalURL = VaultRegistry.canonicalNoteURL(for: url)
-            let entry = VaultRegistry.shared.entry(for: url)
-            guard let result = CmdClickHandler.decision(
-                atByteOffset: TextSize(UInt32(byteOffset)),
-                documentURL: canonicalURL,
-                documentIndex: docIndex,
-                vaultLinkIndex: entry.linkIndex
-            ) else { return }
-            if case .openExternal(let url) = result.decision {
-                NSWorkspace.shared.open(url)
-            }
-        }
 
         /// Pull the cached `DocumentIndex` from the vault entry, or
         /// build it on demand from the current root if the cache hasn't

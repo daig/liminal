@@ -244,17 +244,6 @@ struct VimControllerTests {
         #expect(spy.goToDefinitionCallCount == 1)
     }
 
-    @Test("gx dispatches openURLAtCursor")
-    func gxDelegated() {
-        let c = VimController()
-        let spy = VimDelegateSpy()
-        c.delegate = spy
-
-        _ = c.handle(.char("g"))
-        _ = c.handle(.char("x"))
-        #expect(spy.openURLCallCount == 1)
-    }
-
     // MARK: - Status / hint presentation
 
     @Test("initial state: status mode is normal, detail is nil, no snapshot")
@@ -555,7 +544,6 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var viewportMotionCalls: [ViewportCall] = []
     var displayLineMotionCalls: [DisplayLineCall] = []
     var goToDefinitionCallCount = 0
-    var openURLCallCount = 0
     var toggleTaskCallCount = 0
     var setMarkCalls: [Character] = []
     var jumpToMarkCalls: [Character] = []
@@ -574,9 +562,6 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func goToDefinitionAtCursor() {
         goToDefinitionCallCount += 1
-    }
-    func openURLAtCursor() {
-        openURLCallCount += 1
     }
     func toggleTaskAtCursor() {
         toggleTaskCallCount += 1

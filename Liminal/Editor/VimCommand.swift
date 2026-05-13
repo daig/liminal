@@ -13,13 +13,10 @@ public enum VimCommand: Sendable, Equatable {
 
     /// `gd`: navigate to the definition of the reference at cursor
     /// (Cmd-click semantics, but keyboard-driven). The Coordinator
-    /// reuses the existing `CmdClickHandler` activation flow.
+    /// reuses the existing `CmdClickHandler` activation flow, which
+    /// handles every reference kind including external URLs (so
+    /// there's no separate `gx` — `gd` opens URLs too).
     case goToDefinitionAtCursor
-
-    /// `gx`: open the external URL at cursor via the system handler.
-    /// Silent no-op when the cursor isn't on an external-URI
-    /// reference.
-    case openURLAtCursor
 
     // Marks. `awaitMarkName` arms the char-argument-pending state; the
     // next keypress is consumed as the mark name and dispatched as

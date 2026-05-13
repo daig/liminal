@@ -244,8 +244,6 @@ public final class VimController: ObservableObject {
             delegate?.displayLineMotion(motion, count: count)
         case .goToDefinitionAtCursor:
             delegate?.goToDefinitionAtCursor()
-        case .openURLAtCursor:
-            delegate?.openURLAtCursor()
         case .toggleTaskAtCursor:
             delegate?.toggleTaskAtCursor()
         case .awaitMarkName(let op):
@@ -350,12 +348,8 @@ public final class VimController: ObservableObject {
             .structuralMotion(.enclosingHeading, count: $0 ?? 1)
         }
         t.bind(.normal, [.char("g"), .char("d")],
-               description: "Go to definition") { _ in
+               description: "Follow reference at cursor (incl. URLs)") { _ in
             .goToDefinitionAtCursor
-        }
-        t.bind(.normal, [.char("g"), .char("x")],
-               description: "Open URL at cursor") { _ in
-            .openURLAtCursor
         }
 
         // Bracket-prefix sequential navigation: `[<x>` / `]<x>` walk
@@ -497,7 +491,6 @@ public protocol VimControllerDelegate: AnyObject {
     func viewportMotion(_ motion: ViewportMotion, count: Int)
     func displayLineMotion(_ motion: DisplayLineMotion, count: Int)
     func goToDefinitionAtCursor()
-    func openURLAtCursor()
     func toggleTaskAtCursor()
     func setMark(_ name: Character)
     func jumpToMark(_ name: Character)
