@@ -1021,6 +1021,7 @@ struct LiminalTextView: NSViewRepresentable {
         private struct VisualSnapshot {
             let text: String
             let kind: YankKind
+            let structuralFragmentData: Data?
             let ranges: [NSRange] // for delete: replace each in reverse
             let cursorAfter: Int  // start of the selection (vim convention)
         }
@@ -1035,6 +1036,7 @@ struct LiminalTextView: NSViewRepresentable {
                 return VisualSnapshot(
                     text: nsString.substring(with: r),
                     kind: .characterwise,
+                    structuralFragmentData: nil,
                     ranges: [r],
                     cursorAfter: r.location
                 )
@@ -1044,6 +1046,7 @@ struct LiminalTextView: NSViewRepresentable {
                 return VisualSnapshot(
                     text: nsString.substring(with: r),
                     kind: .linewise,
+                    structuralFragmentData: nil,
                     ranges: [r],
                     cursorAfter: r.location
                 )
@@ -1055,6 +1058,7 @@ struct LiminalTextView: NSViewRepresentable {
                 return VisualSnapshot(
                     text: rows.joined(separator: "\n"),
                     kind: .blockwise,
+                    structuralFragmentData: nil,
                     ranges: ranges,
                     cursorAfter: ranges.first?.location ?? 0
                 )
@@ -1071,9 +1075,13 @@ struct LiminalTextView: NSViewRepresentable {
                     forByteStart: forest.byteRange.start.rawValue,
                     length: forest.byteRange.length.rawValue
                 ), r.length > 0 else { return nil }
+                guard let fragment = try? StructuralCSTFragment.capture(forest),
+                      let fragmentData = try? fragment.serializedData()
+                else { return nil }
                 return VisualSnapshot(
-                    text: nsString.substring(with: r),
+                    text: fragment.sourceText,
                     kind: .cstForest,
+                    structuralFragmentData: fragmentData,
                     ranges: [r],
                     cursorAfter: r.location
                 )
@@ -1084,7 +1092,11 @@ struct LiminalTextView: NSViewRepresentable {
 
         func yankSelection() {
             guard let snap = snapshotVisualSelection() else { return }
-            yankText(snap.text, kind: snap.kind)
+            yankText(
+                snap.text,
+                kind: snap.kind,
+                structuralFragmentData: snap.structuralFragmentData
+            )
             // Mode flip back to .normal happens in the controller's
             // dispatch; cursor placement here so it lands at the
             // start of the previous selection.
@@ -1095,7 +1107,12 @@ struct LiminalTextView: NSViewRepresentable {
             guard let snap = snapshotVisualSelection(),
                   let before = document.makeUndoSnapshot(cursor: snap.cursorAfter)
             else { return }
-            let edits = deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
+            let edits = deleteRanges(
+                snap.ranges,
+                yankAs: snap.kind,
+                text: snap.text,
+                structuralFragmentData: snap.structuralFragmentData
+            )
             setCursorAt(utf16Location: snap.cursorAfter)
             document.recordTextTransaction(
                 before: before,
@@ -1107,7 +1124,12 @@ struct LiminalTextView: NSViewRepresentable {
         func changeSelection() {
             guard let snap = snapshotVisualSelection() else { return }
             document.beginInsertSession(at: snap.cursorAfter)
-            _ = deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
+            _ = deleteRanges(
+                snap.ranges,
+                yankAs: snap.kind,
+                text: snap.text,
+                structuralFragmentData: snap.structuralFragmentData
+            )
             setCursorAt(utf16Location: snap.cursorAfter)
         }
 
@@ -1181,9 +1203,17 @@ struct LiminalTextView: NSViewRepresentable {
         /// Write `text` to the system pasteboard with `kind`. No-op for
         /// empty strings. Shared by visual yank, operator-pending yank,
         /// and the delete-yank step inside `deleteRanges`.
-        private func yankText(_ text: String, kind: YankKind) {
+        private func yankText(
+            _ text: String,
+            kind: YankKind,
+            structuralFragmentData: Data? = nil
+        ) {
             guard !text.isEmpty else { return }
-            SystemPasteboard.write(text: text, kind: kind)
+            SystemPasteboard.write(
+                text: text,
+                kind: kind,
+                structuralFragmentData: structuralFragmentData
+            )
         }
 
         /// Delete the contents of `ranges`. If `text` is non-nil, copy
@@ -1194,14 +1224,21 @@ struct LiminalTextView: NSViewRepresentable {
         private func deleteRanges(
             _ ranges: [NSRange],
             yankAs kind: YankKind,
-            text: String?
+            text: String?,
+            structuralFragmentData: Data? = nil
         ) -> [TextEdit] {
             guard let textView, !ranges.isEmpty else { return [] }
             let sourceBefore = textView.string
             let edits = ranges
                 .filter { $0.length > 0 }
                 .map { textEdit(for: $0, replacement: "", in: sourceBefore) }
-            if let text { yankText(text, kind: kind) }
+            if let text {
+                yankText(
+                    text,
+                    kind: kind,
+                    structuralFragmentData: structuralFragmentData
+                )
+            }
             for range in ranges.sorted(by: { $0.location > $1.location }) {
                 guard range.length > 0 else { continue }
                 if textView.shouldChangeText(in: range, replacementString: "") {
@@ -1318,6 +1355,10 @@ struct LiminalTextView: NSViewRepresentable {
             guard let textView,
                   let entry = SystemPasteboard.read()
             else { return }
+            if entry.kind == .cstForest {
+                pasteStructural(entry, after: after)
+                return
+            }
             let cursor = textView.selectedRange().location
             guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
             let plan = PasteEngine.plan(
@@ -1345,6 +1386,88 @@ struct LiminalTextView: NSViewRepresentable {
                 afterCursor: plan.cursorAfter,
                 edits: [edit]
             )
+        }
+
+        private func pasteStructural(
+            _ entry: VimPasteboardEntry,
+            after: Bool
+        ) {
+            guard let textView,
+                  let fragmentData = entry.structuralFragmentData,
+                  let fragment = try? StructuralCSTFragment.decode(data: fragmentData),
+                  let tree = document.session.currentTree,
+                  let cursorByte = currentCursorByteOffset()
+            else {
+                NSSound.beep()
+                return
+            }
+
+            let cursor = textView.selectedRange().location
+            guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
+            let oldSource = textView.string
+            let structuralPlan: StructuralCSTPastePlan
+            do {
+                guard let plan = try StructuralCSTPastePlanner.plan(
+                    fragment: fragment,
+                    in: tree,
+                    cursorByteOffset: TextSize(UInt32(cursorByte)),
+                    after: after
+                ) else {
+                    NSSound.beep()
+                    return
+                }
+                structuralPlan = plan
+            } catch {
+                NSLog("LiminalTextView: structural paste planning failed: \(error)")
+                NSSound.beep()
+                return
+            }
+
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(
+                structuralPlan.edit.range,
+                in: oldSource
+            ) else {
+                NSSound.beep()
+                return
+            }
+
+            guard document.applyStructuralReplacement(
+                target: structuralPlan.target,
+                replacement: structuralPlan.replacement,
+                edits: [structuralPlan.edit]
+            ) else { return }
+
+            let prior = isApplyingProgrammaticEdit
+            isApplyingProgrammaticEdit = true
+            let replacement = String(
+                decoding: structuralPlan.edit.replacementUTF8,
+                as: UTF8.self
+            )
+            if textView.shouldChangeText(in: nsRange, replacementString: replacement) {
+                textView.replaceCharacters(in: nsRange, with: replacement)
+                textView.didChangeText()
+            }
+            isApplyingProgrammaticEdit = prior
+
+            #if DEBUG
+            precondition(
+                textView.string == document.session.source,
+                "Structural paste text view and target CST source diverged"
+            )
+            #endif
+
+            setCursor(byteOffset: Int(structuralPlan.cursorByteOffset.rawValue))
+            document.recordTextTransaction(
+                before: before,
+                afterCursor: textView.selectedRange().location,
+                edits: [structuralPlan.edit]
+            )
+            guard let root = document.currentRootSyntax else { return }
+            let repaintRanges = LiminalDirtySpan.expandedHighlightRanges(
+                root: root,
+                touching: [structuralPlan.insertedRange]
+            )
+            applyHighlights(inTargetByteRanges: repaintRanges)
         }
 
         /// Pull the cached `DocumentIndex` from the vault entry, or

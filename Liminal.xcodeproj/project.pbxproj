@@ -13,6 +13,7 @@
 		CA2000000000000000000005 /* CambiumASTSupport in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000004 /* CambiumASTSupport */; };
 		CA2000000000000000000006 /* CambiumSyntaxMacros in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000005 /* CambiumSyntaxMacros */; };
 		CA2000000000000000000007 /* CambiumSelection in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000006 /* CambiumSelection */; };
+		CA2000000000000000000008 /* CambiumSerialization in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000007 /* CambiumSerialization */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,6 +68,7 @@
 				CA2000000000000000000005 /* CambiumASTSupport in Frameworks */,
 				CA2000000000000000000006 /* CambiumSyntaxMacros in Frameworks */,
 				CA2000000000000000000007 /* CambiumSelection in Frameworks */,
+				CA2000000000000000000008 /* CambiumSerialization in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,6 +126,7 @@
 				CA1000000000000000000004 /* CambiumASTSupport */,
 				CA1000000000000000000005 /* CambiumSyntaxMacros */,
 				CA1000000000000000000006 /* CambiumSelection */,
+				CA1000000000000000000007 /* CambiumSerialization */,
 			);
 			productName = Liminal;
 			productReference = 2313497F2FA67AAF00958BAB /* Liminal.app */;
@@ -533,6 +536,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
 			productName = CambiumSelection;
+		};
+		CA1000000000000000000007 /* CambiumSerialization */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
+			productName = CambiumSerialization;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -15,6 +15,22 @@ public enum YankKind: String, Sendable, Equatable, Hashable {
     case cstForest
 }
 
+public struct VimPasteboardEntry: Sendable, Equatable {
+    public let text: String
+    public let kind: YankKind
+    public let structuralFragmentData: Data?
+
+    public init(
+        text: String,
+        kind: YankKind,
+        structuralFragmentData: Data? = nil
+    ) {
+        self.text = text
+        self.kind = kind
+        self.structuralFragmentData = structuralFragmentData
+    }
+}
+
 /// Wrapper around `NSPasteboard.general` that round-trips a vim
 /// `YankKind` alongside the text payload via a custom UTI. When
 /// the pasteboard was last written by another app (no kind UTI
@@ -22,24 +38,40 @@ public enum YankKind: String, Sendable, Equatable, Hashable {
 @MainActor
 public enum SystemPasteboard {
     static let kindUTI = NSPasteboard.PasteboardType("dev.sub.liminal.vim.yankKind")
+    static let structuralFragmentUTI = NSPasteboard.PasteboardType("dev.sub.liminal.cst.fragment")
 
     /// Test/inject hook. Defaults to the system general pasteboard.
     /// Tests assign a fresh `NSPasteboard(name:)` so they don't
     /// stomp on the user's clipboard.
     static var pasteboard: NSPasteboard = .general
 
-    public static func write(text: String, kind: YankKind) {
+    public static func write(
+        text: String,
+        kind: YankKind,
+        structuralFragmentData: Data? = nil
+    ) {
         let pb = pasteboard
-        pb.declareTypes([.string, kindUTI], owner: nil)
+        var types: [NSPasteboard.PasteboardType] = [.string, kindUTI]
+        if structuralFragmentData != nil {
+            types.append(structuralFragmentUTI)
+        }
+        pb.declareTypes(types, owner: nil)
         pb.setString(text, forType: .string)
         pb.setString(kind.rawValue, forType: kindUTI)
+        if let structuralFragmentData {
+            pb.setData(structuralFragmentData, forType: structuralFragmentUTI)
+        }
     }
 
-    public static func read() -> (text: String, kind: YankKind)? {
+    public static func read() -> VimPasteboardEntry? {
         let pb = pasteboard
         guard let text = pb.string(forType: .string) else { return nil }
         let kind = pb.string(forType: kindUTI)
             .flatMap(YankKind.init(rawValue:)) ?? .characterwise
-        return (text, kind)
+        return VimPasteboardEntry(
+            text: text,
+            kind: kind,
+            structuralFragmentData: pb.data(forType: structuralFragmentUTI)
+        )
     }
 }

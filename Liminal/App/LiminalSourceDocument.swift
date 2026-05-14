@@ -279,6 +279,38 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     }
 
     @MainActor
+    func applyStructuralReplacement(
+        target: SyntaxNodeHandle<LiminalLanguage>,
+        replacement: GreenTreeSnapshot<LiminalLanguage>,
+        edits: [TextEdit]
+    ) -> Bool {
+        let oldRoot = currentRootSyntax
+        do {
+            _ = try session.replaceSubtree(target, with: replacement)
+        } catch {
+            NSLog("LiminalSourceDocument: structural replacement failed: \(error)")
+            return false
+        }
+
+        syncFromSession()
+        if let oldRoot, let newRoot = currentRootSyntax {
+            vimController.reanchorMarks(
+                oldRoot: oldRoot,
+                edits: edits,
+                newRoot: newRoot
+            )
+            cstInspector.refresh(
+                cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
+                root: newRoot,
+                source: session.source
+            )
+        }
+        indexInVault()
+        writeThroughIfNeeded()
+        return true
+    }
+
+    @MainActor
     @discardableResult
     func writeToBackingFileIfPossible() -> Bool {
         guard writesThroughToFile, let fileURL else { return false }

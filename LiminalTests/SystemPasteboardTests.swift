@@ -31,6 +31,23 @@ struct SystemPasteboardTests {
             let read = SystemPasteboard.read()
             #expect(read?.text == "hello\nworld")
             #expect(read?.kind == kind)
+            #expect(read?.structuralFragmentData == nil)
+        }
+    }
+
+    @Test("round-trip preserves structural fragment data")
+    func roundTripStructuralFragmentData() {
+        withSandboxPasteboard {
+            let data = Data([0x01, 0x02, 0x03])
+            SystemPasteboard.write(
+                text: "structural",
+                kind: .cstForest,
+                structuralFragmentData: data
+            )
+            let read = SystemPasteboard.read()
+            #expect(read?.text == "structural")
+            #expect(read?.kind == .cstForest)
+            #expect(read?.structuralFragmentData == data)
         }
     }
 
