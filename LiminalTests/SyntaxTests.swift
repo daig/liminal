@@ -407,6 +407,59 @@ struct SyntaxTests {
         #expect(plusList.markerText == "+")
     }
 
+    @Test("Slice 4 parser accepts root lists at arbitrary indentation")
+    func slice4ParserAcceptsRootListsAtArbitraryIndentation() throws {
+        let source = "    - alpha\n    - beta\n      - gamma\n"
+        let result = try LiminalParser().parse(source)
+        let root = result.rootSyntax
+
+        #expect(result.diagnostics.isEmpty)
+        #expect(result.sourceText == source)
+        #expect(root.documentItems.count == 1)
+
+        guard case .list(let list) = root.documentItems[0] else {
+            Issue.record("expected indented root list")
+            return
+        }
+        #expect(list.items.count == 2)
+        #expect(list.items[0].documentItems.count == 1)
+        #expect(list.items[1].documentItems.count == 2)
+        guard case .list(let nestedList) = list.items[1].documentItems[1] else {
+            Issue.record("expected nested list under beta")
+            return
+        }
+        #expect(nestedList.items.count == 1)
+    }
+
+    @Test("Slice 4 parser treats indented list after paragraph as a new block")
+    func slice4ParserTreatsIndentedListAfterParagraphAsNewBlock() throws {
+        let source = "paragraph\n    - item\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        #expect(root.documentItems.count == 2)
+        guard case .paragraph(let paragraph) = root.documentItems[0],
+              case .list(let list) = root.documentItems[1]
+        else {
+            Issue.record("expected paragraph followed by indented list")
+            return
+        }
+        #expect(paragraph.inlineContent?.plainText == "paragraph")
+        #expect(list.items.count == 1)
+    }
+
+    @Test("Slice 4 parser keeps deeply indented non-list openers as paragraphs")
+    func slice4ParserKeepsDeeplyIndentedNonListOpenersAsParagraphs() throws {
+        let source = "    # not a heading\n"
+        let root = try LiminalParser().parse(source).rootSyntax
+
+        #expect(root.documentItems.count == 1)
+        guard case .paragraph(let paragraph) = root.documentItems[0] else {
+            Issue.record("expected paragraph")
+            return
+        }
+        #expect(paragraph.inlineContent?.plainText == "    # not a heading")
+    }
+
     @Test("Slice 4 parser emits blockquotes and rejects lazy continuation")
     func slice4ParserEmitsBlockquotesAndRejectsLazyContinuation() throws {
         let source = """

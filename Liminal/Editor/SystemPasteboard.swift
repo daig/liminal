@@ -4,10 +4,8 @@ import Foundation
 /// Vim's "kind" of yank: characterwise / linewise / blockwise / cstForest.
 /// Determines paste behavior — charwise inserts inline, linewise inserts
 /// as new line(s), blockwise inserts as a column. `cstForest` marks a
-/// yank that originated from visual CST mode; v1 serializes its bytes
-/// just like `characterwise` but the discriminator lets a future
-/// structural-paste branch recognize CST yanks without breaking
-/// already-saved pasteboard data.
+/// yank that originated from visual CST mode and may carry a serialized
+/// structural payload for CST-aware paste.
 public enum YankKind: String, Sendable, Equatable, Hashable {
     case characterwise
     case linewise
@@ -18,16 +16,16 @@ public enum YankKind: String, Sendable, Equatable, Hashable {
 public struct VimPasteboardEntry: Sendable, Equatable {
     public let text: String
     public let kind: YankKind
-    public let structuralFragmentData: Data?
+    public let structuralPayloadData: Data?
 
     public init(
         text: String,
         kind: YankKind,
-        structuralFragmentData: Data? = nil
+        structuralPayloadData: Data? = nil
     ) {
         self.text = text
         self.kind = kind
-        self.structuralFragmentData = structuralFragmentData
+        self.structuralPayloadData = structuralPayloadData
     }
 }
 
@@ -37,8 +35,9 @@ public struct VimPasteboardEntry: Sendable, Equatable {
 /// present), reads degrade to `.characterwise` — the safe default.
 @MainActor
 public enum SystemPasteboard {
+    static let didWriteNotification = Notification.Name("dev.sub.liminal.systemPasteboardDidWrite")
     static let kindUTI = NSPasteboard.PasteboardType("dev.sub.liminal.vim.yankKind")
-    static let structuralFragmentUTI = NSPasteboard.PasteboardType("dev.sub.liminal.cst.fragment")
+    static let structuralPayloadUTI = NSPasteboard.PasteboardType("dev.sub.liminal.cst.payload")
 
     /// Test/inject hook. Defaults to the system general pasteboard.
     /// Tests assign a fresh `NSPasteboard(name:)` so they don't
@@ -48,19 +47,20 @@ public enum SystemPasteboard {
     public static func write(
         text: String,
         kind: YankKind,
-        structuralFragmentData: Data? = nil
+        structuralPayloadData: Data? = nil
     ) {
         let pb = pasteboard
         var types: [NSPasteboard.PasteboardType] = [.string, kindUTI]
-        if structuralFragmentData != nil {
-            types.append(structuralFragmentUTI)
+        if structuralPayloadData != nil {
+            types.append(structuralPayloadUTI)
         }
         pb.declareTypes(types, owner: nil)
         pb.setString(text, forType: .string)
         pb.setString(kind.rawValue, forType: kindUTI)
-        if let structuralFragmentData {
-            pb.setData(structuralFragmentData, forType: structuralFragmentUTI)
+        if let structuralPayloadData {
+            pb.setData(structuralPayloadData, forType: structuralPayloadUTI)
         }
+        NotificationCenter.default.post(name: didWriteNotification, object: nil)
     }
 
     public static func read() -> VimPasteboardEntry? {
@@ -71,7 +71,7 @@ public enum SystemPasteboard {
         return VimPasteboardEntry(
             text: text,
             kind: kind,
-            structuralFragmentData: pb.data(forType: structuralFragmentUTI)
+            structuralPayloadData: pb.data(forType: structuralPayloadUTI)
         )
     }
 }

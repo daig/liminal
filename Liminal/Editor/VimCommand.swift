@@ -19,6 +19,12 @@ public enum VimCommand: Sendable, Equatable {
     /// `p` / `P` in normal: paste from system clipboard. `after`
     /// distinguishes `p` (after cursor / below line) from `P`.
     case paste(after: Bool)
+    /// Temporary explicit target-intent paste: splice a compatible CST
+    /// clipboard payload as list items into the current list context.
+    case pasteCSTListItems(after: Bool)
+    /// Temporary explicit target-intent paste: nest a compatible CST
+    /// clipboard payload inside the current list item.
+    case pasteCSTNested(after: Bool)
     case moveCursor(CursorMotion, count: Int)
     case structuralMotion(StructuralMotion, count: Int)
     case viewportMotion(ViewportMotion, count: Int)

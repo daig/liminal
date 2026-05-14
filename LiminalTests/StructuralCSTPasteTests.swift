@@ -198,6 +198,494 @@ struct StructuralCSTPasteTests {
         }
     }
 
+    @Test("block quote paragraph pasted at root strips continuation quote markers")
+    func blockQuoteParagraphPastedAtRootStripsContinuationMarkers() throws {
+        let source = "> foo\n> bar\n> baz\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstBlockQuoteChildForest(
+                in: parsedSource.tree,
+                childKind: .paragraph
+            )
+        )
+        let fragment = try StructuralCSTFragment.capture(forest)
+        #expect(fragment.wrapperKind == .blockQuote)
+        #expect(fragment.sourceText == "foo\n> bar\n> baz\n")
+
+        let target = "after\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let plan = try #require(try StructuralCSTPastePlanner.plan(
+            fragment: fragment,
+            in: parsedTarget.tree,
+            cursorByteOffset: .zero,
+            after: false
+        ))
+
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\nbar\nbaz\n\n")
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "foo\nbar\nbaz\n\nafter\n")
+    }
+
+    @Test("block quote multi-child paste strips direct quote prefix tokens")
+    func blockQuoteMultiChildPasteStripsDirectQuotePrefixTokens() throws {
+        let source = "> foo\n> - item\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let paragraph = try #require(
+            firstBlockQuoteChildForest(
+                in: parsedSource.tree,
+                childKind: .paragraph
+            )
+        )
+        let forest = try #require(paragraph.extendedForward())
+        let fragment = try StructuralCSTFragment.capture(forest)
+        #expect(fragment.wrapperKind == .blockQuote)
+        #expect(fragment.childKinds.contains(.greaterThan))
+        #expect(fragment.sourceText == "foo\n> - item\n")
+
+        let parsedTarget = try LiminalParser().parse("")
+        let plan = try #require(try StructuralCSTPastePlanner.plan(
+            fragment: fragment,
+            in: parsedTarget.tree,
+            cursorByteOffset: .zero,
+            after: true
+        ))
+
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\n- item\n")
+    }
+
+    @Test("block quote paste removes only the outer quote layer")
+    func blockQuotePasteRemovesOnlyOuterQuoteLayer() throws {
+        let source = """
+        > > nested
+        > after
+        """
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstBlockQuoteChildForest(
+                in: parsedSource.tree,
+                childKind: .blockQuote
+            )
+        )
+        let fragment = try StructuralCSTFragment.capture(forest)
+        #expect(fragment.wrapperKind == .blockQuote)
+        #expect(fragment.childKinds == [.blockQuote])
+        #expect(fragment.sourceText == "> nested\n")
+
+        let parsedTarget = try LiminalParser().parse("")
+        let plan = try #require(try StructuralCSTPastePlanner.plan(
+            fragment: fragment,
+            in: parsedTarget.tree,
+            cursorByteOffset: .zero,
+            after: true
+        ))
+
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "> nested\n")
+    }
+
+    @Test("list item paragraph content pastes at root as paragraph")
+    func listItemParagraphContentPastesAtRoot() throws {
+        let source = "- foo\n  bar\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstParagraphForestInFirstListItem(in: parsedSource.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        let target = "after\n"
+        let parsedTarget = try LiminalParser().parse(target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.plan(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: .zero,
+            after: false
+        ))
+
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\nbar\n\n")
+    }
+
+    @Test("list item child list content pastes at root as list")
+    func listItemChildListContentPastesAtRoot() throws {
+        let source = "- foo\n  - bar\n    - bax\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstChildListForestInFirstListItem(in: parsedSource.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        let parsedTarget = try LiminalParser().parse("")
+
+        let plan = try #require(try StructuralCSTPastePlanner.plan(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: .zero,
+            after: true
+        ))
+
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- bar\n  - bax\n")
+    }
+
+    @Test("explicit list item paste splices after a top-level item marker")
+    func explicitListItemPasteSplicesAfterTopLevelMarker() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n"
+        )
+        let target = "- foo\n  - one\n- qux\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - one\n- bar\n- baz\n- qux\n")
+    }
+
+    @Test("explicit list item paste finds a target marker after a blank line")
+    func explicitListItemPasteFindsMarkerAfterBlankLine() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n"
+        )
+        let target = "\n- foo\n- qux\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "\n- foo\n- bar\n- baz\n- qux\n")
+    }
+
+    @Test("explicit list item paste splices after a nested item marker")
+    func explicitListItemPasteSplicesAfterNestedItemMarker() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n"
+        )
+        let target = "- foo\n  - one\n  - two\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "- one", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - one\n  - bar\n  - baz\n  - two\n")
+    }
+
+    @Test("explicit list item paste accepts direct list-item payload")
+    func explicitListItemPasteAcceptsDirectListItemPayload() throws {
+        let source = "- bar\n- baz\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            rootListItemsForest(in: parsedSource.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        #expect(capture.fragment.wrapperKind == .list)
+        #expect(capture.fragment.childKinds == [.listItem, .listItem])
+
+        let target = "- foo\n- qux\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n- bar\n- baz\n- qux\n")
+    }
+
+    @Test("explicit direct list-item paste finds a target marker after a blank line")
+    func explicitDirectListItemPasteFindsMarkerAfterBlankLine() throws {
+        let source = "- bar\n- baz\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            rootListItemsForest(in: parsedSource.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        let target = "\n- foo\n- qux\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "\n- foo\n- bar\n- baz\n- qux\n")
+    }
+
+    @Test("explicit list item paste accepts marker trailing boundary")
+    func explicitListItemPasteAcceptsMarkerTrailingBoundary() throws {
+        let source = "- bar\n- baz\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            rootListItemsForest(in: parsedSource.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+
+        let target = "- foo\n- qux\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: " foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n- bar\n- baz\n- qux\n")
+    }
+
+    @Test("explicit list item paste refuses cursor inside item content")
+    func explicitListItemPasteRefusesItemContentCursor() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n"
+        )
+        let target = "- foo\n  - one\n  - two\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "one", in: target)
+
+        let plan = try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        )
+        #expect(plan == nil)
+    }
+
+    @Test("explicit list item paste refuses root-list-block payload")
+    func explicitListItemPasteRefusesRootListBlockPayload() throws {
+        let source = "- bar\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstRootForest(in: parsedSource.tree, childKind: .list)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        #expect(capture.fragment.wrapperKind == .root)
+        #expect(capture.fragment.childKinds == [.list])
+
+        let target = "- foo\n  - one\n"
+        let parsedTarget = try LiminalParser().parse(target)
+
+        let plan = try StructuralCSTPastePlanner.planListItems(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: .zero,
+            after: true
+        )
+        #expect(plan == nil)
+    }
+
+    @Test("nested list paste creates child list in current list item")
+    func nestedListPasteCreatesChildList() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n"
+        )
+        let target = "- foo\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - bar\n  - baz\n")
+    }
+
+    @Test("nested root list paste creates a child list")
+    func nestedRootListPasteCreatesChildList() throws {
+        let source = "* bar\n* baz\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstRootForest(in: parsedSource.tree, childKind: .list)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        let target = "- foo\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  * bar\n  * baz\n")
+    }
+
+    @Test("nested list paste appends to current item's existing child list")
+    func nestedListPasteAppendsToExistingChildList() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n    - quoz\n"
+        )
+        let target = "- foo\n  - bar\n  - baz\n    - quoz\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "baz", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - bar\n  - baz\n    - quoz\n    - bar\n    - baz\n      - quoz\n")
+    }
+
+    @Test("nested list paste normalizes to an existing child list marker")
+    func nestedListPasteNormalizesExistingChildListMarker() throws {
+        let capture = try childListCapture(
+            from: "- source\n  * bar\n  * baz\n"
+        )
+        let target = "- foo\n  + one\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  + one\n  + bar\n  + baz\n")
+    }
+
+    @Test("nested list paste targets third-level current item")
+    func nestedListPasteTargetsThirdLevelItem() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n  - baz\n    - quoz\n"
+        )
+        let target = "- foo\n  - bar\n  - baz\n    - quoz\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "quoz", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - bar\n  - baz\n    - quoz\n      - bar\n      - baz\n        - quoz\n")
+    }
+
+    @Test("nested paragraph paste wraps paragraph as child list item")
+    func nestedParagraphPasteWrapsParagraphAsChildListItem() throws {
+        let source = "hello\n"
+        let parsedSource = try LiminalParser().parse(source)
+        let forest = try #require(
+            LiminalForest.cstVisualEntry(at: .zero, in: parsedSource.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+        let target = "- foo\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "foo", in: target)
+
+        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        ))
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - hello\n")
+    }
+
     private func nestedBarFragment() throws -> StructuralCSTFragment {
         let source = """
         - foo
@@ -212,6 +700,84 @@ struct StructuralCSTPasteTests {
             listItemForest(containing: offset, in: parsed.tree)
         )
         return try StructuralCSTFragment.capture(forest)
+    }
+
+    private func childListCapture(
+        from source: String
+    ) throws -> StructuralCSTSelectionCapture {
+        let parsed = try LiminalParser().parse(source)
+        let forest = try #require(
+            firstChildListForestInFirstListItem(in: parsed.tree)
+        )
+        return try StructuralCSTSelectionCapture.capture(
+            forest: forest,
+            source: source
+        )
+    }
+
+    private func firstBlockQuoteChildForest(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        childKind expectedChildKind: LiminalKind
+    ) -> LiminalForest? {
+        tree.withRoot { root in
+            for rootIndex in 0..<root.childOrTokenCount {
+                let rootChildKind = root.green { $0.child(at: rootIndex) }.kind
+                guard rootChildKind == .blockQuote else { continue }
+
+                return root.withChildNode(atRawIndex: rootIndex) { blockQuote in
+                    for childIndex in 0..<blockQuote.childOrTokenCount {
+                        let childKind = blockQuote.green { $0.child(at: childIndex) }.kind
+                        guard childKind == expectedChildKind else { continue }
+                        return LiminalForest(
+                            parent: blockQuote.makeHandle(),
+                            anchorChildIndex: childIndex,
+                            headChildIndex: childIndex
+                        )
+                    }
+                    return nil
+                } ?? nil
+            }
+            return nil
+        }
+    }
+
+    private func firstRootForest(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        childKind expectedKind: LiminalKind
+    ) -> LiminalForest? {
+        tree.withRoot { root in
+            for childIndex in 0..<root.childOrTokenCount {
+                let childKind = root.green { $0.child(at: childIndex) }.kind
+                guard childKind == expectedKind else { continue }
+                return LiminalForest(
+                    parent: root.makeHandle(),
+                    anchorChildIndex: childIndex,
+                    headChildIndex: childIndex
+                )
+            }
+            return nil
+        }
+    }
+
+    private func rootListItemsForest(
+        in tree: SharedSyntaxTree<LiminalLanguage>
+    ) -> LiminalForest? {
+        tree.withRoot { root in
+            for rootIndex in 0..<root.childOrTokenCount {
+                let rootChildKind = root.green { $0.child(at: rootIndex) }.kind
+                guard rootChildKind == .list else { continue }
+
+                return root.withChildNode(atRawIndex: rootIndex) { list in
+                    guard list.childOrTokenCount > 0 else { return nil }
+                    return LiminalForest(
+                        parent: list.makeHandle(),
+                        anchorChildIndex: 0,
+                        headChildIndex: list.childOrTokenCount - 1
+                    )
+                } ?? nil
+            }
+            return nil
+        }
     }
 
     private func listItemForest(
@@ -232,6 +798,46 @@ struct StructuralCSTPasteTests {
             }
             guard let parent = forest.parentForest() else { return nil }
             forest = parent
+        }
+    }
+
+    private func firstChildListForestInFirstListItem(
+        in tree: SharedSyntaxTree<LiminalLanguage>
+    ) -> LiminalForest? {
+        firstForestInFirstListItem(in: tree, childKind: .list)
+    }
+
+    private func firstParagraphForestInFirstListItem(
+        in tree: SharedSyntaxTree<LiminalLanguage>
+    ) -> LiminalForest? {
+        firstForestInFirstListItem(in: tree, childKind: .paragraph)
+    }
+
+    private func firstForestInFirstListItem(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        childKind expectedKind: LiminalKind
+    ) -> LiminalForest? {
+        tree.withRoot { root in
+            for rootIndex in 0..<root.childOrTokenCount {
+                let rootChildKind = root.green { $0.child(at: rootIndex) }.kind
+                guard rootChildKind == .list else { continue }
+
+                return root.withChildNode(atRawIndex: rootIndex) { list in
+                    list.withChildNode(atRawIndex: 0) { item in
+                        for childIndex in 0..<item.childOrTokenCount {
+                            let childKind = item.green { $0.child(at: childIndex) }.kind
+                            guard childKind == expectedKind else { continue }
+                            return LiminalForest(
+                                parent: item.makeHandle(),
+                                anchorChildIndex: childIndex,
+                                headChildIndex: childIndex
+                            )
+                        }
+                        return nil
+                    } ?? nil
+                } ?? nil
+            }
+            return nil
         }
     }
 

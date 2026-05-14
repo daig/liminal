@@ -20,7 +20,10 @@ struct BacklinkInspectorView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
-            content
+            BacklinkInspectorContent(
+                entry: entry,
+                currentDocURL: currentDocURL
+            )
         }
         .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -40,8 +43,19 @@ struct BacklinkInspectorView: View {
         .padding(.vertical, 8)
     }
 
+    private var sortedBacklinks: [ResolvedReference] {
+        let canonical = currentDocURL.map(VaultRegistry.canonicalNoteURL)
+        let raw = entry.linkIndex.backlinks(for: canonical)
+        return BacklinkPresentation.sorted(raw, notes: entry.notes)
+    }
+}
+
+struct BacklinkInspectorContent: View {
+    @ObservedObject var entry: VaultEntry
+    let currentDocURL: URL?
+
     @ViewBuilder
-    private var content: some View {
+    var body: some View {
         if sortedBacklinks.isEmpty {
             VStack {
                 Spacer()

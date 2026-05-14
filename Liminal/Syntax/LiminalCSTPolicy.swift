@@ -189,16 +189,47 @@ public typealias LiminalForestAnchor = ForestAnchor<LiminalCSTPolicy>
 public typealias LiminalForestResolution = ForestResolution<LiminalCSTPolicy>
 
 public extension SyntaxForest where Policy == LiminalCSTPolicy {
+    /// Build the forest under the editor's block cursor.
+    ///
+    /// This deliberately differs from raw
+    /// `LiminalForest.containing(_:in:)` at sibling boundaries.
+    /// Cambium's containment primitive treats a child end boundary as
+    /// contained by that child, which is useful for caret/anchor
+    /// restoration. A normal-mode block cursor, however, visually
+    /// occupies the character starting at `offset`; when one child ends
+    /// and another starts at the same byte, editor targeting should
+    /// prefer the downstream child.
+    static func cursorTarget(
+        at offset: TextSize,
+        in tree: SharedSyntaxTree<LiminalLanguage>
+    ) -> LiminalForest? {
+        for probeOffset in cursorTargetProbeOffsets(at: offset, in: tree) {
+            guard let forest = LiminalForest.containing(probeOffset, in: tree),
+                  forest.strictlyContains(offset)
+            else { continue }
+            return forest
+        }
+
+        // At EOF there is no character under the block cursor. Preserve
+        // the raw containment behavior so callers can still target the
+        // final structural unit from a trailing caret.
+        let isEOF = tree.withRoot { root in
+            root.textRange.length.rawValue > 0
+                && offset.rawValue == root.textRange.end.rawValue
+        }
+        return isEOF ? LiminalForest.containing(offset, in: tree) : nil
+    }
+
     /// Build the entry-point forest for visual CST mode at a cursor byte
     /// offset.
     ///
-    /// `LiminalForest.containing(_:in:)` returns the *smallest* navigable
-    /// forest covering `offset` — which inside markup inline content
-    /// resolves to a single `.inlineText` token under an
+    /// `LiminalForest.cursorTarget(at:in:)` returns the smallest
+    /// navigable forest under the editor cursor — which inside markup
+    /// inline content resolves to a single `.inlineText` token under an
     /// ``ChildSelectionPolicy/allChildren`` parent. That's the correct
-    /// foundation primitive but the wrong default for visual CST mode's
-    /// UX: a user who pressed the entry chord wants structural reach, not
-    /// a single-word selection.
+    /// foundation primitive but the wrong final selection for visual CST
+    /// mode's UX: a user who pressed the entry chord wants structural
+    /// reach, not a single-word selection.
     ///
     /// This helper ascends from `containing(_:in:)`'s result until the
     /// focused child kind is a meaningful structural unit — a paragraph,
@@ -217,7 +248,7 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
         at offset: TextSize,
         in tree: SharedSyntaxTree<LiminalLanguage>
     ) -> LiminalForest? {
-        guard var current = LiminalForest.containing(offset, in: tree) else {
+        guard var current = LiminalForest.cursorTarget(at: offset, in: tree) else {
             return nil
         }
         while shouldAscendForCSTEntry(current) {
@@ -256,5 +287,29 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
         default:
             return false
         }
+    }
+
+    private static func cursorTargetProbeOffsets(
+        at offset: TextSize,
+        in tree: SharedSyntaxTree<LiminalLanguage>
+    ) -> [TextSize] {
+        tree.withRoot { root in
+            let rootEnd = root.textRange.end.rawValue
+            guard root.textRange.length.rawValue > 0,
+                  offset.rawValue < rootEnd
+            else { return [] }
+
+            let next = offset.rawValue + 1
+            if next <= rootEnd {
+                return [offset, TextSize(next)]
+            }
+            return [offset]
+        }
+    }
+
+    private func strictlyContains(_ offset: TextSize) -> Bool {
+        let range = byteRange
+        return range.start.rawValue <= offset.rawValue
+            && offset.rawValue < range.end.rawValue
     }
 }

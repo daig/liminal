@@ -16,15 +16,19 @@ struct StructuralCSTPastePlan {
 }
 
 enum StructuralCSTPastePlanner {
+    private struct ListPayloadSource {
+        let marker: StructuralCSTListSource.Marker
+        let baseIndent: Int
+    }
+
     static func plan(
-        fragment: StructuralCSTFragment,
+        payload: StructuralCSTClipboardPayload,
         in tree: SharedSyntaxTree<LiminalLanguage>,
         cursorByteOffset: TextSize,
         after: Bool
     ) throws -> StructuralCSTPastePlan? {
-        guard !fragment.snapshot.root.containsSentinels,
-              !fragment.hasTokenChildren
-        else { return nil }
+        let fragment = payload.fragment
+        guard !fragment.snapshot.root.containsSentinels else { return nil }
 
         switch fragment.wrapperKind {
         case .root:
@@ -41,9 +45,111 @@ enum StructuralCSTPastePlanner {
                 cursorByteOffset: cursorByteOffset,
                 after: after
             )
+        case .listItem where payload.projection.kind == .listItemContent:
+            return try planProjectedRootPayload(
+                payload.logicalText,
+                in: tree,
+                cursorByteOffset: cursorByteOffset,
+                after: after
+            )
+        case .blockQuote where payload.projection.kind == .blockQuoteContent:
+            return try planProjectedRootPayload(
+                payload.logicalText,
+                in: tree,
+                cursorByteOffset: cursorByteOffset,
+                after: after
+            )
         default:
             return nil
         }
+    }
+
+    static func planListItems(
+        payload: StructuralCSTClipboardPayload,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan? {
+        guard let fragment = try listItemSequenceFragment(from: payload),
+              let source = listPayloadSource(for: fragment),
+              let target = explicitListInsertionTarget(
+                  in: tree,
+                  cursorByteOffset: cursorByteOffset,
+                  after: after
+              )
+        else { return nil }
+
+        return try planListFragment(
+            fragment,
+            source: source,
+            target: target
+        )
+    }
+
+    static func planNestedListItem(
+        payload: StructuralCSTClipboardPayload,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan? {
+        guard let target = nestedListItemTarget(
+            in: tree,
+            cursorByteOffset: cursorByteOffset
+        ) else { return nil }
+
+        let placement = nestedInsertionPlacement(in: target, after: after)
+        guard var payloadText = try nestedListItemPayloadText(
+            from: payload,
+            target: target,
+            placement: placement
+        ) else { return nil }
+
+        let relativeInsertion = Int(
+            placement.byteOffset.rawValue - target.byteRange.start.rawValue
+        )
+        if needsLeadingLineBreak(
+            in: target.sourceText,
+            atRelativeByteOffset: relativeInsertion
+        ) {
+            payloadText = "\n" + payloadText
+        }
+
+        let newItemText = inserting(
+            payloadText,
+            into: target.sourceText,
+            atRelativeByteOffset: relativeInsertion
+        )
+        let replacement = try listItemSnapshot(from: newItemText)
+        let insertionRange = CambiumCore.TextRange(
+            start: placement.byteOffset,
+            length: .zero
+        )
+        return StructuralCSTPastePlan(
+            target: target.handle,
+            replacement: replacement,
+            edit: TextEdit(range: insertionRange, replacement: payloadText),
+            cursorByteOffset: cursorOffset(
+                insertionStart: placement.byteOffset,
+                insertedText: payloadText
+            )
+        )
+    }
+
+    static func plan(
+        fragment: StructuralCSTFragment,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan? {
+        try plan(
+            payload: StructuralCSTClipboardPayload(
+                fragment: fragment,
+                projection: StructuralCSTSourceProjection(fragment: fragment)
+            ),
+            in: tree,
+            cursorByteOffset: cursorByteOffset,
+            after: after
+        )
     }
 
     // MARK: - Root / document-item adapter
@@ -54,7 +160,8 @@ enum StructuralCSTPastePlanner {
         cursorByteOffset: TextSize,
         after: Bool
     ) throws -> StructuralCSTPastePlan? {
-        guard !fragment.childKinds.isEmpty,
+        guard !fragment.hasTokenChildren,
+              !fragment.childKinds.isEmpty,
               fragment.childKinds.allSatisfy(isDocumentItemKind)
         else { return nil }
 
@@ -190,10 +297,7 @@ enum StructuralCSTPastePlanner {
         cursorByteOffset: TextSize,
         after: Bool
     ) throws -> StructuralCSTPastePlan? {
-        guard !fragment.childKinds.isEmpty,
-              fragment.childKinds.allSatisfy({ $0 == .listItem }),
-              let sourceMarker = listMarker(in: fragment.sourceText),
-              let sourceBaseIndent = firstLineIndentColumn(in: fragment.sourceText)
+        guard let source = listPayloadSource(for: fragment)
         else { return nil }
 
         if let target = listInsertionTarget(
@@ -201,55 +305,16 @@ enum StructuralCSTPastePlanner {
             cursorByteOffset: cursorByteOffset,
             after: after
         ) {
-            guard let targetMarker = target.marker,
-                  markersAreCompatible(sourceMarker, targetMarker)
-            else { return nil }
-
-            let payload = try listPayloadSnapshot(
-                from: fragment,
-                sourceBaseIndent: sourceBaseIndent,
-                targetBaseIndent: target.baseIndent,
-                topLevelMarker: normalizedMarker(
-                    sourceMarker: sourceMarker,
-                    targetMarker: targetMarker
-                ),
-                ensureTrailingNewline: target.hasRightSibling
-            )
-            let payloadText = payload.root.makeString(using: payload.resolver)
-            guard !payloadText.isEmpty else { return nil }
-
-            var builder = GreenTreeBuilder<LiminalLanguage>(policy: .documentLocal)
-            builder.startNode(.list)
-            try target.parent.withCursor { list in
-                for oldIndex in 0..<target.childIndex {
-                    try list.withChildNode(atRawIndex: oldIndex) { child in
-                        _ = try builder.reuseSubtree(child)
-                    }
-                }
-                try appendChildren(of: payload, to: &builder)
-                for oldIndex in target.childIndex..<list.childOrTokenCount {
-                    try list.withChildNode(atRawIndex: oldIndex) { child in
-                        _ = try builder.reuseSubtree(child)
-                    }
-                }
-            }
-            try builder.finishNode()
-            let build = try builder.finish()
-            let insertionRange = CambiumCore.TextRange(start: target.byteOffset, length: .zero)
-            return StructuralCSTPastePlan(
-                target: target.parent,
-                replacement: build.snapshot,
-                edit: TextEdit(range: insertionRange, replacement: payloadText),
-                cursorByteOffset: cursorOffset(
-                    insertionStart: target.byteOffset,
-                    insertedText: payloadText
-                )
+            return try planListFragment(
+                fragment,
+                source: source,
+                target: target
             )
         }
 
         let payload = try listPayloadSnapshot(
             from: fragment,
-            sourceBaseIndent: sourceBaseIndent,
+            sourceBaseIndent: source.baseIndent,
             targetBaseIndent: 0,
             topLevelMarker: nil,
             ensureTrailingNewline: false
@@ -272,7 +337,7 @@ enum StructuralCSTPastePlanner {
             appendPayloadWithTrailingNewline: { builder in
                 let terminated = try listPayloadSnapshot(
                     from: fragment,
-                    sourceBaseIndent: sourceBaseIndent,
+                    sourceBaseIndent: source.baseIndent,
                     targetBaseIndent: 0,
                     topLevelMarker: nil,
                     ensureTrailingNewline: true
@@ -282,6 +347,110 @@ enum StructuralCSTPastePlanner {
                 }
             }
         )
+    }
+
+    private static func planListFragment(
+        _ fragment: StructuralCSTFragment,
+        source: ListPayloadSource,
+        target: ListInsertionTarget
+    ) throws -> StructuralCSTPastePlan? {
+        guard let targetMarker = target.marker,
+              StructuralCSTListSource.markersAreCompatible(source.marker, targetMarker)
+        else { return nil }
+
+        let payload = try listPayloadSnapshot(
+            from: fragment,
+            sourceBaseIndent: source.baseIndent,
+            targetBaseIndent: target.baseIndent,
+            topLevelMarker: StructuralCSTListSource.normalizedMarker(
+                sourceMarker: source.marker,
+                targetMarker: targetMarker
+            ),
+            ensureTrailingNewline: target.hasRightSibling
+        )
+        let payloadText = payload.root.makeString(using: payload.resolver)
+        guard !payloadText.isEmpty else { return nil }
+
+        var builder = GreenTreeBuilder<LiminalLanguage>(policy: .documentLocal)
+        builder.startNode(.list)
+        try target.parent.withCursor { list in
+            for oldIndex in 0..<target.childIndex {
+                try list.withChildNode(atRawIndex: oldIndex) { child in
+                    _ = try builder.reuseSubtree(child)
+                }
+            }
+            try appendChildren(of: payload, to: &builder)
+            for oldIndex in target.childIndex..<list.childOrTokenCount {
+                try list.withChildNode(atRawIndex: oldIndex) { child in
+                    _ = try builder.reuseSubtree(child)
+                }
+            }
+        }
+        try builder.finishNode()
+        let build = try builder.finish()
+        let insertionRange = CambiumCore.TextRange(start: target.byteOffset, length: .zero)
+        return StructuralCSTPastePlan(
+            target: target.parent,
+            replacement: build.snapshot,
+            edit: TextEdit(range: insertionRange, replacement: payloadText),
+            cursorByteOffset: cursorOffset(
+                insertionStart: target.byteOffset,
+                insertedText: payloadText
+            )
+        )
+    }
+
+    private static func listPayloadSource(
+        for fragment: StructuralCSTFragment
+    ) -> ListPayloadSource? {
+        guard !fragment.hasTokenChildren,
+              !fragment.childKinds.isEmpty,
+              fragment.childKinds.allSatisfy({ $0 == .listItem }),
+              let marker = StructuralCSTListSource.marker(in: fragment.sourceText),
+              let baseIndent = StructuralCSTListSource.firstLineIndentColumn(
+                  in: fragment.sourceText
+              )
+        else { return nil }
+
+        return ListPayloadSource(marker: marker, baseIndent: baseIndent)
+    }
+
+    private static func listItemSequenceFragment(
+        from payload: StructuralCSTClipboardPayload
+    ) throws -> StructuralCSTFragment? {
+        if payload.fragment.wrapperKind == .list,
+           payload.projection.kind == .listItems,
+           listPayloadSource(for: payload.fragment) != nil
+        {
+            return payload.fragment
+        }
+
+        return try projectedListFragment(from: payload)
+    }
+
+    private static func projectedListFragment(
+        from payload: StructuralCSTClipboardPayload
+    ) throws -> StructuralCSTFragment? {
+        guard payload.fragment.wrapperKind == .listItem,
+              payload.fragment.childKinds == [.list],
+              payload.projection.kind == .listItemContent
+        else { return nil }
+
+        let parsed = try LiminalParser().parse(payload.logicalText)
+        return parsed.tree.withRoot { root -> StructuralCSTFragment? in
+            guard root.childOrTokenCount == 1,
+                  root.green({ $0.child(at: 0) }).kind == .list
+            else { return nil }
+
+            return root.withChildNode(atRawIndex: 0) { list in
+                StructuralCSTFragment(
+                    snapshot: GreenTreeSnapshot(
+                        root: list.green { $0 },
+                        resolver: list.resolver
+                    )
+                )
+            }!
+        }
     }
 
     private static func listPayloadSnapshot(
@@ -304,7 +473,7 @@ enum StructuralCSTPastePlanner {
         if needsTrailingNewline {
             source += "\n"
         }
-        let shifted = rebaseListSource(
+        let shifted = StructuralCSTListSource.rebase(
             source,
             sourceBaseIndent: sourceBaseIndent,
             targetBaseIndent: targetBaseIndent,
@@ -315,13 +484,387 @@ enum StructuralCSTPastePlanner {
             for index in 0..<root.childOrTokenCount {
                 let kind = root.green { $0.child(at: index) }.kind
                 guard kind == .list else { continue }
-                return try root.withChildNode(atRawIndex: index) { list in
+                return root.withChildNode(atRawIndex: index) { list in
                     let green = list.green { $0 }
                     return GreenTreeSnapshot(root: green, resolver: list.resolver)
                 }!
             }
             throw StructuralCSTPasteError.invalidListPayload
         }
+    }
+
+    // MARK: - Nested list-item adapter
+
+    private enum NestedPayload {
+        case list(StructuralCSTFragment, ListPayloadSource)
+        case text(String)
+    }
+
+    private struct NestedListItemTarget {
+        let handle: SyntaxNodeHandle<LiminalLanguage>
+        let byteRange: CambiumCore.TextRange
+        let sourceText: String
+        let contentColumn: Int
+        let marker: StructuralCSTListSource.Marker
+        let childList: NestedChildList?
+    }
+
+    private struct NestedChildList {
+        let byteRange: CambiumCore.TextRange
+        let baseIndent: Int
+        let marker: StructuralCSTListSource.Marker
+    }
+
+    private struct NestedInsertionPlacement {
+        let byteOffset: TextSize
+        let baseIndent: Int
+        let marker: StructuralCSTListSource.Marker
+    }
+
+    private static func nestedListItemPayloadText(
+        from payload: StructuralCSTClipboardPayload,
+        target: NestedListItemTarget,
+        placement: NestedInsertionPlacement
+    ) throws -> String? {
+        guard let nestedPayload = try nestedPayload(from: payload) else {
+            return nil
+        }
+
+        switch nestedPayload {
+        case .list(let fragment, let source):
+            guard target.childList == nil
+                    || StructuralCSTListSource.markersAreCompatible(
+                        source.marker,
+                        placement.marker
+                    )
+            else { return nil }
+
+            let payload = try listPayloadSnapshot(
+                from: fragment,
+                sourceBaseIndent: source.baseIndent,
+                targetBaseIndent: placement.baseIndent,
+                topLevelMarker: target.childList == nil
+                    ? nil
+                    : StructuralCSTListSource.normalizedMarker(
+                        sourceMarker: source.marker,
+                        targetMarker: placement.marker
+                    ),
+                ensureTrailingNewline: true
+            )
+            let text = payload.root.makeString(using: payload.resolver)
+            return text.isEmpty ? nil : text
+
+        case .text(let source):
+            return wrappedListItemText(
+                source,
+                baseIndent: placement.baseIndent,
+                marker: placement.marker
+            )
+        }
+    }
+
+    private static func nestedPayload(
+        from payload: StructuralCSTClipboardPayload
+    ) throws -> NestedPayload? {
+        let source = payload.logicalText
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+
+        if let fragment = try singleListFragment(from: source),
+           let listSource = listPayloadSource(for: fragment)
+        {
+            return .list(fragment, listSource)
+        }
+
+        let parsed = try parsedRootPayload(from: source)
+        guard parsed.childKinds.allSatisfy({
+            $0 == .paragraph || $0 == .blankLine
+        }) else { return nil }
+        return .text(source)
+    }
+
+    private static func singleListFragment(
+        from source: String
+    ) throws -> StructuralCSTFragment? {
+        let parsed = try LiminalParser().parse(source)
+        return parsed.tree.withRoot { root -> StructuralCSTFragment? in
+            guard root.childOrTokenCount == 1,
+                  root.green({ $0.child(at: 0) }).kind == .list
+            else { return nil }
+
+            return root.withChildNode(atRawIndex: 0) { list in
+                StructuralCSTFragment(
+                    snapshot: GreenTreeSnapshot(
+                        root: list.green { $0 },
+                        resolver: list.resolver
+                    )
+                )
+            }!
+        }
+    }
+
+    private static func wrappedListItemText(
+        _ source: String,
+        baseIndent: Int,
+        marker: StructuralCSTListSource.Marker
+    ) -> String? {
+        let normalizedSource = source
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        var lines = normalizedSource.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        if normalizedSource.hasSuffix("\n"), lines.last == "" {
+            lines.removeLast()
+        }
+        guard !lines.isEmpty else { return nil }
+
+        let markerText = listMarkerText(for: marker)
+        let firstPrefix = String(repeating: " ", count: baseIndent)
+            + markerText
+            + " "
+        let continuationPrefix = String(
+            repeating: " ",
+            count: baseIndent + markerText.utf8.count + 1
+        )
+
+        var outputLines: [String] = []
+        outputLines.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() {
+            outputLines.append((index == 0 ? firstPrefix : continuationPrefix) + line)
+        }
+        return outputLines.joined(separator: "\n") + "\n"
+    }
+
+    private static func nestedListItemTarget(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize
+    ) -> NestedListItemTarget? {
+        let searchOffset = tree.withRoot { root -> TextSize in
+            if root.textRange.length.rawValue == 0 {
+                return .zero
+            }
+            return TextSize(min(
+                cursorByteOffset.rawValue,
+                root.textRange.end.rawValue - 1
+            ))
+        }
+        guard let forest = LiminalForest.containing(searchOffset, in: tree) else {
+            return nil
+        }
+
+        var current: LiminalForest? = forest
+        while let candidate = current {
+            let parentKind = candidate.parent.withCursor { $0.kind }
+            let childKind = candidate.parent.withCursor {
+                $0.green { green in green.child(at: candidate.anchorChildIndex) }.kind
+            }
+
+            if parentKind == .listItem {
+                return nestedListItemTarget(for: candidate.parent)
+            }
+            if parentKind == .list, childKind == .listItem {
+                return candidate.parent.withCursor { list in
+                    list.withChildNode(atRawIndex: candidate.anchorChildIndex) { item in
+                        nestedListItemTarget(for: item.makeHandle())
+                    } ?? nil
+                }
+            }
+
+            current = candidate.parentForest()
+        }
+        return nil
+    }
+
+    private static func nestedListItemTarget(
+        for handle: SyntaxNodeHandle<LiminalLanguage>
+    ) -> NestedListItemTarget? {
+        handle.withCursor { item in
+            let sourceText = item.makeString()
+            guard let contentColumn = StructuralCSTListSource.listItemContentColumn(
+                in: sourceText
+            ),
+                  let marker = StructuralCSTListSource.marker(in: sourceText)
+            else { return nil }
+
+            var childLists: [NestedChildList] = []
+            for childIndex in 0..<item.childOrTokenCount {
+                let child = item.green { $0.child(at: childIndex) }
+                guard child.kind == .list else { continue }
+
+                let childList: NestedChildList? = item.withChildNode(
+                    atRawIndex: childIndex
+                ) { list in
+                    guard list.childOrTokenCount > 0 else { return nil }
+                    let firstItemText = list.withChildNode(atRawIndex: 0) {
+                        $0.makeString()
+                    } ?? ""
+                    guard let baseIndent = StructuralCSTListSource.firstLineIndentColumn(
+                        in: firstItemText
+                    ),
+                          let marker = StructuralCSTListSource.marker(in: firstItemText)
+                    else { return nil }
+                    return NestedChildList(
+                        byteRange: list.textRange,
+                        baseIndent: baseIndent,
+                        marker: marker
+                    )
+                } ?? nil
+                if let childList {
+                    childLists.append(childList)
+                }
+            }
+            guard childLists.count <= 1 else { return nil }
+
+            return NestedListItemTarget(
+                handle: handle,
+                byteRange: item.textRange,
+                sourceText: sourceText,
+                contentColumn: contentColumn,
+                marker: marker,
+                childList: childLists.first
+            )
+        }
+    }
+
+    private static func nestedInsertionPlacement(
+        in target: NestedListItemTarget,
+        after: Bool
+    ) -> NestedInsertionPlacement {
+        if let childList = target.childList {
+            return NestedInsertionPlacement(
+                byteOffset: after ? childList.byteRange.end : childList.byteRange.start,
+                baseIndent: childList.baseIndent,
+                marker: childList.marker
+            )
+        }
+        return NestedInsertionPlacement(
+            byteOffset: target.byteRange.end,
+            baseIndent: target.contentColumn,
+            marker: target.marker
+        )
+    }
+
+    private static func listItemSnapshot(
+        from source: String
+    ) throws -> GreenTreeSnapshot<LiminalLanguage> {
+        let parsed = try LiminalParser().parse(source)
+        return try parsed.tree.withRoot { root -> GreenTreeSnapshot<LiminalLanguage> in
+            guard root.childOrTokenCount == 1,
+                  root.green({ $0.child(at: 0) }).kind == .list
+            else {
+                throw StructuralCSTPasteError.invalidListItemPayload
+            }
+            return try root.withChildNode(atRawIndex: 0) { list in
+                guard list.childOrTokenCount == 1,
+                      list.green({ $0.child(at: 0) }).kind == .listItem
+                else {
+                    throw StructuralCSTPasteError.invalidListItemPayload
+                }
+                return list.withChildNode(atRawIndex: 0) { item in
+                    GreenTreeSnapshot(
+                        root: item.green { $0 },
+                        resolver: item.resolver
+                    )
+                }!
+            }!
+        }
+    }
+
+    private static func inserting(
+        _ insertion: String,
+        into source: String,
+        atRelativeByteOffset relativeByteOffset: Int
+    ) -> String {
+        let index = source.utf8.index(
+            source.startIndex,
+            offsetBy: relativeByteOffset
+        )
+        return String(source[..<index]) + insertion + String(source[index...])
+    }
+
+    private static func needsLeadingLineBreak(
+        in source: String,
+        atRelativeByteOffset relativeByteOffset: Int
+    ) -> Bool {
+        guard relativeByteOffset > 0 else { return false }
+        let index = source.utf8.index(
+            source.startIndex,
+            offsetBy: relativeByteOffset
+        )
+        return !endsWithLineBreak(String(source[..<index]))
+    }
+
+    private static func listMarkerText(
+        for marker: StructuralCSTListSource.Marker
+    ) -> String {
+        switch marker {
+        case .unordered(let marker):
+            String(marker)
+        case .ordered:
+            "1."
+        }
+    }
+
+    // MARK: - Block quote content adapter
+
+    private struct ParsedRootPayload {
+        let snapshot: GreenTreeSnapshot<LiminalLanguage>
+        let childKinds: [LiminalKind]
+    }
+
+    private static func planProjectedRootPayload(
+        _ liftedText: String,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan? {
+        guard !liftedText.isEmpty else { return nil }
+
+        let payload = try parsedRootPayload(from: liftedText)
+        guard let firstPayloadKind = payload.childKinds.first,
+              let lastPayloadKind = payload.childKinds.last
+        else { return nil }
+
+        return try planRootInsertion(
+            in: tree,
+            cursorByteOffset: cursorByteOffset,
+            after: after,
+            payloadText: liftedText,
+            firstPayloadKind: firstPayloadKind,
+            lastPayloadKind: lastPayloadKind,
+            appendPayload: { builder in
+                try appendChildren(of: payload.snapshot, to: &builder)
+            },
+            appendPayloadWithTrailingNewline: { builder in
+                let terminated = try rootPayloadSnapshot(
+                    from: liftedText + "\n",
+                    expectedChildKinds: payload.childKinds
+                )
+                try appendChildren(of: terminated, to: &builder)
+            }
+        )
+    }
+
+    private static func parsedRootPayload(
+        from source: String
+    ) throws -> ParsedRootPayload {
+        let parsed = try LiminalParser().parse(source)
+        let childKinds = parsed.tree.withRoot { root in
+            (0..<root.childOrTokenCount).map { index in
+                root.green { $0.child(at: index) }.kind
+            }
+        }
+        guard !childKinds.isEmpty,
+              childKinds.allSatisfy(isDocumentItemKind)
+        else {
+            throw StructuralCSTPasteError.invalidBlockQuotePayload
+        }
+        let snapshot = parsed.tree.withRoot { root in
+            GreenTreeSnapshot(root: root.green { $0 }, resolver: root.resolver)
+        }
+        return ParsedRootPayload(snapshot: snapshot, childKinds: childKinds)
     }
 
     // MARK: - Targets
@@ -395,8 +938,14 @@ enum StructuralCSTPastePlanner {
         let childIndex: Int
         let byteOffset: TextSize
         let baseIndent: Int
-        let marker: ListMarker?
+        let marker: StructuralCSTListSource.Marker?
         let hasRightSibling: Bool
+    }
+
+    private enum ExplicitListTargetSearchResult {
+        case found(ListInsertionTarget)
+        case rejected
+        case noCandidate
     }
 
     private static func listInsertionTarget(
@@ -439,8 +988,10 @@ enum StructuralCSTPastePlanner {
                         parent: list.makeHandle(),
                         childIndex: childIndex,
                         byteOffset: byteOffset,
-                        baseIndent: firstLineIndentColumn(in: itemText) ?? 0,
-                        marker: listMarker(in: itemText),
+                        baseIndent: StructuralCSTListSource.firstLineIndentColumn(
+                            in: itemText
+                        ) ?? 0,
+                        marker: StructuralCSTListSource.marker(in: itemText),
                         hasRightSibling: childIndex < count
                     )
                 }
@@ -448,6 +999,125 @@ enum StructuralCSTPastePlanner {
             current = candidate.parentForest()
         }
         return nil
+    }
+
+    private static func explicitListInsertionTarget(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) -> ListInsertionTarget? {
+        guard let forest = LiminalForest.cursorTarget(
+            at: cursorByteOffset,
+            in: tree
+        ) else {
+            return nil
+        }
+        switch explicitListInsertionTarget(
+            from: forest,
+            cursorByteOffset: cursorByteOffset,
+            after: after
+        ) {
+        case .found(let target):
+            return target
+        case .rejected, .noCandidate:
+            return nil
+        }
+    }
+
+    private static func explicitListInsertionTarget(
+        from forest: LiminalForest,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) -> ExplicitListTargetSearchResult {
+        var current: LiminalForest? = forest
+        while let candidate = current {
+            let parentKind = candidate.parent.withCursor { $0.kind }
+            let childKind = candidate.parent.withCursor {
+                $0.green { green in green.child(at: candidate.anchorChildIndex) }.kind
+            }
+            if parentKind == .list, childKind == .listItem {
+                guard cursorByteOffsetIsOnListItemMarker(
+                    cursorByteOffset,
+                    candidate: candidate
+                ) else { return .rejected }
+                guard let target = listInsertionTarget(
+                    forListItem: candidate,
+                    after: after
+                ) else { return .rejected }
+                return .found(target)
+            }
+            current = candidate.parentForest()
+        }
+        return .noCandidate
+    }
+
+    private static func listInsertionTarget(
+        forListItem candidate: LiminalForest,
+        after: Bool
+    ) -> ListInsertionTarget? {
+        let parentKind = candidate.parent.withCursor { $0.kind }
+        let childKind = candidate.parent.withCursor {
+            $0.green { green in green.child(at: candidate.anchorChildIndex) }.kind
+        }
+        guard parentKind == .list, childKind == .listItem else { return nil }
+
+        return candidate.parent.withCursor { list in
+            let count = list.childOrTokenCount
+            let itemIndex = candidate.anchorChildIndex
+            let childIndex = after ? itemIndex + 1 : itemIndex
+            let byteOffset = childIndex < count
+                ? list.childTextRange(at: childIndex).start
+                : list.textRange.end
+            let referenceIndex = max(0, min(itemIndex, count - 1))
+            let itemText = list.withChildNode(atRawIndex: referenceIndex) {
+                $0.makeString()
+            } ?? ""
+            return ListInsertionTarget(
+                parent: list.makeHandle(),
+                childIndex: childIndex,
+                byteOffset: byteOffset,
+                baseIndent: StructuralCSTListSource.firstLineIndentColumn(
+                    in: itemText
+                ) ?? 0,
+                marker: StructuralCSTListSource.marker(in: itemText),
+                hasRightSibling: childIndex < count
+            )
+        }
+    }
+
+    private static func cursorByteOffsetIsOnListItemMarker(
+        _ cursorByteOffset: TextSize,
+        candidate: LiminalForest
+    ) -> Bool {
+        candidate.parent.withCursor { list in
+            list.withChildNode(atRawIndex: candidate.anchorChildIndex) { item in
+                guard let markerRange = listItemMarkerByteRange(in: item) else {
+                    return false
+                }
+                return cursorByteOffset.rawValue >= markerRange.start.rawValue
+                    && cursorByteOffset.rawValue <= markerRange.end.rawValue
+            } ?? false
+        }
+    }
+
+    private static func listItemMarkerByteRange(
+        in item: borrowing SyntaxNodeCursor<LiminalLanguage>
+    ) -> CambiumCore.TextRange? {
+        var markerRange: CambiumCore.TextRange?
+        item.forEachChildOrToken { element in
+            guard markerRange == nil else { return }
+            switch element {
+            case .token(let token):
+                let kind = LiminalLanguage.kind(for: token.rawKind)
+                guard kind == .listMarker || kind == .orderedListMarker else {
+                    return
+                }
+                markerRange = token.textRange
+            case .node:
+                return
+            }
+        }
+        return markerRange
     }
 
     // MARK: - Builder helpers
@@ -525,132 +1195,13 @@ enum StructuralCSTPastePlanner {
             else {
                 throw StructuralCSTPasteError.invalidRootPayload
             }
-            return try root.withChildNode(atRawIndex: 0) { item in
+            return root.withChildNode(atRawIndex: 0) { item in
                 GreenTreeSnapshot(
                     root: item.green { $0 },
                     resolver: item.resolver
                 )
             }!
         }
-    }
-
-    // MARK: - List source transforms
-
-    private enum ListMarker: Equatable {
-        case unordered(Character)
-        case ordered
-    }
-
-    private static func listMarker(in text: String) -> ListMarker? {
-        guard let firstLine = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first
-        else { return nil }
-        let line = String(firstLine)
-        let trimmed = line.drop { $0 == " " || $0 == "\t" }
-        guard let first = trimmed.first else { return nil }
-        if first == "-" || first == "*" || first == "+" {
-            let next = trimmed.index(after: trimmed.startIndex)
-            guard next < trimmed.endIndex, isHorizontalWhitespace(trimmed[next]) else {
-                return nil
-            }
-            return .unordered(first)
-        }
-        if first.isNumber {
-            var cursor = trimmed.startIndex
-            while cursor < trimmed.endIndex, trimmed[cursor].isNumber {
-                cursor = trimmed.index(after: cursor)
-            }
-            guard cursor < trimmed.endIndex, trimmed[cursor] == "." else {
-                return nil
-            }
-            let afterDot = trimmed.index(after: cursor)
-            guard afterDot < trimmed.endIndex, isHorizontalWhitespace(trimmed[afterDot]) else {
-                return nil
-            }
-            return .ordered
-        }
-        return nil
-    }
-
-    private static func markersAreCompatible(_ lhs: ListMarker, _ rhs: ListMarker) -> Bool {
-        switch (lhs, rhs) {
-        case (.unordered, .unordered), (.ordered, .ordered):
-            true
-        default:
-            false
-        }
-    }
-
-    private static func normalizedMarker(
-        sourceMarker: ListMarker,
-        targetMarker: ListMarker
-    ) -> Character? {
-        switch (sourceMarker, targetMarker) {
-        case (.unordered, .unordered(let marker)):
-            marker
-        default:
-            nil
-        }
-    }
-
-    private static func rebaseListSource(
-        _ source: String,
-        sourceBaseIndent: Int,
-        targetBaseIndent: Int,
-        topLevelMarker: Character?
-    ) -> String {
-        let delta = targetBaseIndent - sourceBaseIndent
-        let lines = source.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        )
-        return lines.enumerated().map { offset, lineSub in
-            var line = String(lineSub)
-            if offset == lines.count - 1, line.isEmpty, source.hasSuffix("\n") {
-                return line
-            }
-            let prefix = leadingHorizontalWhitespace(in: line)
-            let oldColumn = indentationColumn(prefix)
-            let newColumn = max(0, oldColumn + delta)
-            line.removeFirst(prefix.count)
-            if oldColumn == sourceBaseIndent, let topLevelMarker {
-                line = replacingUnorderedMarker(in: line, with: topLevelMarker)
-            }
-            return String(repeating: " ", count: newColumn) + line
-        }.joined(separator: "\n")
-    }
-
-    private static func replacingUnorderedMarker(
-        in line: String,
-        with marker: Character
-    ) -> String {
-        guard let first = line.first,
-              first == "-" || first == "*" || first == "+"
-        else { return line }
-        var copy = line
-        copy.replaceSubrange(copy.startIndex...copy.startIndex, with: String(marker))
-        return copy
-    }
-
-    private static func leadingHorizontalWhitespace(in line: String) -> String {
-        String(line.prefix { isHorizontalWhitespace($0) })
-    }
-
-    private static func isHorizontalWhitespace(_ character: Character) -> Bool {
-        character == " " || character == "\t"
-    }
-
-    private static func firstLineIndentColumn(in text: String) -> Int? {
-        guard let firstLine = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first
-        else { return nil }
-        return indentationColumn(leadingHorizontalWhitespace(in: String(firstLine)))
-    }
-
-    private static func indentationColumn(_ whitespace: String) -> Int {
-        var column = 0
-        for character in whitespace {
-            column += character == "\t" ? 4 - (column % 4) : 1
-        }
-        return column
     }
 
     // MARK: - Misc
@@ -775,4 +1326,6 @@ enum StructuralCSTPastePlanner {
 private enum StructuralCSTPasteError: Error {
     case invalidRootPayload
     case invalidListPayload
+    case invalidListItemPayload
+    case invalidBlockQuotePayload
 }

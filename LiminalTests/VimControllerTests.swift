@@ -74,6 +74,32 @@ struct VimControllerTests {
         #expect(c.pendingKeys.isEmpty)
     }
 
+    @Test("Space + p dispatches CST list item paste")
+    func leaderPasteCSTListItems() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.special(.space))
+        #expect(c.pendingKeys == [.special(.space)])
+        _ = c.handle(.char("p"))
+        #expect(spy.pasteCSTListItemsCalls == [true])
+        #expect(c.pendingKeys.isEmpty)
+    }
+
+    @Test("Space + n dispatches nested CST paste")
+    func leaderPasteCSTNested() {
+        let c = VimController()
+        let spy = VimDelegateSpy()
+        c.delegate = spy
+
+        _ = c.handle(.special(.space))
+        #expect(c.pendingKeys == [.special(.space)])
+        _ = c.handle(.char("n"))
+        #expect(spy.pasteCSTNestedCalls == [true])
+        #expect(c.pendingKeys.isEmpty)
+    }
+
     @Test("unmatched key from Normal mode is consumed and clears pending")
     func unmatchedNormalKey() {
         let c = VimController()
@@ -579,6 +605,8 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var yankSelectionCallCount = 0
     var deleteSelectionCallCount = 0
     var pasteCalls: [Bool] = []
+    var pasteCSTListItemsCalls: [Bool] = []
+    var pasteCSTNestedCalls: [Bool] = []
     var applyOperatorCalls: [ApplyOperatorCall] = []
     var undoCalls: [Int] = []
     var redoCalls: [Int] = []
@@ -616,6 +644,12 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func paste(after: Bool) {
         pasteCalls.append(after)
+    }
+    func pasteCSTListItems(after: Bool) {
+        pasteCSTListItemsCalls.append(after)
+    }
+    func pasteCSTNested(after: Bool) {
+        pasteCSTNestedCalls.append(after)
     }
     func applyOperator(
         _ op: VimOperator,

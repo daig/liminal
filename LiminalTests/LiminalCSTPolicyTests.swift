@@ -179,6 +179,23 @@ struct LiminalCSTPolicyTests {
         )
     }
 
+    @Test("cstVisualEntry at a block start after a blank line targets the downstream block")
+    func cstVisualEntryAtBlockStartAfterBlankLineTargetsDownstreamBlock() throws {
+        let source = "Paragraph.\n\n- item\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let offset = TextSize(UInt32(byteOffset(of: "- item", in: source)))
+        let forest = try #require(
+            LiminalForest.cstVisualEntry(at: offset, in: tree)
+        )
+
+        let childKind = forest.parent.withCursor {
+            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
+        }
+        #expect(childKind == .listItem)
+        #expect(forest.byteRange.start == offset)
+    }
+
     @Test("cstVisualEntry returns nil for an empty document")
     func cstVisualEntryEmptyDocument() throws {
         let parsed = try LiminalParser().parse("")
@@ -221,4 +238,12 @@ struct LiminalCSTPolicyTests {
         .scalarValue, .listValue, .recordValue, .typedConstructor,
         .inlineLiteral, .blockLiteral, .reference, .structuredEmbedValue,
     ]
+
+    private func byteOffset(of needle: String, in source: String) -> Int {
+        guard let range = source.range(of: needle) else {
+            Issue.record("Missing substring \(needle)")
+            return 0
+        }
+        return source.utf8.distance(from: source.utf8.startIndex, to: range.lowerBound)
+    }
 }

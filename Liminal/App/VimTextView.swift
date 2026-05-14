@@ -38,11 +38,11 @@ final class VimTextView: NSTextView {
         }
     }
 
-    /// UTF-16 range covered by the active visual CST forest selection.
+    /// UTF-16 ranges covered by the active visual CST forest selection.
     /// The Coordinator pushes this whenever the forest changes (entry,
     /// navigation, extend) and clears it on mode exit. Drawn as a
     /// translucent rounded-rect background under the glyphs in the
-    /// range — visually distinct from AppKit's native text selection
+    /// ranges — visually distinct from AppKit's native text selection
     /// so users can tell structural selection (`gC`) from `v`/`V`/
     /// `<C-v>` at a glance.
     ///
@@ -50,9 +50,9 @@ final class VimTextView: NSTextView {
     /// `draw(_:)` regardless of system selection state, and the system
     /// caret is parked at the overlay's start so its blinking doesn't
     /// land inside the tinted region.
-    var cstSelectionRange: NSRange? {
+    var cstSelectionRanges: [NSRange] = [] {
         didSet {
-            guard oldValue != cstSelectionRange else { return }
+            guard oldValue != cstSelectionRanges else { return }
             needsDisplay = true
         }
     }
@@ -68,8 +68,8 @@ final class VimTextView: NSTextView {
         drawMarkIndicators(in: dirtyRect)
     }
 
-    /// Paint a translucent rounded-rect background over every line
-    /// fragment covered by `cstSelectionRange`. Drawn after `super.draw`
+    /// Paint translucent rounded-rect backgrounds over every line
+    /// fragment covered by `cstSelectionRanges`. Drawn after `super.draw`
     /// (i.e. on top of glyphs), with low alpha so the underlying text
     /// stays legible — same effect as a highlighter pen.
     ///
@@ -78,30 +78,30 @@ final class VimTextView: NSTextView {
     /// the natural reading shape) rather than a bounding rect that
     /// would also cover gutter space at line ends.
     private func drawCSTSelectionOverlay(in dirtyRect: NSRect) {
-        guard let range = cstSelectionRange,
-              range.length > 0,
-              let layoutManager,
+        guard let layoutManager,
               let textContainer
         else { return }
-
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: range,
-            actualCharacterRange: nil
-        )
-        guard glyphRange.length > 0 else { return }
 
         let color = NSColor.systemTeal.withAlphaComponent(0.22)
         color.setFill()
 
         let origin = textContainerOrigin
-        layoutManager.enumerateEnclosingRects(
-            forGlyphRange: glyphRange,
-            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-            in: textContainer
-        ) { rect, _ in
-            let drawRect = rect.offsetBy(dx: origin.x, dy: origin.y)
-            guard drawRect.intersects(dirtyRect) else { return }
-            NSBezierPath(roundedRect: drawRect, xRadius: 3, yRadius: 3).fill()
+        for range in cstSelectionRanges where range.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            guard glyphRange.length > 0 else { continue }
+
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textContainer
+            ) { rect, _ in
+                let drawRect = rect.offsetBy(dx: origin.x, dy: origin.y)
+                guard drawRect.intersects(dirtyRect) else { return }
+                NSBezierPath(roundedRect: drawRect, xRadius: 3, yRadius: 3).fill()
+            }
         }
     }
 

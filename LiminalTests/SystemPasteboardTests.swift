@@ -31,23 +31,42 @@ struct SystemPasteboardTests {
             let read = SystemPasteboard.read()
             #expect(read?.text == "hello\nworld")
             #expect(read?.kind == kind)
-            #expect(read?.structuralFragmentData == nil)
+            #expect(read?.structuralPayloadData == nil)
         }
     }
 
-    @Test("round-trip preserves structural fragment data")
-    func roundTripStructuralFragmentData() {
+    @Test("round-trip preserves structural payload data")
+    func roundTripStructuralPayloadData() {
         withSandboxPasteboard {
             let data = Data([0x01, 0x02, 0x03])
             SystemPasteboard.write(
                 text: "structural",
                 kind: .cstForest,
-                structuralFragmentData: data
+                structuralPayloadData: data
             )
             let read = SystemPasteboard.read()
             #expect(read?.text == "structural")
             #expect(read?.kind == .cstForest)
-            #expect(read?.structuralFragmentData == data)
+            #expect(read?.structuralPayloadData == data)
+        }
+    }
+
+    @Test("write posts pasteboard change notification")
+    func writePostsNotification() {
+        withSandboxPasteboard {
+            let probe = PasteboardNotificationProbe()
+            NotificationCenter.default.addObserver(
+                probe,
+                selector: #selector(PasteboardNotificationProbe.didReceiveNotification(_:)),
+                name: SystemPasteboard.didWriteNotification,
+                object: nil
+            )
+            defer {
+                NotificationCenter.default.removeObserver(probe)
+            }
+
+            SystemPasteboard.write(text: "hello", kind: .characterwise)
+            #expect(probe.didNotify)
         }
     }
 
@@ -71,5 +90,13 @@ struct SystemPasteboardTests {
         withSandboxPasteboard {
             #expect(SystemPasteboard.read() == nil)
         }
+    }
+}
+
+private final class PasteboardNotificationProbe: NSObject {
+    var didNotify = false
+
+    @objc func didReceiveNotification(_ notification: Notification) {
+        didNotify = true
     }
 }

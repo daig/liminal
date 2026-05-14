@@ -209,9 +209,10 @@ inline delimiter or block boundary. `BlockContent` means a sequence of blocks
 and blank lines up to the current block delimiter or container boundary.
 
 A block opener is recognized only at a logical line start. In ordinary block
-sequences, up to three extra leading spaces may precede a block opener. Inside
-list items and block literals, the current container indentation is considered
-the logical line start.
+sequences, up to three extra leading spaces may precede a block opener, except
+for list item markers, which may occur at any indentation column. Inside list
+items and block literals, the current container indentation is considered the
+logical line start.
 
 There are no indented code blocks and no lazy continuation lines.
 
@@ -373,6 +374,8 @@ Rules:
 
 - A list is a sequence of adjacent list items with the same ordered/unordered
   kind and compatible marker family.
+- A list item marker may start at any indentation column at or after the
+  current logical line start.
 - Marker-family changes start a new list.
 - Ordered list start number is the number on the first item.
 - List items contain block content.

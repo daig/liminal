@@ -110,11 +110,11 @@ private struct WorkspaceDetail: View {
     var body: some View {
         HStack(spacing: 0) {
             editorContent
-            if let url = tab.fileURL, prefs.backlinksInspectorVisible {
+            if prefs.backlinksInspectorVisible {
                 Divider()
-                BacklinkInspectorView(
-                    entry: VaultRegistry.shared.entry(for: url),
-                    currentDocURL: url
+                RightInspectorView(
+                    entry: tab.fileURL.map { VaultRegistry.shared.entry(for: $0) },
+                    currentDocURL: tab.fileURL
                 )
             }
         }

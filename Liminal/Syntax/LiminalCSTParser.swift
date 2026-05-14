@@ -3711,7 +3711,7 @@ struct LiminalCSTParser {
 
     private func listItemInfo(for line: SourceLine) -> ListItemInfo? {
         let content = line.content
-        guard let indentEnd = indentationEnd(in: content),
+        guard let indentEnd = listIndentationEnd(in: content),
               indentEnd < content.endIndex
         else {
             return nil
@@ -3928,6 +3928,13 @@ struct LiminalCSTParser {
     }
 
     private func startsDocumentItem(in content: Substring) -> Bool {
+        if let listStart = listIndentationEnd(in: content, minimumColumn: 0),
+           listStart < content.endIndex,
+           startsListItem(in: content, at: listStart)
+        {
+            return true
+        }
+
         guard let start = indentationEnd(in: content, containerColumn: 0),
               start < content.endIndex
         else {
@@ -4098,6 +4105,32 @@ struct LiminalCSTParser {
         }
 
         return columns >= containerColumn ? index : nil
+    }
+
+    private func listIndentationEnd(in content: Substring) -> String.Index? {
+        listIndentationEnd(in: content, minimumColumn: containerColumn)
+    }
+
+    private func listIndentationEnd(
+        in content: Substring,
+        minimumColumn: Int
+    ) -> String.Index? {
+        var index = content.startIndex
+        var columns = 0
+
+        while index < content.endIndex {
+            switch content[index] {
+            case " ":
+                columns += 1
+            case "\t":
+                columns += 4 - (columns % 4)
+            default:
+                return columns >= minimumColumn ? index : nil
+            }
+            index = content.index(after: index)
+        }
+
+        return columns >= minimumColumn ? index : nil
     }
 
     private func lineContentStart(

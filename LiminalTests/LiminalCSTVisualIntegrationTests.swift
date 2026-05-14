@@ -27,10 +27,10 @@ struct LiminalCSTVisualIntegrationTests {
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
 
-        // The structural selection lives in `cstSelectionRange` (the
+        // The structural selection lives in `cstSelectionRanges` (the
         // custom overlay), not `selectedRange` — the latter only holds
         // a parked caret in .visualCST.
-        let sel = try #require(fixture.textView.cstSelectionRange)
+        let sel = try cstSelectionRange(fixture.textView)
         #expect(sel.length > 0, "entry should populate a CST selection")
         // The selection's start should be at byte 0 (paragraph start).
         #expect(sel.location == 0)
@@ -39,6 +39,19 @@ struct LiminalCSTVisualIntegrationTests {
         // The system caret is parked at the overlay's start.
         #expect(fixture.textView.selectedRange().location == sel.location)
         #expect(fixture.textView.selectedRange().length == 0)
+    }
+
+    @Test("entering visualCST at a list marker after a blank line selects the list")
+    func entryAtListMarkerAfterBlankLineSelectsList() throws {
+        let source = "First paragraph.\n\n- item\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "- item", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+
+        let sel = try cstSelectionRange(fixture.textView)
+        let listOffset = try utf16Offset(of: "- item", in: source)
+        #expect(sel.location == listOffset)
+        #expect(sel.length >= "- item\n".utf16.count)
     }
 
     @Test("entering visualCST in an empty document forces back to normal mode")
@@ -67,10 +80,10 @@ struct LiminalCSTVisualIntegrationTests {
         let fixture = try makeFixture("First.\n\nSecond.\n\nThird.\n")
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
-        let initialSel = try #require(fixture.textView.cstSelectionRange)
+        let initialSel = try cstSelectionRange(fixture.textView)
 
         fixture.coordinator.cstNavigate(.nextSibling, count: 1)
-        let afterSel = try #require(fixture.textView.cstSelectionRange)
+        let afterSel = try cstSelectionRange(fixture.textView)
 
         // After moving to the next sibling, the selection should start
         // strictly after the original selection.
@@ -83,10 +96,10 @@ struct LiminalCSTVisualIntegrationTests {
         let fixture = try makeFixture("First.\n\nSecond.\n\nThird.\n")
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
-        let initial = try #require(fixture.textView.cstSelectionRange)
+        let initial = try cstSelectionRange(fixture.textView)
 
         fixture.coordinator.extendCSTSelection(.nextSibling, count: 1)
-        let extended = try #require(fixture.textView.cstSelectionRange)
+        let extended = try cstSelectionRange(fixture.textView)
 
         #expect(extended.location == initial.location, "anchor end unchanged")
         #expect(extended.length > initial.length, "selection grew")
@@ -97,10 +110,10 @@ struct LiminalCSTVisualIntegrationTests {
         let fixture = try makeFixture("# Heading\n\nA paragraph.\n")
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
-        let initial = try #require(fixture.textView.cstSelectionRange)
+        let initial = try cstSelectionRange(fixture.textView)
 
         fixture.coordinator.cstNavigate(.parent, count: 1)
-        let parentSel = try #require(fixture.textView.cstSelectionRange)
+        let parentSel = try cstSelectionRange(fixture.textView)
 
         // Parent of the heading at root[0] is root. Ascending makes the
         // selection a singleton at the heading's slot in root — same byte
@@ -114,10 +127,10 @@ struct LiminalCSTVisualIntegrationTests {
         let fixture = try makeFixture("```swift\nlet x = 1\n```\n")
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
-        let before = try #require(fixture.textView.cstSelectionRange)
+        let before = fixture.textView.cstSelectionRanges
 
         fixture.coordinator.cstNavigate(.firstChild, count: 1)
-        let after = try #require(fixture.textView.cstSelectionRange)
+        let after = fixture.textView.cstSelectionRanges
 
         #expect(after == before, "opaque-block descend should not move selection")
     }
@@ -128,12 +141,161 @@ struct LiminalCSTVisualIntegrationTests {
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
         fixture.coordinator.extendCSTSelection(.nextSibling, count: 1)
-        let before = try #require(fixture.textView.cstSelectionRange)
+        let before = fixture.textView.cstSelectionRanges
 
         fixture.coordinator.swapCSTEnds()
-        let after = try #require(fixture.textView.cstSelectionRange)
+        let after = fixture.textView.cstSelectionRanges
 
         #expect(after == before, "swap is a logical operation, not a range one")
+    }
+
+    @Test("block quote CST overlay projects away lifted quote markers")
+    func blockQuoteOverlayUsesProjectedRanges() throws {
+        let fixture = try makeFixture("> foo\n> bar\n> baz\n")
+        fixture.placeCursor(atUTF16: 3)
+        fixture.coordinator.enterCSTVisualMode()
+
+        #expect(fixture.textView.cstSelectionRanges == [
+            NSRange(location: 2, length: 4),
+            NSRange(location: 8, length: 4),
+            NSRange(location: 14, length: 4)
+        ])
+    }
+
+    @Test("nested list item CST overlay projects away base indent")
+    func nestedListItemOverlayUsesProjectedRanges() throws {
+        let source = """
+        - foo
+          - bar
+            - bax
+          - qux
+        """
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "bar", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+
+        #expect(fixture.textView.cstSelectionRanges == [
+            NSRange(location: 8, length: 6),
+            NSRange(location: 16, length: 8)
+        ])
+    }
+
+    @Test("list item paragraph overlay projects away continuation prefix")
+    func listItemParagraphOverlayUsesProjectedRanges() throws {
+        let source = "- foo\n  bar\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "foo", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+
+        #expect(fixture.textView.cstSelectionRanges == [
+            NSRange(location: 2, length: 4),
+            NSRange(location: 8, length: 3)
+        ])
+    }
+
+    @Test("explicit CST list item paste splices after current item marker")
+    func explicitCSTListItemPasteSplicesAfterItemMarker() throws {
+        let originalPasteboard = SystemPasteboard.pasteboard
+        SystemPasteboard.pasteboard = NSPasteboard(name: NSPasteboard.Name(
+            "dev.sub.liminal.cst-list-paste.tests.\(UUID().uuidString)"
+        ))
+        defer { SystemPasteboard.pasteboard = originalPasteboard }
+
+        let copySource = "- source\n  - bar\n  - baz\n"
+        let parsedCopy = try LiminalParser().parse(copySource)
+        let copyForest = try #require(
+            firstChildListForestInFirstListItem(in: parsedCopy.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: copyForest,
+            source: copySource
+        )
+        SystemPasteboard.write(
+            text: capture.logicalText,
+            kind: .cstForest,
+            structuralPayloadData: try capture.clipboardPayload.serializedData()
+        )
+
+        let target = "- foo\n  - one\n  - two\n"
+        let fixture = try makeFixture(target)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "- one", in: target))
+        fixture.coordinator.pasteCSTListItems(after: true)
+
+        let expected = "- foo\n  - one\n  - bar\n  - baz\n  - two\n"
+        #expect(fixture.textView.string == expected)
+        #expect(fixture.document.session.source == expected)
+    }
+
+    @Test("explicit CST list item paste handles marker after blank line")
+    func explicitCSTListItemPasteHandlesMarkerAfterBlankLine() throws {
+        let originalPasteboard = SystemPasteboard.pasteboard
+        SystemPasteboard.pasteboard = NSPasteboard(name: NSPasteboard.Name(
+            "dev.sub.liminal.cst-list-paste-boundary.tests.\(UUID().uuidString)"
+        ))
+        defer { SystemPasteboard.pasteboard = originalPasteboard }
+
+        let copySource = "- source\n  - bar\n"
+        let parsedCopy = try LiminalParser().parse(copySource)
+        let copyForest = try #require(
+            firstChildListForestInFirstListItem(in: parsedCopy.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: copyForest,
+            source: copySource
+        )
+        #expect(capture.fragment.wrapperKind == .listItem)
+        #expect(capture.fragment.childKinds == [.list])
+        #expect(capture.projection.kind == .listItemContent)
+        SystemPasteboard.write(
+            text: capture.logicalText,
+            kind: .cstForest,
+            structuralPayloadData: try capture.clipboardPayload.serializedData()
+        )
+
+        let target = "before\n\n- foo\n- baz\n"
+        let fixture = try makeFixture(target)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "- foo", in: target))
+        fixture.coordinator.pasteCSTListItems(after: true)
+
+        let expected = "before\n\n- foo\n- bar\n- baz\n"
+        #expect(fixture.textView.string == expected)
+        #expect(fixture.document.session.source == expected)
+    }
+
+    @Test("explicit CST list item paste splices into top-level list")
+    func explicitCSTListItemPasteSplicesIntoTopLevelList() throws {
+        let originalPasteboard = SystemPasteboard.pasteboard
+        SystemPasteboard.pasteboard = NSPasteboard(name: NSPasteboard.Name(
+            "dev.sub.liminal.cst-root-list-paste.tests.\(UUID().uuidString)"
+        ))
+        defer { SystemPasteboard.pasteboard = originalPasteboard }
+
+        let copySource = "- bar\n- baz\n"
+        let parsedCopy = try LiminalParser().parse(copySource)
+        let copyForest = try #require(
+            rootListItemsForest(in: parsedCopy.tree)
+        )
+        let capture = try StructuralCSTSelectionCapture.capture(
+            forest: copyForest,
+            source: copySource
+        )
+        #expect(capture.fragment.wrapperKind == .list)
+        #expect(capture.fragment.childKinds == [.listItem, .listItem])
+        SystemPasteboard.write(
+            text: capture.logicalText,
+            kind: .cstForest,
+            structuralPayloadData: try capture.clipboardPayload.serializedData()
+        )
+
+        let target = "- foo\n- qux\n"
+        let fixture = try makeFixture(target)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "- foo", in: target))
+        fixture.coordinator.pasteCSTListItems(after: true)
+
+        let expected = "- foo\n- bar\n- baz\n- qux\n"
+        #expect(fixture.textView.string == expected)
+        #expect(fixture.document.session.source == expected)
     }
 
     // MARK: - Safety
@@ -143,8 +305,8 @@ struct LiminalCSTVisualIntegrationTests {
         let fixture = try makeFixture("First paragraph.\n")
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
-        let initial = try #require(fixture.textView.cstSelectionRange)
-        #expect(initial.length > 0)
+        let initial = fixture.textView.cstSelectionRanges
+        #expect(initial.contains { $0.length > 0 })
 
         // Programmatically replace the source — the new parse builds a
         // fresh tree, leaving the Coordinator's cstForest referencing
@@ -158,8 +320,8 @@ struct LiminalCSTVisualIntegrationTests {
         // mode is still .visualCST until the user Escs — a known v1
         // limitation documented in the plan). The contract under test
         // is "no crash."
-        let final = fixture.textView.cstSelectionRange
-        #expect(final == initial || final == nil,
+        let final = fixture.textView.cstSelectionRanges
+        #expect(final == initial || final.isEmpty,
                 "stale-forest navigation should be safe (no crash, range either preserved or cleared)")
     }
 }
@@ -212,4 +374,62 @@ private final class CSTFixture {
 @MainActor
 private func makeFixture(_ source: String) throws -> CSTFixture {
     try CSTFixture(source: source)
+}
+
+@MainActor
+private func cstSelectionRange(_ textView: VimTextView) throws -> NSRange {
+    try #require(textView.cstSelectionRanges.first)
+}
+
+private func utf16Offset(of needle: String, in source: String) throws -> Int {
+    let range = try #require(source.range(of: needle))
+    return source.utf16.distance(from: source.utf16.startIndex, to: range.lowerBound)
+}
+
+private func firstChildListForestInFirstListItem(
+    in tree: SharedSyntaxTree<LiminalLanguage>
+) -> LiminalForest? {
+    tree.withRoot { root in
+        for rootIndex in 0..<root.childOrTokenCount {
+            let rootChildKind = root.green { $0.child(at: rootIndex) }.kind
+            guard rootChildKind == .list else { continue }
+
+            return root.withChildNode(atRawIndex: rootIndex) { list in
+                list.withChildNode(atRawIndex: 0) { item in
+                    for childIndex in 0..<item.childOrTokenCount {
+                        let childKind = item.green { $0.child(at: childIndex) }.kind
+                        guard childKind == .list else { continue }
+                        return LiminalForest(
+                            parent: item.makeHandle(),
+                            anchorChildIndex: childIndex,
+                            headChildIndex: childIndex
+                        )
+                    }
+                    return nil
+                } ?? nil
+            } ?? nil
+        }
+        return nil
+    }
+}
+
+private func rootListItemsForest(
+    in tree: SharedSyntaxTree<LiminalLanguage>
+) -> LiminalForest? {
+    tree.withRoot { root in
+        for rootIndex in 0..<root.childOrTokenCount {
+            let rootChildKind = root.green { $0.child(at: rootIndex) }.kind
+            guard rootChildKind == .list else { continue }
+
+            return root.withChildNode(atRawIndex: rootIndex) { list in
+                guard list.childOrTokenCount > 0 else { return nil }
+                return LiminalForest(
+                    parent: list.makeHandle(),
+                    anchorChildIndex: 0,
+                    headChildIndex: list.childOrTokenCount - 1
+                )
+            } ?? nil
+        }
+        return nil
+    }
 }
