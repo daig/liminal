@@ -113,12 +113,14 @@ public final class VimController: ObservableObject {
         }
 
         switch mode {
-        case .normal, .visual, .visualLine, .visualBlock:
+        case .normal, .visual, .visualLine, .visualBlock, .visualCST:
             // Visual modes share normal mode's key-handling shape:
             // count digits, then binding-tree resolution. The
             // binding tree itself segregates per-mode bindings, so
             // motions in visual dispatch their own commands and
             // y/d/c only resolve when actually in a visual mode.
+            // (.visualCST gets its own binding table; the dispatch
+            // shape is identical.)
             return handleNormal(key)
         case .insert:
             return handleInsert(key)
@@ -372,6 +374,17 @@ public final class VimController: ObservableObject {
             delegate?.undo(count: count)
         case .redo(let count):
             delegate?.redo(count: count)
+        case .enterCSTVisualMode:
+            // Flip mode FIRST so the delegate can publish the new mode
+            // before mirroring the forest into the text view.
+            setMode(.visualCST)
+            delegate?.enterCSTVisualMode()
+        case .cstNavigate(let motion, let count):
+            delegate?.cstNavigate(motion, count: count)
+        case .extendCSTSelection(let motion, let count):
+            delegate?.extendCSTSelection(motion, count: count)
+        case .swapCSTEnds:
+            delegate?.swapCSTEnds()
         }
     }
 
@@ -715,6 +728,55 @@ public final class VimController: ObservableObject {
             .redo(count: $0 ?? 1)
         }
 
+        // Visual CST mode. Entry chord (gC) intentionally avoids the
+        // `motionAccepting` list so structural motions (h/l/j/k below)
+        // can be rebound under `.visualCST` without colliding with the
+        // text-cursor motions used in normal/visual/visualLine/
+        // visualBlock.
+        t.bind(.normal, [.char("g"), .char("C")],
+               description: "Visual CST") { _ in
+            .enterCSTVisualMode
+        }
+
+        // Esc and operators in visualCST reuse the same dispatch as
+        // text-visual modes; the Coordinator's snapshotVisualSelection
+        // branches on .visualCST to source the byte range from the
+        // active LiminalForest.
+        t.bind(.visualCST, [.special(.escape)],
+               description: "Back to Normal") { _ in .enterNormalMode }
+        t.bind(.visualCST, [.char("y")],
+               description: "Yank selection") { _ in .yankSelection }
+        t.bind(.visualCST, [.char("d")],
+               description: "Delete selection") { _ in .deleteSelection }
+        t.bind(.visualCST, [.char("c")],
+               description: "Change selection") { _ in .changeSelection }
+
+        // CST navigation. Each chord is bound *only* under .visualCST so
+        // it doesn't shadow normal-mode motions. Slides collapse the
+        // selection to a singleton; extends move only the head.
+        t.bind(.visualCST, [.char("h")],
+               description: "Parent") { _ in .cstNavigate(.parent, count: 1) }
+        t.bind(.visualCST, [.char("l")],
+               description: "First child") { _ in .cstNavigate(.firstChild, count: 1) }
+        t.bind(.visualCST, [.char("j")],
+               description: "Next sibling") {
+            .cstNavigate(.nextSibling, count: $0 ?? 1)
+        }
+        t.bind(.visualCST, [.char("k")],
+               description: "Previous sibling") {
+            .cstNavigate(.previousSibling, count: $0 ?? 1)
+        }
+        t.bind(.visualCST, [.char("J")],
+               description: "Extend forward") {
+            .extendCSTSelection(.nextSibling, count: $0 ?? 1)
+        }
+        t.bind(.visualCST, [.char("K")],
+               description: "Extend backward") {
+            .extendCSTSelection(.previousSibling, count: $0 ?? 1)
+        }
+        t.bind(.visualCST, [.char("o")],
+               description: "Swap ends") { _ in .swapCSTEnds }
+
         return t
     }
 
@@ -748,7 +810,11 @@ public final class VimController: ObservableObject {
     /// Force normal mode without dispatching `.enterNormalMode`
     /// (which would invoke the insert-session commit hook). Used by
     /// the undo/redo install path to land in a predictable mode after
-    /// an arbitrary snapshot is restored.
+    /// an arbitrary snapshot is restored, and by the Coordinator's
+    /// `enterCSTVisualMode` when no navigable forest covers the
+    /// cursor (the controller has already flipped to `.visualCST`
+    /// optimistically and we need to undo that without firing a
+    /// re-entry into normal-mode side effects).
     public func forceNormalMode() {
         setMode(.normal)
     }
@@ -861,6 +927,21 @@ public protocol VimControllerDelegate: AnyObject {
     func toggleTaskAtCursor()
     func setMark(_ name: Character)
     func jumpToMark(_ name: Character)
+    /// Build a ``LiminalForest`` at the cursor's current byte offset
+    /// and mirror it into the text view. Called after the controller
+    /// has flipped to ``VimMode/visualCST``. If no navigable forest
+    /// covers the cursor, the delegate should call
+    /// ``VimController/forceNormalMode()`` to abort the entry.
+    func enterCSTVisualMode()
+    /// Slide the forest selection in `motion`'s direction `count`
+    /// times. Each step collapses the selection to a singleton.
+    func cstNavigate(_ motion: CSTMotion, count: Int)
+    /// Extend the forest's head endpoint in `motion`'s direction
+    /// `count` times. The anchor stays fixed. Only meaningful for
+    /// `.nextSibling` / `.previousSibling`.
+    func extendCSTSelection(_ motion: CSTMotion, count: Int)
+    /// Swap the forest's anchor and head endpoints (vim's `o`).
+    func swapCSTEnds()
 }
 
 extension VimControllerDelegate {
@@ -875,4 +956,10 @@ extension VimControllerDelegate {
     public func undo(count: Int) {}
     public func redo(count: Int) {}
     public func commitInsertSession() {}
+    // CST visual mode default no-ops — production Coordinator
+    // overrides; spy delegates in tests inherit the no-op.
+    public func enterCSTVisualMode() {}
+    public func cstNavigate(_ motion: CSTMotion, count: Int) {}
+    public func extendCSTSelection(_ motion: CSTMotion, count: Int) {}
+    public func swapCSTEnds() {}
 }

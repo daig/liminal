@@ -328,6 +328,7 @@ private struct ModeBadge: View {
         case .visual:      return "VISUAL"
         case .visualLine:  return "V-LINE"
         case .visualBlock: return "V-BLOCK"
+        case .visualCST:   return "V-CST"
         }
     }
 
@@ -338,6 +339,7 @@ private struct ModeBadge: View {
         case .visual:      return .purple
         case .visualLine:  return .pink
         case .visualBlock: return .orange
+        case .visualCST:   return .teal
         }
     }
 }

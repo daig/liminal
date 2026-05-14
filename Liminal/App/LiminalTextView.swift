@@ -1,6 +1,7 @@
 import AppKit
 import CambiumCore
 import CambiumIncremental
+import CambiumSelection
 import Combine
 import SwiftUI
 
@@ -167,6 +168,14 @@ struct LiminalTextView: NSViewRepresentable {
         /// call; cleared on visual-mode exit.
         private var visualHeadUTF16: Int?
 
+        /// Active forest selection in ``VimMode/visualCST``. Set by
+        /// `enterCSTVisualMode`; mutated by the structural-motion
+        /// delegate methods; cleared on visual-mode exit. Holds a
+        /// `SyntaxNodeHandle` into the tree it was captured against;
+        /// `ensureForestIsLive()` validates the tree hasn't been
+        /// replaced before every navigation call.
+        private var cstForest: LiminalForest?
+
         init(document: LiminalSourceDocument) {
             self.document = document
             self.hoverPreviewController = HoverPreviewController(document: document)
@@ -187,10 +196,16 @@ struct LiminalTextView: NSViewRepresentable {
                         // Leaving any visual mode → drop anchors so
                         // the next motion in normal mode places the
                         // cursor cleanly instead of trying to extend
-                        // a stale selection.
+                        // a stale selection. Also drop the CST forest
+                        // (only set inside .visualCST) so it doesn't
+                        // outlive the tree it was captured against, and
+                        // clear the overlay so the teal highlight
+                        // disappears the instant the mode flips.
                         self.visualAnchorUTF16 = nil
                         self.visualBlockAnchor = nil
                         self.visualHeadUTF16 = nil
+                        self.cstForest = nil
+                        self.textView?.cstSelectionRange = nil
                     }
                     self.refreshCursorStyle()
                 }
@@ -330,9 +345,10 @@ struct LiminalTextView: NSViewRepresentable {
                 if current.length != 0 {
                     textView.setSelectedRange(NSRange(location: current.location, length: 0))
                 }
-            case .visual, .visualLine, .visualBlock:
+            case .visual, .visualLine, .visualBlock, .visualCST:
                 // Visual modes own their selection — leave it alone
-                // and let the per-motion extend logic manage it.
+                // and let the per-motion extend logic (or the CST
+                // forest mirror, for .visualCST) manage it.
                 break
             }
         }
@@ -1023,6 +1039,25 @@ struct LiminalTextView: NSViewRepresentable {
                     ranges: ranges,
                     cursorAfter: ranges.first?.location ?? 0
                 )
+            case .visualCST:
+                // The CST forest is the source of truth in this mode —
+                // `textView.selectedRange` only holds a parked caret, not
+                // the structural range. Resolve the forest's byte range
+                // to an NSRange directly. The yank kind is `.cstForest`
+                // so future structural-paste can recognize it; v1 paste
+                // treats it as characterwise.
+                guard ensureForestIsLive(), let forest = cstForest else { return nil }
+                let map = OffsetMap(source: textView.string)
+                guard let r = map.nsRange(
+                    forByteStart: forest.byteRange.start.rawValue,
+                    length: forest.byteRange.length.rawValue
+                ), r.length > 0 else { return nil }
+                return VisualSnapshot(
+                    text: nsString.substring(with: r),
+                    kind: .cstForest,
+                    ranges: [r],
+                    cursorAfter: r.location
+                )
             case .normal, .insert:
                 return nil
             }
@@ -1208,7 +1243,10 @@ struct LiminalTextView: NSViewRepresentable {
             guard let textView else { return }
             let nsString = textView.string as NSString
             switch kind {
-            case .characterwise, .blockwise:
+            case .characterwise, .blockwise, .cstForest:
+                // .cstForest deletes share characterwise cursor placement
+                // semantics in v1 (the forest's byte range was treated as
+                // a contiguous character-mode selection).
                 var start = 0, contentEnd = 0, end = 0
                 let safe = max(0, min(location, nsString.length))
                 nsString.getLineStart(
@@ -1499,6 +1537,14 @@ struct LiminalTextView: NSViewRepresentable {
                 extendLinewiseSelection(toUTF16: clampedLocation)
             case .visualBlock:
                 extendBlockwiseSelection(toUTF16: clampedLocation)
+            case .visualCST:
+                // .visualCST owns the text-view selection via
+                // mirrorCSTSelection. Generic UTF-16 cursor placement
+                // doesn't apply here: text-cursor motions aren't bound
+                // in .visualCST, so this path shouldn't fire — but if it
+                // does (e.g. a future code path), preserve the forest's
+                // range rather than collapse it.
+                break
             }
         }
 
@@ -1591,6 +1637,147 @@ struct LiminalTextView: NSViewRepresentable {
             if !ranges.isEmpty {
                 textView.selectedRanges = ranges
             }
+        }
+
+        // MARK: - Visual CST mode
+
+        /// Build the entry-point forest at the cursor's byte offset and
+        /// mirror its range into the text view. If no navigable forest
+        /// covers the cursor (empty document, etc.) we force the
+        /// controller back to normal so the user doesn't sit in an
+        /// empty `.visualCST`.
+        func enterCSTVisualMode() {
+            guard let textView,
+                  let tree = document.session.currentTree
+            else {
+                document.vimController.forceNormalMode()
+                return
+            }
+            let utf16Cursor = textView.selectedRange().location
+            let source = textView.string
+            let byte = byteOffset(forUTF16: utf16Cursor, in: source)
+            guard let forest = LiminalForest.cstVisualEntry(
+                at: TextSize(UInt32(byte)),
+                in: tree
+            ) else {
+                document.vimController.forceNormalMode()
+                return
+            }
+            cstForest = forest
+            mirrorCSTSelection()
+        }
+
+        /// Slide the forest to a new singleton via `motion`, repeated
+        /// `count` times. Stops at the first step that has no successor
+        /// (rather than failing the whole call) so `9j` on a list of
+        /// five items lands on the last item instead of doing nothing.
+        func cstNavigate(_ motion: CSTMotion, count: Int) {
+            guard ensureForestIsLive(), var forest = cstForest else { return }
+            for _ in 0..<max(1, count) {
+                let next: LiminalForest?
+                switch motion {
+                case .parent:           next = forest.parentForest()
+                case .firstChild:       next = forest.firstChildForest()
+                case .nextSibling:      next = forest.slidForward()
+                case .previousSibling:  next = forest.slidBackward()
+                }
+                guard let next else { break }
+                forest = next
+            }
+            cstForest = forest
+            mirrorCSTSelection()
+        }
+
+        /// Extend the forest's head endpoint `count` siblings in
+        /// `motion`'s direction. Anchor stays fixed. Parent/firstChild
+        /// don't extend (no meaning), so those cases are no-ops.
+        func extendCSTSelection(_ motion: CSTMotion, count: Int) {
+            guard ensureForestIsLive(), var forest = cstForest else { return }
+            for _ in 0..<max(1, count) {
+                let next: LiminalForest?
+                switch motion {
+                case .nextSibling:      next = forest.extendedForward()
+                case .previousSibling:  next = forest.extendedBackward()
+                case .parent, .firstChild:
+                    return
+                }
+                guard let next else { break }
+                forest = next
+            }
+            cstForest = forest
+            mirrorCSTSelection()
+        }
+
+        /// Swap anchor and head endpoints. The visible byte range is
+        /// unchanged for symmetric ends — we still re-mirror so any
+        /// future cursor-at-head polish (vim's `o` jumps the caret to
+        /// the other end of the selection) has a hook.
+        func swapCSTEnds() {
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstForest = forest.withEndsSwapped()
+            mirrorCSTSelection()
+        }
+
+        // MARK: - Visual CST helpers
+
+        /// Validate that the active forest still references the document's
+        /// current tree. The Coordinator clears the forest on mode-leave,
+        /// but a programmatic edit that swapped the tree without flipping
+        /// the mode would leave a stale `SyntaxNodeHandle` in
+        /// `cstForest`. Returns `false` (and clears the field) when the
+        /// tree identity has changed.
+        @discardableResult
+        private func ensureForestIsLive() -> Bool {
+            guard let forest = cstForest else { return false }
+            guard let liveTreeID = document.session.currentTree?.treeID,
+                  forest.treeID == liveTreeID
+            else {
+                cstForest = nil
+                return false
+            }
+            return true
+        }
+
+        /// Push the active forest's byte range to `VimTextView`'s
+        /// dedicated overlay property and park the system caret at the
+        /// selection's start.
+        ///
+        /// We deliberately do *not* mirror the forest into
+        /// `textView.setSelectedRange(_:)`: AppKit's native selection
+        /// background would paint on top of our teal overlay, doubling
+        /// the highlight, and the existing `selectedTextAttributes`
+        /// machinery is hard to override without breaking other modes
+        /// (it's how the normal-mode block cursor draws its fill).
+        /// Operators in `.visualCST` read directly from `cstForest`
+        /// instead of `textView.selectedRange` (see
+        /// `snapshotVisualSelection`).
+        private func mirrorCSTSelection() {
+            guard let textView, let forest = cstForest else { return }
+            let map = OffsetMap(source: textView.string)
+            let byteRange = forest.byteRange
+            let nsRange = map.nsRange(
+                forByteStart: byteRange.start.rawValue,
+                length: byteRange.length.rawValue
+            )
+            textView.cstSelectionRange = nsRange
+            // Park the system caret at the overlay's start so AppKit's
+            // blinking insertion point sits at one edge of the
+            // structural selection rather than blinking inside it.
+            if let nsRange {
+                textView.setSelectedRange(NSRange(location: nsRange.location, length: 0))
+            }
+        }
+
+        /// Convert a UTF-16 cursor location to a UTF-8 byte offset by
+        /// walking the source's UTF-8 view. Called once per CST entry,
+        /// so the O(cursor position) walk is acceptable; if a hot path
+        /// ever needs this, fold it into `OffsetMap` as the reverse
+        /// direction.
+        private func byteOffset(forUTF16 utf16Cursor: Int, in source: String) -> Int {
+            let utf16View = source.utf16
+            let clamped = max(0, min(utf16Cursor, utf16View.count))
+            let idx16 = utf16View.index(utf16View.startIndex, offsetBy: clamped)
+            return source.utf8.distance(from: source.utf8.startIndex, to: idx16)
         }
 
         // MARK: - Line geometry helpers (UTF-16, NSString-based)

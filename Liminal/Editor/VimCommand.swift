@@ -59,6 +59,46 @@ public enum VimCommand: Sendable, Equatable {
     case undo(count: Int)
     /// Vim's `<C-r>` — walk forward `count` snapshots.
     case redo(count: Int)
+
+    // MARK: - Visual CST mode
+
+    /// `gC` from normal: enter ``VimMode/visualCST`` at the current
+    /// cursor. The delegate builds a ``LiminalForest`` covering the
+    /// cursor (block-level entry) and mirrors it into the text view.
+    case enterCSTVisualMode
+
+    /// CST-structural motion that *slides* the forest selection to a
+    /// new singleton in the named direction. The motion may be
+    /// repeated `count` times; if any step has no successor the move
+    /// stops at the last valid position rather than failing.
+    case cstNavigate(CSTMotion, count: Int)
+
+    /// CST-structural motion that *extends* the forest's head endpoint
+    /// in the named direction, leaving the anchor fixed. Only
+    /// `.nextSibling` / `.previousSibling` are meaningful here; the
+    /// other cases are no-ops (extend doesn't make sense for parent
+    /// or descend).
+    case extendCSTSelection(CSTMotion, count: Int)
+
+    /// Swap the forest's anchor and head endpoints. Vim's `o` in
+    /// visual mode.
+    case swapCSTEnds
+}
+
+/// Structural motions specific to ``VimMode/visualCST``. Distinct from
+/// ``StructuralMotion`` (which moves the text cursor in normal mode);
+/// CST motions navigate the forest selection itself.
+public enum CSTMotion: Sendable, Equatable, Hashable {
+    /// Ascend: replace the forest with a singleton at its parent.
+    case parent
+    /// Descend: replace the forest with a singleton at the head's
+    /// first navigable child. No-op when the head points at a token
+    /// or at an opaque-policy parent.
+    case firstChild
+    /// Slide forward: next navigable sibling under the same parent.
+    case nextSibling
+    /// Slide backward: previous navigable sibling under the same parent.
+    case previousSibling
 }
 
 /// Vim's three text-mutating operators. Indent / case / format

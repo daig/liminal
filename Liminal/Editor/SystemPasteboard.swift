@@ -1,13 +1,18 @@
 import AppKit
 import Foundation
 
-/// Vim's "kind" of yank: characterwise / linewise / blockwise.
-/// Determines paste behavior — charwise inserts inline, linewise
-/// inserts as new line(s), blockwise inserts as a column.
+/// Vim's "kind" of yank: characterwise / linewise / blockwise / cstForest.
+/// Determines paste behavior — charwise inserts inline, linewise inserts
+/// as new line(s), blockwise inserts as a column. `cstForest` marks a
+/// yank that originated from visual CST mode; v1 serializes its bytes
+/// just like `characterwise` but the discriminator lets a future
+/// structural-paste branch recognize CST yanks without breaking
+/// already-saved pasteboard data.
 public enum YankKind: String, Sendable, Equatable, Hashable {
     case characterwise
     case linewise
     case blockwise
+    case cstForest
 }
 
 /// Wrapper around `NSPasteboard.general` that round-trips a vim

@@ -4,7 +4,7 @@ import CambiumIncremental
 import CambiumSyntaxMacros
 
 @CambiumSyntaxKind
-public enum LiminalKind: UInt32, Sendable {
+public enum LiminalKind: UInt32, Sendable, CaseIterable {
     case whitespace = 1
     case newline = 2
 

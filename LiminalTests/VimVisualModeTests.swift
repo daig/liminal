@@ -184,4 +184,7 @@ private final class VisualSpy: VimControllerDelegate {
     func toggleTaskAtCursor() {}
     func setMark(_ name: Character) {}
     func jumpToMark(_ name: Character) {}
+    // Visual CST mode methods inherit no-op defaults from the protocol
+    // extension; this spy doesn't record them (see VimVisualCSTModeTests
+    // for tests that do).
 }

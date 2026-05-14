@@ -37,7 +37,10 @@ public enum PasteEngine {
         let safeCursor = max(0, min(cursor, textLength))
 
         switch kind {
-        case .characterwise:
+        case .characterwise, .cstForest:
+            // v1: CST-forest yanks paste as ordinary characterwise text.
+            // Future structural paste will branch on .cstForest here to
+            // splice the green forest into a compatible parent.
             return planCharwise(
                 text: text, in: nsString,
                 cursor: safeCursor, after: after

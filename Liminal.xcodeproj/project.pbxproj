@@ -10,9 +10,9 @@
 		CA2000000000000000000001 /* CambiumCore in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000001 /* CambiumCore */; };
 		CA2000000000000000000002 /* CambiumBuilder in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000002 /* CambiumBuilder */; };
 		CA2000000000000000000003 /* CambiumIncremental in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000003 /* CambiumIncremental */; };
-		CA2000000000000000000004 /* CambiumCore in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000001 /* CambiumCore */; };
 		CA2000000000000000000005 /* CambiumASTSupport in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000004 /* CambiumASTSupport */; };
 		CA2000000000000000000006 /* CambiumSyntaxMacros in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000005 /* CambiumSyntaxMacros */; };
+		CA2000000000000000000007 /* CambiumSelection in Frameworks */ = {isa = PBXBuildFile; productRef = CA1000000000000000000006 /* CambiumSelection */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -66,6 +66,7 @@
 				CA2000000000000000000003 /* CambiumIncremental in Frameworks */,
 				CA2000000000000000000005 /* CambiumASTSupport in Frameworks */,
 				CA2000000000000000000006 /* CambiumSyntaxMacros in Frameworks */,
+				CA2000000000000000000007 /* CambiumSelection in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -73,7 +74,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CA2000000000000000000004 /* CambiumCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -123,6 +123,7 @@
 				CA1000000000000000000003 /* CambiumIncremental */,
 				CA1000000000000000000004 /* CambiumASTSupport */,
 				CA1000000000000000000005 /* CambiumSyntaxMacros */,
+				CA1000000000000000000006 /* CambiumSelection */,
 			);
 			productName = Liminal;
 			productReference = 2313497F2FA67AAF00958BAB /* Liminal.app */;
@@ -146,7 +147,6 @@
 			);
 			name = LiminalTests;
 			packageProductDependencies = (
-				CA1000000000000000000001 /* CambiumCore */,
 			);
 			productName = LiminalTests;
 			productReference = CA3000000000000000000001 /* LiminalTests.xctest */;
@@ -528,6 +528,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
 			productName = CambiumSyntaxMacros;
+		};
+		CA1000000000000000000006 /* CambiumSelection */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA0000000000000000000001 /* XCLocalSwiftPackageReference "../cambium" */;
+			productName = CambiumSelection;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
