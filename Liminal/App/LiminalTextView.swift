@@ -22,12 +22,10 @@ struct LiminalTextView: NSViewRepresentable {
         textView.isAutomaticDataDetectionEnabled = false
         textView.smartInsertDeleteEnabled = false
         textView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        // CST-aware undo lives on the document and is wired into the
-        // responder chain via `liminalUndoManager` below. NSTextView's
-        // own undo would only see byte-level edits and would compete
-        // for the same ⌘Z action — so we disable it here.
+        // Vim-style undo lives entirely on the document. NSTextView's
+        // own byte-level undo would compete with transaction undo, so
+        // keep AppKit undo disabled.
         textView.allowsUndo = false
-        textView.liminalUndoManager = document.undoManager
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.textContainerInset = NSSize(width: 12, height: 12)
@@ -43,9 +41,6 @@ struct LiminalTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.hoverPreviewController.attach(to: textView)
         document.vimController.delegate = context.coordinator
-        // Hook the document's snapshot install path back to the
-        // Coordinator so undo/redo can drive the text view.
-        document.snapshotInstaller = context.coordinator
         // Seed the initial undo snapshot now that we're on the
         // MainActor — the document's off-main inits couldn't do this
         // because seeding touches MainActor-bound state. Idempotent.
@@ -124,7 +119,7 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, VimTextViewLinkHoverDelegate, NavigationSubscriber, CSTSnapshotInstaller {
+    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate, VimControllerDelegate, VimTextViewLinkActivationDelegate, VimTextViewLinkHoverDelegate, NavigationSubscriber {
         let document: LiminalSourceDocument
         weak var textView: VimTextView?
         var isApplyingProgrammaticEdit = false
@@ -132,6 +127,18 @@ struct LiminalTextView: NSViewRepresentable {
 
         let highlighter = LiminalHighlighter()
         let theme = LiminalHighlightTheme.default
+
+        private enum HighlightRepaintScope {
+            case fullDocument
+            case parserDirtyRange
+            case explicitByteRanges([CambiumCore.TextRange])
+        }
+
+        private struct HighlightPaintScope {
+            let byteRange: CambiumCore.TextRange?
+            let nsRange: NSRange
+            let offsetMap: OffsetMap
+        }
 
         /// Cmd+hover popover lifetime is tied to this Coordinator —
         /// when the window closes the controller goes with it, and
@@ -415,7 +422,7 @@ struct LiminalTextView: NSViewRepresentable {
                     ),
                     replacement: replacement
                 )
-                document.applyTextEdits([edit])
+                guard document.applyTextEdits([edit]) else { return }
                 applyHighlights(in: editedRange)
             }
         }
@@ -800,6 +807,8 @@ struct LiminalTextView: NSViewRepresentable {
                   let offset = currentCursorByteOffset(),
                   let location = StructureCursor.taskListItem(at: offset, in: root)
             else { return }
+            let cursor = textView.selectedRange().location
+            guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
 
             let newMarker: String
             switch location.state {
@@ -831,6 +840,16 @@ struct LiminalTextView: NSViewRepresentable {
             // Step 3: cursor on the (now-toggled) marker for the block
             // cursor's benefit.
             setCursorAt(utf16Location: nsRange.location)
+            document.recordTextTransaction(
+                before: before,
+                afterCursor: nsRange.location,
+                edits: [
+                    TextEdit(
+                        range: location.markerByteRange,
+                        replacement: newMarker
+                    )
+                ]
+            )
         }
 
         // MARK: - Marks
@@ -1070,46 +1089,41 @@ struct LiminalTextView: NSViewRepresentable {
             // dispatch; cursor placement here so it lands at the
             // start of the previous selection.
             setCursorAt(utf16Location: snap.cursorAfter)
-            // Source unchanged — captureSnapshot will no-op via the
-            // history's source-equality check, so no NSUndoManager
-            // entry is created. Still call it so the cursor/marks
-            // drift is recorded if someday we make those undoable too.
-            captureUndoSnapshot()
         }
 
         func deleteSelection() {
-            guard let snap = snapshotVisualSelection() else { return }
-            deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
+            guard let snap = snapshotVisualSelection(),
+                  let before = document.makeUndoSnapshot(cursor: snap.cursorAfter)
+            else { return }
+            let edits = deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
             setCursorAt(utf16Location: snap.cursorAfter)
-            captureUndoSnapshot()
+            document.recordTextTransaction(
+                before: before,
+                afterCursor: snap.cursorAfter,
+                edits: edits
+            )
         }
 
-        /// Capture a CST-aware snapshot of the current document state
-        /// at the current cursor. Routes through the document, which
-        /// no-ops the snapshot if the source is unchanged and only
-        /// registers an NSUndoManager entry when the snapshot actually
-        /// records new state.
-        @MainActor
-        private func captureUndoSnapshot() {
-            let cursor = textView?.selectedRange().location ?? 0
-            document.captureSnapshot(at: cursor)
+        func changeSelection() {
+            guard let snap = snapshotVisualSelection() else { return }
+            document.beginInsertSession(at: snap.cursorAfter)
+            _ = deleteRanges(snap.ranges, yankAs: snap.kind, text: snap.text)
+            setCursorAt(utf16Location: snap.cursorAfter)
         }
 
-        /// Vim `u` — fire `count` undos through the document's undo
-        /// manager. NSUndoManager's `undo()` runs the closure we
-        /// registered, which walks `CSTUndoHistory` one step back and
-        /// drives the view via `applyInstalledSnapshot`.
+        /// Vim `u`: walk the Liminal-owned undo history directly and
+        /// apply each returned patch to the text view.
         func undo(count: Int) {
             for _ in 0..<max(1, count) {
-                guard document.undoManager.canUndo else { break }
-                document.undoManager.undo()
+                guard let navigation = document.undoStep() else { break }
+                applyUndoNavigation(navigation)
             }
         }
 
         func redo(count: Int) {
             for _ in 0..<max(1, count) {
-                guard document.undoManager.canRedo else { break }
-                document.undoManager.redo()
+                guard let navigation = document.redoStep() else { break }
+                applyUndoNavigation(navigation)
             }
         }
 
@@ -1121,31 +1135,47 @@ struct LiminalTextView: NSViewRepresentable {
             document.commitInsertSession(at: cursor)
         }
 
-        public func currentCursorForUndo() -> Int {
-            textView?.selectedRange().location ?? 0
-        }
-
-        /// Drive the text view from an installed snapshot: replace the
-        /// entire content with the snapshot's source (suppressing the
-        /// reparse pipeline via `isApplyingProgrammaticEdit`), restore
-        /// the cursor, force the controller into normal mode, and
-        /// refresh derived view state. Called from the document's undo
-        /// closure (`installSnapshotAndUpdateView`).
+        /// Drive the text view from an undo/redo transaction: apply
+        /// only the changed byte ranges, suppressing the delegate so
+        /// the already-installed target CST is not reparsed.
         @MainActor
-        public func applyInstalledSnapshot(_ snap: CSTUndoSnapshot) {
+        private func applyUndoNavigation(_ navigation: CSTUndoNavigation) {
             guard let textView else { return }
+            let edits = navigation.sourceEdits.sorted {
+                $0.range.start.rawValue > $1.range.start.rawValue
+            }
             let prior = isApplyingProgrammaticEdit
             isApplyingProgrammaticEdit = true
-            textView.string = snap.source
+            for edit in edits {
+                guard let nsRange = LiminalTextView.byteRangeToNSRange(
+                    edit.range,
+                    in: textView.string
+                ) else {
+                    preconditionFailure("Undo patch range could not be mapped into NSTextView text")
+                }
+                let replacement = String(decoding: edit.replacementUTF8, as: UTF8.self)
+                if textView.shouldChangeText(in: nsRange, replacementString: replacement) {
+                    textView.replaceCharacters(in: nsRange, with: replacement)
+                    textView.didChangeText()
+                }
+            }
             isApplyingProgrammaticEdit = prior
-            // Force normal mode so the cursor lands cleanly even if
-            // undo/redo fires while we were in insert or visual.
+
             document.vimController.forceNormalMode()
-            let safeCursor = max(0, min(snap.cursor,
-                                        (snap.source as NSString).length))
+            let safeCursor = max(0, min(
+                navigation.target.cursor,
+                (textView.string as NSString).length
+            ))
             textView.setSelectedRange(NSRange(location: safeCursor, length: 0))
             refreshCursorStyle()
-            applyHighlights()
+            guard let root = document.currentRootSyntax else {
+                preconditionFailure("Undo target tree was not installed before highlight repaint")
+            }
+            let repaintRanges = LiminalDirtySpan.expandedHighlightRanges(
+                root: root,
+                touching: navigation.targetPatchRanges
+            )
+            applyHighlights(inTargetByteRanges: repaintRanges)
         }
 
         /// Write `text` to the system pasteboard with `kind`. No-op for
@@ -1160,12 +1190,17 @@ struct LiminalTextView: NSViewRepresentable {
         /// it to the pasteboard first (vim's delete-implies-yank). Ranges
         /// are replaced in descending order so earlier deletions don't
         /// shift later range indices.
+        @discardableResult
         private func deleteRanges(
             _ ranges: [NSRange],
             yankAs kind: YankKind,
             text: String?
-        ) {
-            guard let textView, !ranges.isEmpty else { return }
+        ) -> [TextEdit] {
+            guard let textView, !ranges.isEmpty else { return [] }
+            let sourceBefore = textView.string
+            let edits = ranges
+                .filter { $0.length > 0 }
+                .map { textEdit(for: $0, replacement: "", in: sourceBefore) }
             if let text { yankText(text, kind: kind) }
             for range in ranges.sorted(by: { $0.location > $1.location }) {
                 guard range.length > 0 else { continue }
@@ -1174,6 +1209,27 @@ struct LiminalTextView: NSViewRepresentable {
                     textView.didChangeText()
                 }
             }
+            return edits
+        }
+
+        private func textEdit(
+            for range: NSRange,
+            replacement: String,
+            in source: String
+        ) -> TextEdit {
+            guard let byteRange = LiminalTextView.utf16RangeToByteRange(
+                range,
+                in: source
+            ) else {
+                preconditionFailure("Text edit range could not be mapped into UTF-8 source")
+            }
+            return TextEdit(
+                range: TextRange(
+                    start: TextSize(UInt32(byteRange.lowerBound)),
+                    length: TextSize(UInt32(byteRange.count))
+                ),
+                replacement: replacement
+            )
         }
 
         /// Apply a normal-mode operator (`d` / `c` / `y`) over a target
@@ -1208,28 +1264,25 @@ struct LiminalTextView: NSViewRepresentable {
                 // yanked range.
                 setCursorAt(utf16Location: safeRange.location)
             case .delete:
-                deleteRanges([safeRange], yankAs: result.kind, text: text)
+                guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
+                let edits = deleteRanges([safeRange], yankAs: result.kind, text: text)
                 positionCursorAfterDelete(
                     at: safeRange.location, kind: result.kind
                 )
+                document.recordTextTransaction(
+                    before: before,
+                    afterCursor: textView.selectedRange().location,
+                    edits: edits
+                )
             case .change:
-                deleteRanges([safeRange], yankAs: result.kind, text: text)
+                document.beginInsertSession(at: cursor)
+                _ = deleteRanges([safeRange], yankAs: result.kind, text: text)
                 // For change, cursor sits at the deletion start; the
                 // controller flips to insert mode immediately after
                 // this returns and calls prepareForInsert(.atCursor).
                 textView.setSelectedRange(
                     NSRange(location: safeRange.location, length: 0)
                 )
-            }
-            // For .change the controller's setMode(.insert) →
-            // prepareForInsert flow opens an insert session right after
-            // this returns; the change-portion's edit becomes the
-            // session's pre-edit and gets folded into one undo step on
-            // commit. So we deliberately do NOT capture here for .change.
-            // For .yank and .delete we capture (yank no-ops out via the
-            // source-equality check).
-            if op != .change {
-                captureUndoSnapshot()
             }
         }
 
@@ -1266,12 +1319,18 @@ struct LiminalTextView: NSViewRepresentable {
                   let entry = SystemPasteboard.read()
             else { return }
             let cursor = textView.selectedRange().location
+            guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
             let plan = PasteEngine.plan(
                 text: entry.text,
                 kind: entry.kind,
                 in: textView.string,
                 cursor: cursor,
                 after: after
+            )
+            let edit = textEdit(
+                for: plan.range,
+                replacement: plan.replacement,
+                in: textView.string
             )
             if textView.shouldChangeText(
                 in: plan.range,
@@ -1281,7 +1340,11 @@ struct LiminalTextView: NSViewRepresentable {
                 textView.didChangeText()
             }
             setCursorAt(utf16Location: plan.cursorAfter)
-            captureUndoSnapshot()
+            document.recordTextTransaction(
+                before: before,
+                afterCursor: plan.cursorAfter,
+                edits: [edit]
+            )
         }
 
         /// Pull the cached `DocumentIndex` from the vault entry, or
@@ -1868,6 +1931,18 @@ struct LiminalTextView: NSViewRepresentable {
         /// toggle, programmatic source replace) we still highlight the
         /// full range.
         func applyHighlights(in editedRange: NSRange? = nil) {
+            if editedRange != nil {
+                applyHighlights(scope: .parserDirtyRange)
+            } else {
+                applyHighlights(scope: .fullDocument)
+            }
+        }
+
+        private func applyHighlights(inTargetByteRanges ranges: [CambiumCore.TextRange]) {
+            applyHighlights(scope: .explicitByteRanges(ranges))
+        }
+
+        private func applyHighlights(scope: HighlightRepaintScope) {
             guard let textView,
                   let storage = textView.textStorage
             else { return }
@@ -1875,52 +1950,68 @@ struct LiminalTextView: NSViewRepresentable {
             let storageLen = storage.length
             let source = storage.string
             let parsed = document.session.parseResult
+            let root = document.currentRootSyntax
 
-            // Scope decision: the parse already knows which contiguous
-            // byte range it just re-walked (skip-clean-regions' dirty
-            // span, plus boundary halo and sentinel expansion). When the
-            // call site signals a keystroke (`editedRange != nil`) and
-            // the parse produced a `changedByteRange`, use it as the
-            // repaint scope. Otherwise repaint the whole document —
-            // initial display, preference toggle, cold parse, or any
-            // path where the parse fell back to a full rewrite.
-            let scopedByteRange: CambiumCore.TextRange?
-            let offsetMap: OffsetMap
-            let scopeNSRange: NSRange
-            if editedRange != nil,
-               let changed = parsed?.changedByteRange,
-               let map = Self.makeScopedOffsetMap(source: source, byteRange: changed),
-               let nsRange = map.nsRange(
-                forByteStart: changed.start.rawValue,
-                length: changed.length.rawValue
-               )
-            {
-                scopedByteRange = changed
-                offsetMap = map
-                scopeNSRange = nsRange
-            } else {
-                scopedByteRange = nil
-                offsetMap = OffsetMap(source: source)
-                scopeNSRange = NSRange(location: 0, length: storageLen)
+            let paintScopes: [HighlightPaintScope]
+            switch scope {
+            case .fullDocument:
+                paintScopes = [
+                    HighlightPaintScope(
+                        byteRange: nil,
+                        nsRange: NSRange(location: 0, length: storageLen),
+                        offsetMap: OffsetMap(source: source)
+                    )
+                ]
+            case .parserDirtyRange:
+                if let changed = parsed?.changedByteRange,
+                   let paintScope = Self.makeHighlightPaintScope(
+                    source: source,
+                    byteRange: changed
+                   )
+                {
+                    paintScopes = [paintScope]
+                } else {
+                    paintScopes = [
+                        HighlightPaintScope(
+                            byteRange: nil,
+                            nsRange: NSRange(location: 0, length: storageLen),
+                            offsetMap: OffsetMap(source: source)
+                        )
+                    ]
+                }
+            case .explicitByteRanges(let ranges):
+                paintScopes = ranges.map { range in
+                    guard let paintScope = Self.makeHighlightPaintScope(
+                        source: source,
+                        byteRange: range
+                    ) else {
+                        preconditionFailure("Explicit highlight repaint range is outside the text storage")
+                    }
+                    return paintScope
+                }
+            }
+            guard !paintScopes.isEmpty else {
+                textView.typingAttributes = theme.defaultAttributes
+                return
             }
 
             isApplyingProgrammaticEdit = true
             storage.beginEditing()
-            // Reset to base style first so toggling off cleanly removes
-            // any previously-painted highlight attributes within scope.
-            storage.setAttributes(theme.defaultAttributes, range: scopeNSRange)
+            for paintScope in paintScopes {
+                // Reset to base style first so toggling off cleanly
+                // removes any previously-painted highlight attributes
+                // within scope.
+                storage.setAttributes(theme.defaultAttributes, range: paintScope.nsRange)
 
-            if EditorPreferences.shared.highlightingEnabled,
-               let parsed
-            {
-                let spans: [HighlightSpan]
-                if let scope = scopedByteRange {
-                    spans = highlighter.spans(for: parsed.rootSyntax, in: scope)
-                } else {
-                    spans = highlighter.spans(for: parsed.rootSyntax)
-                }
+                guard EditorPreferences.shared.highlightingEnabled,
+                      let root
+                else { continue }
+
+                let spans = paintScope.byteRange.map {
+                    highlighter.spans(for: root, in: $0)
+                } ?? highlighter.spans(for: root)
                 for span in spans {
-                    guard let nsRange = offsetMap.nsRange(
+                    guard let nsRange = paintScope.offsetMap.nsRange(
                         forByteStart: span.range.start.rawValue,
                         length: span.range.length.rawValue
                     ) else { continue }
@@ -1936,6 +2027,23 @@ struct LiminalTextView: NSViewRepresentable {
             isApplyingProgrammaticEdit = false
 
             textView.typingAttributes = theme.defaultAttributes
+        }
+
+        private static func makeHighlightPaintScope(
+            source: String,
+            byteRange: CambiumCore.TextRange
+        ) -> HighlightPaintScope? {
+            guard let map = makeScopedOffsetMap(source: source, byteRange: byteRange),
+                  let nsRange = map.nsRange(
+                    forByteStart: byteRange.start.rawValue,
+                    length: byteRange.length.rawValue
+                  )
+            else { return nil }
+            return HighlightPaintScope(
+                byteRange: byteRange,
+                nsRange: nsRange,
+                offsetMap: map
+            )
         }
 
         /// Build a scope-local OffsetMap covering exactly `byteRange`.

@@ -1,27 +1,20 @@
-import Foundation
+import CambiumCore
+import CambiumIncremental
 
-/// Linear undo history of `CSTUndoSnapshot`s. One per document.
+/// Linear vim-style undo history. One per document.
 ///
-/// Layout: `snapshots[0]` is the document's initial state, snapshots
-/// after that are post-transaction states. `currentIndex` points at
-/// the snapshot the document is currently equal to.
-///
-/// Insert sessions are special — we don't snapshot per-keystroke,
-/// only on commit (Esc out of insert). The `insertSessionEntry`
-/// field caches the pre-insert snapshot during the session in case
-/// it's needed (currently unused, but kept for future "rollback
-/// to entry" semantics in case the session is cancelled).
-///
-/// No branching for v1: pushing a snapshot after an undo truncates
-/// the forward history. Future work can swap the linear array for
-/// a tree of nodes (the prototype's shape) without changing the
-/// snapshot type or the install path.
+/// Each entry is a transaction with a before tree, an after tree, and
+/// byte-range patches that describe the changed regions on both sides.
+/// The history deliberately does not register with AppKit's UndoManager:
+/// `u` / redo walk this transaction list directly.
 @MainActor
 public final class CSTUndoHistory {
-    public private(set) var snapshots: [CSTUndoSnapshot] = []
-    public private(set) var currentIndex: Int = -1
+    public private(set) var rootSnapshot: CSTUndoSnapshot?
+    public private(set) var transactions: [CSTUndoTransaction] = []
+    public private(set) var currentIndex: Int = 0
+    public private(set) var currentSnapshot: CSTUndoSnapshot?
 
-    private var insertSessionEntry: CSTUndoSnapshot?
+    private var insertSession: InsertSession?
 
     /// `nonisolated` so the document — which is constructed off the
     /// MainActor by SwiftUI's `DocumentGroup` — can hold one as a
@@ -29,86 +22,275 @@ public final class CSTUndoHistory {
     public nonisolated init() {}
 
     public var canUndo: Bool { currentIndex > 0 }
-    public var canRedo: Bool {
-        currentIndex >= 0 && currentIndex < snapshots.count - 1
-    }
-    public var insertSessionActive: Bool { insertSessionEntry != nil }
-    public var depth: Int { snapshots.count }
+    public var canRedo: Bool { currentIndex < transactions.count }
+    public var insertSessionActive: Bool { insertSession != nil }
+    public var depth: Int { (rootSnapshot == nil ? 0 : 1) + transactions.count }
 
-    /// Reset the history to a single initial snapshot. Called at
-    /// document load. Discards any prior history wholesale.
     public func reset(initial: CSTUndoSnapshot) {
-        snapshots = [initial]
+        rootSnapshot = initial
+        transactions = []
         currentIndex = 0
-        insertSessionEntry = nil
+        currentSnapshot = initial
+        insertSession = nil
     }
 
-    /// Append a post-transaction snapshot. If we're not at the tip
-    /// (e.g., after an undo), the forward history is truncated —
-    /// linear semantics, no branching for v1.
-    ///
-    /// No-op detection: if the new snapshot's `source` matches the
-    /// snapshot at `currentIndex`, the call is dropped. Prevents
-    /// pure-read paths (visual `y` with no edit, or operator
-    /// dispatches that resolved to an empty range) from cluttering
-    /// the history with redundant entries.
-    ///
-    /// Returns `true` if the snapshot was appended; `false` for the
-    /// no-op case. Callers (e.g., the document) use this to decide
-    /// whether to register a Cocoa undo entry — there's no point
-    /// registering one that does nothing.
     @discardableResult
-    public func snapshot(_ snap: CSTUndoSnapshot) -> Bool {
-        if currentIndex >= 0,
-           snapshots[currentIndex].source == snap.source {
-            return false
-        }
-        if currentIndex < snapshots.count - 1 {
-            snapshots.removeSubrange((currentIndex + 1)...)
-        }
-        snapshots.append(snap)
-        currentIndex = snapshots.count - 1
-        return true
+    public func recordTransaction(
+        before: CSTUndoSnapshot,
+        after: CSTUndoSnapshot,
+        edits: [TextEdit]
+    ) -> CSTUndoTransaction? {
+        recordTransaction(
+            before: before,
+            after: after,
+            patches: CSTUndoTextPatch.normalized(from: edits)
+        )
     }
 
-    /// Open an insert-session bracket. The entry-point snapshot is
-    /// remembered so we can either commit a single transaction on
-    /// session close, or (future) roll back to entry on cancellation.
+    @discardableResult
+    public func recordTransaction(
+        before: CSTUndoSnapshot,
+        after: CSTUndoSnapshot,
+        patches: [CSTUndoTextPatch]
+    ) -> CSTUndoTransaction? {
+        guard !patches.isEmpty else { return nil }
+        let transaction = CSTUndoTransaction(
+            before: before,
+            after: after,
+            patches: patches
+        )
+        if currentIndex < transactions.count {
+            transactions.removeSubrange(currentIndex...)
+        }
+        transactions.append(transaction)
+        currentIndex = transactions.count
+        currentSnapshot = after
+        return transaction
+    }
+
     public func beginInsertSession(at entry: CSTUndoSnapshot) {
-        insertSessionEntry = entry
+        guard insertSession == nil else { return }
+        insertSession = InsertSession(entry: entry)
     }
 
-    /// Close an insert session. If the post-session source differs
-    /// from the entry-point's source, append a single transaction
-    /// and return `true`; otherwise the session was a no-op (entered
-    /// insert and pressed Esc without typing) and is dropped
-    /// silently, returning `false`. Returns `false` when no session
-    /// was open.
+    public func appendInsertEdits(_ edits: [TextEdit]) {
+        guard !edits.isEmpty else { return }
+        guard var session = insertSession else {
+            preconditionFailure("Insert edits recorded outside an insert undo session")
+        }
+        session.append(contentsOf: edits)
+        insertSession = session
+    }
+
     @discardableResult
-    public func commitInsertSession(commit: CSTUndoSnapshot) -> Bool {
-        guard let entry = insertSessionEntry else { return false }
-        insertSessionEntry = nil
-        if entry.source == commit.source { return false }
-        return snapshot(commit)
+    public func commitInsertSession(after: CSTUndoSnapshot) -> CSTUndoTransaction? {
+        guard let session = insertSession else { return nil }
+        insertSession = nil
+        return recordTransaction(
+            before: session.entry,
+            after: after,
+            patches: session.patches
+        )
     }
 
-    /// Walk back `count` snapshots; clamp at index 0. Returns nil if
-    /// no movement happened (already at oldest).
-    public func undo(count: Int = 1) -> CSTUndoSnapshot? {
-        let steps = max(1, count)
-        let target = max(0, currentIndex - steps)
-        guard target != currentIndex else { return nil }
-        currentIndex = target
-        return snapshots[currentIndex]
+    public func discardInsertSession() {
+        insertSession = nil
     }
 
-    /// Walk forward `count` snapshots; clamp at the tip. Returns nil
-    /// if no movement happened (already at newest).
-    public func redo(count: Int = 1) -> CSTUndoSnapshot? {
-        let steps = max(1, count)
-        let target = min(snapshots.count - 1, currentIndex + steps)
-        guard target != currentIndex else { return nil }
-        currentIndex = target
-        return snapshots[currentIndex]
+    public func undoStep() -> CSTUndoNavigation? {
+        guard canUndo else { return nil }
+        let transaction = transactions[currentIndex - 1]
+        currentIndex -= 1
+        currentSnapshot = transaction.before
+        return CSTUndoNavigation(
+            transaction: transaction,
+            direction: .undo,
+            target: transaction.before
+        )
+    }
+
+    public func redoStep() -> CSTUndoNavigation? {
+        guard canRedo else { return nil }
+        let transaction = transactions[currentIndex]
+        currentIndex += 1
+        currentSnapshot = transaction.after
+        return CSTUndoNavigation(
+            transaction: transaction,
+            direction: .redo,
+            target: transaction.after
+        )
+    }
+
+    private struct InsertSession {
+        let entry: CSTUndoSnapshot
+        private var pieces: [Piece]
+
+        init(entry: CSTUndoSnapshot) {
+            self.entry = entry
+            let length = Int(entry.tree.sourceLength.rawValue)
+            self.pieces = length > 0 ? [.original(start: 0, length: length)] : []
+        }
+
+        mutating func append(contentsOf edits: [TextEdit]) {
+            for edit in edits {
+                apply(edit)
+            }
+        }
+
+        var patches: [CSTUndoTextPatch] {
+            let beforeLength = Int(entry.tree.sourceLength.rawValue)
+            let afterLength = pieces.reduce(0) { $0 + $1.length }
+            let prefix = unchangedPrefixLength()
+            let suffix = unchangedSuffixLength(
+                beforeLength: beforeLength,
+                afterLength: afterLength,
+                prefix: prefix
+            )
+            let beforeStart = prefix
+            let beforeEnd = beforeLength - suffix
+            let afterStart = prefix
+            let afterEnd = afterLength - suffix
+            precondition(beforeEnd >= beforeStart, "Insert-session before patch range inverted")
+            precondition(afterEnd >= afterStart, "Insert-session after patch range inverted")
+            guard beforeEnd > beforeStart || afterEnd > afterStart else { return [] }
+            return [
+                CSTUndoTextPatch(
+                    beforeRange: TextRange(
+                        start: TextSize(UInt32(beforeStart)),
+                        length: TextSize(UInt32(beforeEnd - beforeStart))
+                    ),
+                    afterRange: TextRange(
+                        start: TextSize(UInt32(afterStart)),
+                        length: TextSize(UInt32(afterEnd - afterStart))
+                    )
+                )
+            ]
+        }
+
+        private mutating func apply(_ edit: TextEdit) {
+            let start = Int(edit.range.start.rawValue)
+            let end = Int(edit.range.end.rawValue)
+            precondition(start <= end, "Insert-session edit range inverted")
+            precondition(end <= currentLength, "Insert-session edit range out of bounds")
+            let startIndex = split(at: start)
+            let endIndex = split(at: end)
+            pieces.removeSubrange(startIndex..<endIndex)
+            if !edit.replacementUTF8.isEmpty {
+                pieces.insert(
+                    .inserted(length: edit.replacementUTF8.count),
+                    at: startIndex
+                )
+            }
+            coalesce()
+        }
+
+        private var currentLength: Int {
+            pieces.reduce(0) { $0 + $1.length }
+        }
+
+        private mutating func split(at offset: Int) -> Int {
+            precondition(offset >= 0 && offset <= currentLength, "Split offset out of bounds")
+            var position = 0
+            var index = pieces.startIndex
+            while index < pieces.endIndex {
+                let piece = pieces[index]
+                let next = position + piece.length
+                if offset == position {
+                    return index
+                }
+                if offset == next {
+                    return pieces.index(after: index)
+                }
+                if offset < next {
+                    let leftLength = offset - position
+                    let rightLength = next - offset
+                    let replacement: [Piece]
+                    switch piece {
+                    case .original(let start, _):
+                        replacement = [
+                            .original(start: start, length: leftLength),
+                            .original(start: start + leftLength, length: rightLength)
+                        ]
+                    case .inserted:
+                        replacement = [
+                            .inserted(length: leftLength),
+                            .inserted(length: rightLength)
+                        ]
+                    }
+                    pieces.replaceSubrange(index...index, with: replacement)
+                    return pieces.index(after: index)
+                }
+                position = next
+                index = pieces.index(after: index)
+            }
+            return pieces.endIndex
+        }
+
+        private mutating func coalesce() {
+            guard !pieces.isEmpty else { return }
+            var merged: [Piece] = []
+            for piece in pieces where piece.length > 0 {
+                if let last = merged.last, let combined = last.combined(with: piece) {
+                    merged[merged.count - 1] = combined
+                } else {
+                    merged.append(piece)
+                }
+            }
+            pieces = merged
+        }
+
+        private func unchangedPrefixLength() -> Int {
+            var expectedStart = 0
+            var prefix = 0
+            for piece in pieces {
+                guard case .original(let start, let length) = piece,
+                      start == expectedStart
+                else { break }
+                prefix += length
+                expectedStart += length
+            }
+            return prefix
+        }
+
+        private func unchangedSuffixLength(
+            beforeLength: Int,
+            afterLength: Int,
+            prefix: Int
+        ) -> Int {
+            var expectedEnd = beforeLength
+            var suffix = 0
+            for piece in pieces.reversed() {
+                guard case .original(let start, let length) = piece,
+                      start + length == expectedEnd
+                else { break }
+                suffix += length
+                expectedEnd = start
+            }
+            return min(suffix, beforeLength - prefix, afterLength - prefix)
+        }
+    }
+
+    private enum Piece {
+        case original(start: Int, length: Int)
+        case inserted(length: Int)
+
+        var length: Int {
+            switch self {
+            case .original(_, let length), .inserted(let length):
+                length
+            }
+        }
+
+        func combined(with other: Piece) -> Piece? {
+            switch (self, other) {
+            case (.original(let lhsStart, let lhsLength), .original(let rhsStart, let rhsLength))
+                where lhsStart + lhsLength == rhsStart:
+                .original(start: lhsStart, length: lhsLength + rhsLength)
+            case (.inserted(let lhsLength), .inserted(let rhsLength)):
+                .inserted(length: lhsLength + rhsLength)
+            default:
+                nil
+            }
+        }
     }
 }

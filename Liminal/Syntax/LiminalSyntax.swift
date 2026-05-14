@@ -361,6 +361,212 @@ public struct LiminalParseResult: Sendable {
     }
 }
 
+enum LiminalDirtySpan {
+    struct TopLevelChildSnapshot {
+        let kind: LiminalKind
+        let oldRange: TextRange
+        let containsSentinels: Bool
+    }
+
+    /// Block kinds whose extent in the new source depends on what comes
+    /// after them — a one-character edit at the boundary of a context-
+    /// bounded kind can shift the boundary into or out of the next
+    /// sibling. To stay correct under such shifts, include immediate
+    /// neighbors in the dirty/repaint span when the dirty boundary has
+    /// one of these kinds.
+    static func isContextBounded(_ kind: LiminalKind) -> Bool {
+        switch kind {
+        case .paragraph, .blockQuote, .list, .pipeTable, .blankLine:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Block kinds whose extent is delimited by an explicit closing
+    /// marker (` ``` `, `$$`, `%%`, `:::`, `---`, etc.) and whose
+    /// missing-closer recovery in the parser is "consume to EOF and emit
+    /// a `.missing` sentinel."
+    static func opensUntilExplicitClose(_ kind: LiminalKind) -> Bool {
+        switch kind {
+        case .fencedCodeBlock, .mathBlock, .commentBlock,
+             .frontmatter, .typedBlock, .schemaBlock, .templateBlock,
+             .htmlBlock:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func snapshotTopLevelChildren(
+        _ root: borrowing SyntaxNodeCursor<LiminalLanguage>
+    ) -> [TopLevelChildSnapshot] {
+        root.green { rootGreen -> [TopLevelChildSnapshot] in
+            let count = rootGreen.childCount
+            var snapshots: [TopLevelChildSnapshot] = []
+            snapshots.reserveCapacity(count)
+            var cursor = TextSize.zero
+            for index in 0..<count {
+                let child = rootGreen.child(at: index)
+                let length = child.textLength
+                let absStart = root.textRange.start + cursor
+                let absEnd = absStart + length
+                let kind: LiminalKind
+                let containsSentinels: Bool
+                switch child {
+                case .node(let nodeGreen):
+                    kind = LiminalLanguage.kind(for: nodeGreen.rawKind)
+                    containsSentinels = nodeGreen.containsSentinels
+                case .token(let tokenGreen):
+                    kind = LiminalLanguage.kind(for: tokenGreen.rawKind)
+                    // Tokens don't carry the bit; treat as clean.
+                    containsSentinels = false
+                }
+                snapshots.append(TopLevelChildSnapshot(
+                    kind: kind,
+                    oldRange: TextRange(start: absStart, end: absEnd),
+                    containsSentinels: containsSentinels
+                ))
+                cursor = cursor + length
+            }
+            return snapshots
+        }
+    }
+
+    static func expandedHighlightRanges(
+        root: RootSyntax,
+        touching seedRanges: [TextRange]
+    ) -> [TextRange] {
+        guard !seedRanges.isEmpty else { return [] }
+        let snapshot = root.syntax.withCursor { cursor in
+            snapshotTopLevelChildren(cursor)
+        }
+        guard !snapshot.isEmpty else { return [] }
+
+        var ranges: [TextRange] = []
+        ranges.reserveCapacity(seedRanges.count)
+        for seed in seedRanges {
+            var touched: Set<Int> = []
+            findTouched(range: seed, snapshot: snapshot, into: &touched)
+            guard !touched.isEmpty else { continue }
+            let bounds = expandedBounds(for: touched, snapshot: snapshot)
+            ranges.append(TextRange(
+                start: snapshot[bounds.lo].oldRange.start,
+                end: snapshot[bounds.hi].oldRange.end
+            ))
+        }
+        return merge(ranges)
+    }
+
+    static func expandedBounds(
+        for touched: Set<Int>,
+        snapshot: [TopLevelChildSnapshot]
+    ) -> (lo: Int, hi: Int) {
+        precondition(!touched.isEmpty, "Dirty span expansion requires at least one touched child")
+        var lo = touched.min()!
+        var hi = touched.max()!
+        if lo > 0, isContextBounded(snapshot[lo].kind) {
+            lo -= 1
+        }
+        if hi < snapshot.count - 1, isContextBounded(snapshot[hi].kind) {
+            hi += 1
+        }
+        while lo > 0, snapshot[lo - 1].containsSentinels {
+            lo -= 1
+        }
+        while hi < snapshot.count - 1, snapshot[hi + 1].containsSentinels {
+            hi += 1
+        }
+        return (lo, hi)
+    }
+
+    /// Add the indices of `snapshot` entries whose old-tree range
+    /// intersects `edit` to `touched`.
+    static func findTouched(
+        edit: TextEdit,
+        snapshot: [TopLevelChildSnapshot],
+        into touched: inout Set<Int>
+    ) {
+        findTouched(range: edit.range, snapshot: snapshot, into: &touched)
+    }
+
+    /// Intersection rules:
+    ///   - Non-empty range `[a, b)` intersects child `[c, d)` iff
+    ///     `b > c && a < d`.
+    ///   - Zero-length range at `a` intersects child `[c, d)` iff
+    ///     `c <= a <= d`.
+    static func findTouched(
+        range: TextRange,
+        snapshot: [TopLevelChildSnapshot],
+        into touched: inout Set<Int>
+    ) {
+        let a = range.start.rawValue
+        let b = range.end.rawValue
+        for index in 0..<snapshot.count {
+            let c = snapshot[index].oldRange.start.rawValue
+            let d = snapshot[index].oldRange.end.rawValue
+            if a == b {
+                if c <= a && a <= d { touched.insert(index) }
+            } else {
+                if b > c && a < d { touched.insert(index) }
+            }
+        }
+    }
+
+    static func mapDirtyRange(
+        oldStart: TextSize,
+        oldEnd: TextSize,
+        edits: [TextEdit]
+    ) -> (newStart: TextSize, newEnd: TextSize) {
+        let dirtyStart = Int(oldStart.rawValue)
+        let dirtyEnd = Int(oldEnd.rawValue)
+        var deltaBeforeStart: Int = 0
+        var deltaInside: Int = 0
+        for edit in edits {
+            let editStart = Int(edit.range.start.rawValue)
+            let editEnd = Int(edit.range.end.rawValue)
+            let delta = Int(edit.replacementUTF8.count) - Int(edit.range.length.rawValue)
+            let isInside: Bool
+            if editStart == editEnd {
+                isInside = (dirtyStart <= editStart && editStart <= dirtyEnd)
+            } else {
+                isInside = (editEnd > dirtyStart && editStart < dirtyEnd)
+            }
+            if isInside {
+                deltaInside += delta
+            } else if editEnd <= dirtyStart {
+                deltaBeforeStart += delta
+            }
+            // Else: strictly after dirty range — ignore.
+        }
+        let newStart = TextSize(UInt32(dirtyStart + deltaBeforeStart))
+        let newEnd = TextSize(UInt32(dirtyStart + deltaBeforeStart + (dirtyEnd - dirtyStart) + deltaInside))
+        return (newStart, newEnd)
+    }
+
+    private static func merge(_ ranges: [TextRange]) -> [TextRange] {
+        guard !ranges.isEmpty else { return [] }
+        let sorted = ranges.sorted { lhs, rhs in
+            lhs.start.rawValue < rhs.start.rawValue
+        }
+        var merged: [TextRange] = []
+        var current = sorted[0]
+        for range in sorted.dropFirst() {
+            if range.start <= current.end {
+                current = TextRange(
+                    start: current.start,
+                    end: max(current.end, range.end)
+                )
+            } else {
+                merged.append(current)
+                current = range
+            }
+        }
+        merged.append(current)
+        return merged
+    }
+}
+
 public struct LiminalParser {
     public init() {}
 
@@ -550,56 +756,10 @@ public final class LiminalParseSession {
         return result
     }
 
-    /// Snapshot of one top-level child in the previous tree: just enough
-    /// to decide if it's dirty (its absolute byte range), how to apply
-    /// the boundary halo (its kind), and whether it carries stale
-    /// parse-error sentinels that must be re-parsed rather than
-    /// transplanted (so their diagnostics get re-emitted under the new
-    /// session).
-    private struct OldChildSnapshot {
-        let kind: LiminalKind
-        let oldRange: TextRange
-        let containsSentinels: Bool
-    }
+    private typealias OldChildSnapshot = LiminalDirtySpan.TopLevelChildSnapshot
 
-    /// Block kinds whose extent in the new source depends on what comes
-    /// after them — a one-character edit at the boundary of a context-
-    /// bounded kind can shift the boundary into or out of the next
-    /// sibling. To stay correct under such shifts, include both immediate
-    /// neighbors in the dirty span when the dirty primary has one of
-    /// these kinds (and likewise when the neighbor itself is a blank
-    /// line, whose removal can merge its neighbors).
-    private static func isContextBounded(_ kind: LiminalKind) -> Bool {
-        switch kind {
-        case .paragraph, .blockQuote, .list, .pipeTable, .blankLine:
-            return true
-        default:
-            return false
-        }
-    }
-
-    /// Block kinds whose extent is delimited by an explicit closing
-    /// marker (` ``` `, `$$`, `%%`, `:::`, `---`, etc.) and whose
-    /// missing-closer recovery in the parser is "consume to EOF and emit
-    /// a `.missing` sentinel."
-    ///
-    /// When skip-clean-regions' sub-parse emits one of these as its
-    /// *trailing* child with `containsSentinels == true`, it means the
-    /// new source's opener at that position has no closer inside the
-    /// dirty slice — the block needs to grow until either a closer is
-    /// found or the document ends. The session detects this and extends
-    /// the dirty span to EOF before re-parsing, so the resulting tree
-    /// reflects the block's real extent rather than truncating it at
-    /// the slice boundary.
     private static func opensUntilExplicitClose(_ kind: LiminalKind) -> Bool {
-        switch kind {
-        case .fencedCodeBlock, .mathBlock, .commentBlock,
-             .frontmatter, .typedBlock, .schemaBlock, .templateBlock,
-             .htmlBlock:
-            return true
-        default:
-            return false
-        }
+        LiminalDirtySpan.opensUntilExplicitClose(kind)
     }
 
     /// Walk `previousTree`'s root children, identify which intersect any
@@ -632,38 +792,11 @@ public final class LiminalParseSession {
         // back to full parse rather than guessing.
         guard !touched.isEmpty else { return nil }
 
-        // Step 2: boundary halo. Extend on each side if the BOUNDARY
-        // dirty child is context-bounded (its extent could shift into or
-        // out of the neighbor). Self-delimited dirty children (code
-        // blocks, math, comments, typed blocks, etc.) can't shift their
-        // boundaries from internal edits, so no halo is needed even if
-        // their neighbors are context-bounded.
-        var lo = touched.min()!
-        var hi = touched.max()!
-        if lo > 0, Self.isContextBounded(snapshot[lo].kind) {
-            lo -= 1
-        }
-        if hi < snapshot.count - 1, Self.isContextBounded(snapshot[hi].kind) {
-            hi += 1
-        }
-
-        // Step 2.5: sentinel expansion. A transplant candidate carrying a
-        // parse-error sentinel was produced by the old parse from
-        // identical source bytes, so transplanting it produces a tree
-        // that's structurally correct. But the *diagnostics* attached to
-        // that sentinel were emitted by the parser — they don't ride the
-        // green tree. To keep the new parse result's diagnostics
-        // representative of the new source, pull any sentinel-bearing
-        // adjacent child into the dirty span so the sub-parse re-emits
-        // its diagnostics. Rare (only when the old document was
-        // malformed in a region the user hasn't touched yet); doesn't
-        // affect the hot path for well-formed documents.
-        while lo > 0, snapshot[lo - 1].containsSentinels {
-            lo -= 1
-        }
-        while hi < snapshot.count - 1, snapshot[hi + 1].containsSentinels {
-            hi += 1
-        }
+        // Step 2: boundary halo + sentinel expansion.
+        var (lo, hi) = LiminalDirtySpan.expandedBounds(
+            for: touched,
+            snapshot: snapshot
+        )
 
         // Step 3: compute new-source byte range for the dirty span.
         // Edits before the span shift its start; edits inside change its
@@ -870,36 +1003,7 @@ public final class LiminalParseSession {
     private static func snapshotTopLevelChildren(
         _ root: borrowing SyntaxNodeCursor<LiminalLanguage>
     ) -> [OldChildSnapshot] {
-        root.green { rootGreen -> [OldChildSnapshot] in
-            let count = rootGreen.childCount
-            var snapshots: [OldChildSnapshot] = []
-            snapshots.reserveCapacity(count)
-            var cursor = TextSize.zero
-            for index in 0..<count {
-                let child = rootGreen.child(at: index)
-                let length = child.textLength
-                let absStart = root.textRange.start + cursor
-                let absEnd = absStart + length
-                let kind: LiminalKind
-                let containsSentinels: Bool
-                switch child {
-                case .node(let nodeGreen):
-                    kind = LiminalLanguage.kind(for: nodeGreen.rawKind)
-                    containsSentinels = nodeGreen.containsSentinels
-                case .token(let tokenGreen):
-                    kind = LiminalLanguage.kind(for: tokenGreen.rawKind)
-                    // Tokens don't carry the bit; treat as clean.
-                    containsSentinels = false
-                }
-                snapshots.append(OldChildSnapshot(
-                    kind: kind,
-                    oldRange: TextRange(start: absStart, end: absEnd),
-                    containsSentinels: containsSentinels
-                ))
-                cursor = cursor + length
-            }
-            return snapshots
-        }
+        LiminalDirtySpan.snapshotTopLevelChildren(root)
     }
 
     /// Add the indices of `snapshot` entries whose old-tree range
@@ -917,17 +1021,11 @@ public final class LiminalParseSession {
         snapshot: [OldChildSnapshot],
         into touched: inout Set<Int>
     ) {
-        let a = edit.range.start.rawValue
-        let b = edit.range.end.rawValue
-        for index in 0..<snapshot.count {
-            let c = snapshot[index].oldRange.start.rawValue
-            let d = snapshot[index].oldRange.end.rawValue
-            if a == b {
-                if c <= a && a <= d { touched.insert(index) }
-            } else {
-                if b > c && a < d { touched.insert(index) }
-            }
-        }
+        LiminalDirtySpan.findTouched(
+            edit: edit,
+            snapshot: snapshot,
+            into: &touched
+        )
     }
 
     /// Translate the old-tree dirty range `[oldStart, oldEnd]` to its
@@ -948,30 +1046,11 @@ public final class LiminalParseSession {
         oldEnd: TextSize,
         edits: [TextEdit]
     ) -> (newStart: TextSize, newEnd: TextSize) {
-        let dirtyStart = Int(oldStart.rawValue)
-        let dirtyEnd = Int(oldEnd.rawValue)
-        var deltaBeforeStart: Int = 0
-        var deltaInside: Int = 0
-        for edit in edits {
-            let editStart = Int(edit.range.start.rawValue)
-            let editEnd = Int(edit.range.end.rawValue)
-            let delta = Int(edit.replacementUTF8.count) - Int(edit.range.length.rawValue)
-            let isInside: Bool
-            if editStart == editEnd {
-                isInside = (dirtyStart <= editStart && editStart <= dirtyEnd)
-            } else {
-                isInside = (editEnd > dirtyStart && editStart < dirtyEnd)
-            }
-            if isInside {
-                deltaInside += delta
-            } else if editEnd <= dirtyStart {
-                deltaBeforeStart += delta
-            }
-            // Else: strictly after dirty range — ignore.
-        }
-        let newStart = TextSize(UInt32(dirtyStart + deltaBeforeStart))
-        let newEnd = TextSize(UInt32(dirtyStart + deltaBeforeStart + (dirtyEnd - dirtyStart) + deltaInside))
-        return (newStart, newEnd)
+        LiminalDirtySpan.mapDirtyRange(
+            oldStart: oldStart,
+            oldEnd: oldEnd,
+            edits: edits
+        )
     }
 
     /// Materialize `source.utf8[start..<end]` as a `String`. Uses

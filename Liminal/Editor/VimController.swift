@@ -339,7 +339,7 @@ public final class VimController: ObservableObject {
             // Delete first, then enter insert mode. Mode flip lives
             // here so the delegate's `prepareForInsert` runs in
             // insert context (consistent with the i/a/I/A path).
-            delegate?.deleteSelection()
+            delegate?.changeSelection()
             setMode(.insert)
             delegate?.prepareForInsert(at: .atCursor)
         case .paste(let after):
@@ -718,8 +718,8 @@ public final class VimController: ObservableObject {
             .toggleTaskAtCursor
         }
 
-        // CST-aware undo / redo. Routed to the delegate, which calls
-        // into the document's undo manager. Counts loop the call.
+        // CST-aware undo / redo. Routed to the delegate, which walks
+        // the document-owned transaction history. Counts loop the call.
         t.bind(.normal, [.char("u")], description: "Undo") {
             .undo(count: $0 ?? 1)
         }
@@ -899,6 +899,9 @@ public protocol VimControllerDelegate: AnyObject {
     /// Yank then delete the current visual selection. Cursor lands
     /// at the start of the previous selection.
     func deleteSelection()
+    /// Yank then delete the current visual selection as the opening
+    /// edit of an insert-session transaction.
+    func changeSelection()
     /// Paste from the system pasteboard. `after` is `true` for `p`
     /// (after cursor / below line) and `false` for `P`.
     func paste(after: Bool)
@@ -956,6 +959,7 @@ extension VimControllerDelegate {
     public func undo(count: Int) {}
     public func redo(count: Int) {}
     public func commitInsertSession() {}
+    public func changeSelection() { deleteSelection() }
     // CST visual mode default no-ops — production Coordinator
     // overrides; spy delegates in tests inherit the no-op.
     public func enterCSTVisualMode() {}

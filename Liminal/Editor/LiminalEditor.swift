@@ -93,6 +93,14 @@ public final class LiminalEditorSession {
         return result
     }
 
+    /// Apply textual edits to the live source without reparsing.
+    /// Used by undo / redo, where the target tree was captured at the
+    /// transaction boundary and will be installed directly.
+    public func applySourceEditsWithoutParsing(_ edits: [TextEdit]) throws {
+        source = try Self.applyingEdits(edits, to: source)
+        parseResult = nil
+    }
+
     /// Replace the subtree at `target` with `replacement`, returning the
     /// new tree, source, and replacement witness. The parser is NOT
     /// re-run, so `LiminalParseResult` is not the right return shape —
@@ -138,17 +146,11 @@ public final class LiminalEditorSession {
     /// (we'd produce a structurally-equivalent but pointer-distinct
     /// tree).
     ///
-    /// Side effects mirror `replaceSubtree`'s `finalizeReplace`:
-    /// `self.source` is replaced with `source` (the snapshot's cached
-    /// source string, equivalent to what the tree itself would
-    /// regenerate), and `self.parseResult` is cleared since its
-    /// diagnostics describe a different tree.
-    public func installSnapshot(
-        tree: SharedSyntaxTree<LiminalLanguage>,
-        source: String
-    ) {
+    /// Side effects mirror `replaceSubtree`'s tree install path: the
+    /// parse session points at the target tree and `parseResult` is
+    /// cleared since its diagnostics describe a different tree.
+    public func installSnapshot(tree: SharedSyntaxTree<LiminalLanguage>) {
         parseSession.installTree(tree)
-        self.source = source
         self.parseResult = nil
     }
 

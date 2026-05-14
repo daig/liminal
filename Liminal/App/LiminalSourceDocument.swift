@@ -25,10 +25,10 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     let cstInspector: CSTInspector
     private let writesThroughToFile: Bool
 
-    /// CST-aware undo history. Captures `(tree, source, cursor, marks)`
-    /// snapshots at every vim transaction boundary; on undo, the
-    /// snapshot tree is reinstalled into the parser session verbatim
-    /// so anchor identity is preserved (no reparse). One per document.
+    /// CST-aware undo history. Captures tree/cursor/mark snapshots
+    /// and text patches at vim transaction boundaries; on undo, the
+    /// target tree is reinstalled into the parser session verbatim
+    /// and the live source is patched through the recorded ranges.
     ///
     /// `@MainActor`-isolated lazy so construction is deferred to first
     /// access on the main thread. `LiminalSourceDocument` itself is
@@ -39,19 +39,6 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// already MainActor-isolated.
     @MainActor
     private(set) lazy var undoHistory: CSTUndoHistory = CSTUndoHistory()
-
-    /// The Cocoa undo manager wired into the responder chain so
-    /// system menu actions (`undo:` / `redo:` from the Edit menu and
-    /// ⌘Z / ⌘⇧Z bindings) walk into our snapshot history. The
-    /// NSTextView subclass overrides its own `undoManager` getter to
-    /// return this one; `allowsUndo = false` on the text view so
-    /// NSTextView doesn't try to register byte-level edits with it.
-    ///
-    /// `@MainActor` because `UndoManager` itself is `@MainActor` in
-    /// recent SDKs, and Cocoa always invokes `undo:` / `redo:`
-    /// actions on the main thread anyway.
-    @MainActor
-    private(set) lazy var undoManager: CSTUndoManager = CSTUndoManager()
 
     @Published private(set) var diagnosticsCount: Int = 0
     @Published private(set) var reuseSummary: ReuseSummary = .empty
@@ -117,9 +104,9 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
         self.writesThroughToFile = false
-        // undoHistory / undoManager are lazy — first access happens
+        // undoHistory is lazy — first access happens
         // on the MainActor in the Coordinator's makeNSView. Don't
-        // touch them here.
+        // touch it here.
         syncFromSession()
     }
 
@@ -170,16 +157,20 @@ final class LiminalSourceDocument: ReferenceFileDocument {
 
     /// Forward a textual edit to the session. Called by `LiminalTextView`'s
     /// `NSTextStorageDelegate` coordinator on user-initiated edits.
-    func applyTextEdits(_ edits: [TextEdit]) {
+    @discardableResult
+    func applyTextEdits(_ edits: [TextEdit]) -> Bool {
         let oldRoot = session.parseResult?.rootSyntax
         do {
             try session.applyTextEdits(edits)
         } catch {
             NSLog("LiminalSourceDocument: applyTextEdits failed: \(error)")
-            return
+            return false
         }
         syncFromSession()
         MainActor.assumeIsolated {
+            if undoHistory.insertSessionActive {
+                undoHistory.appendInsertEdits(edits)
+            }
             if let oldRoot, let newRoot = currentRootSyntax {
                 vimController.reanchorMarks(
                     oldRoot: oldRoot,
@@ -200,6 +191,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             indexInVault()
             writeThroughIfNeeded()
         }
+        return true
     }
 
     /// `parseResult` is nil after a structural edit (by Phase 5a's design —
@@ -322,51 +314,38 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         seedInitialUndoSnapshot()
     }
 
-    /// Seed the undo history's initial state: snapshot[0] = "as
+    /// Seed the undo history's initial state: root snapshot = "as
     /// loaded". Required before any forward edits so undo can rewind
-    /// back to the initial state. Called from each init path AFTER
-    /// the first parse has populated `session.currentTree`.
+    /// back to the initial state.
     @MainActor
     func seedInitialUndoSnapshot() {
-        guard let tree = session.currentTree else { return }
-        let snap = CSTUndoSnapshot(
-            tree: tree,
-            source: session.source,
-            cursor: 0,
-            marks: vimController.marks
-        )
+        guard let snap = makeUndoSnapshot(cursor: 0) else { return }
         undoHistory.reset(initial: snap)
-        // Wire the pre-undo hook: ⌘Z while in insert mode commits
-        // the active session first so the undo lands at the pre-insert
-        // state instead of needing two ⌘Zs to clear the typed text.
-        undoManager.preUndoHook = { [weak self] in
-            guard let self else { return }
-            if self.vimController.mode == .insert,
-               self.undoHistory.insertSessionActive {
-                let cursor = self.snapshotInstaller?.currentCursorForUndo() ?? 0
-                self.commitInsertSession(at: cursor)
-                self.vimController.forceNormalMode()
-            }
-        }
     }
 
-    /// Snapshot the current document state at a vim transaction
-    /// boundary. Called by the Coordinator after every `applyOperator`,
-    /// paste, visual-mode delete, and on insert-session commit (Esc).
-    /// No-op detection inside `CSTUndoHistory.snapshot(_:)` drops
-    /// snapshots that don't actually change the source — and we skip
-    /// registering an NSUndoManager entry in that case too.
     @MainActor
-    func captureSnapshot(at cursor: Int) {
-        guard let tree = session.currentTree else { return }
-        let snap = CSTUndoSnapshot(
+    func makeUndoSnapshot(cursor: Int) -> CSTUndoSnapshot? {
+        guard let tree = session.currentTree else { return nil }
+        return CSTUndoSnapshot(
             tree: tree,
-            source: session.source,
             cursor: cursor,
             marks: vimController.marks
         )
-        let appended = undoHistory.snapshot(snap)
-        if appended { registerUndoStep() }
+    }
+
+    @MainActor
+    func recordTextTransaction(
+        before: CSTUndoSnapshot,
+        afterCursor: Int,
+        edits: [TextEdit]
+    ) {
+        precondition(!undoHistory.insertSessionActive, "Immediate undo transaction recorded during insert session")
+        guard let after = makeUndoSnapshot(cursor: afterCursor) else { return }
+        undoHistory.recordTransaction(
+            before: before,
+            after: after,
+            edits: edits
+        )
     }
 
     /// Open an insert-session bracket. Captures the entry-point
@@ -375,13 +354,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// (entered insert and pressed Esc without typing).
     @MainActor
     func beginInsertSession(at cursor: Int) {
-        guard let tree = session.currentTree else { return }
-        let entry = CSTUndoSnapshot(
-            tree: tree,
-            source: session.source,
-            cursor: cursor,
-            marks: vimController.marks
-        )
+        guard let entry = makeUndoSnapshot(cursor: cursor) else { return }
         undoHistory.beginInsertSession(at: entry)
     }
 
@@ -389,70 +362,51 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// source changed during the session.
     @MainActor
     func commitInsertSession(at cursor: Int) {
-        guard let tree = session.currentTree else { return }
-        let commit = CSTUndoSnapshot(
-            tree: tree,
-            source: session.source,
-            cursor: cursor,
-            marks: vimController.marks
+        guard let commit = makeUndoSnapshot(cursor: cursor) else { return }
+        undoHistory.commitInsertSession(after: commit)
+    }
+
+    @MainActor
+    func undoStep() -> CSTUndoNavigation? {
+        guard let navigation = undoHistory.undoStep() else { return nil }
+        applyUndoNavigation(navigation)
+        return navigation
+    }
+
+    @MainActor
+    func redoStep() -> CSTUndoNavigation? {
+        guard let navigation = undoHistory.redoStep() else { return nil }
+        applyUndoNavigation(navigation)
+        return navigation
+    }
+
+    @MainActor
+    private func applyUndoNavigation(_ navigation: CSTUndoNavigation) {
+        do {
+            try session.applySourceEditsWithoutParsing(navigation.sourceEdits)
+        } catch {
+            preconditionFailure("Undo patch application failed: \(error)")
+        }
+        session.installSnapshot(tree: navigation.target.tree)
+        vimController.restoreMarks(navigation.target.marks)
+
+        #if DEBUG
+        precondition(
+            session.source == navigation.target.tree.sourceText(),
+            "Undo source and target CST diverged"
         )
-        let appended = undoHistory.commitInsertSession(commit: commit)
-        if appended { registerUndoStep() }
-    }
+        #endif
 
-    /// Restore a snapshot wholesale: install its tree (no reparse,
-    /// preserving anchor identity), update `self.source`, restore
-    /// marks. The Coordinator is responsible for forcing the text
-    /// view to match (`installSnapshotAndUpdateView` below wraps this
-    /// with the view-side effects).
-    @MainActor
-    @discardableResult
-    func installSnapshot(_ snap: CSTUndoSnapshot) -> CSTUndoSnapshot {
-        session.installSnapshot(tree: snap.tree, source: snap.source)
-        vimController.restoreMarks(snap.marks)
-        return snap
-    }
-
-    /// The Coordinator hooks itself here on attach so the document can
-    /// drive the text view from the undo path without a hard
-    /// dependency on the SwiftUI Coordinator type.
-    weak var snapshotInstaller: CSTSnapshotInstaller?
-
-    /// Install a snapshot and push the text + cursor into the view.
-    /// Used by the NSUndoManager closures wired in `registerUndoStep`.
-    @MainActor
-    func installSnapshotAndUpdateView(_ snap: CSTUndoSnapshot) {
-        installSnapshot(snap)
-        snapshotInstaller?.applyInstalledSnapshot(snap)
-    }
-
-    /// Register one paired undo/redo step on the Cocoa undo manager.
-    /// The closure walks `undoHistory` by one (undo or redo, depending
-    /// on whether NSUndoManager is currently performing an undo or a
-    /// redo) and re-registers itself so the chain stays alive.
-    @MainActor
-    private func registerUndoStep() {
-        undoManager.registerUndo(withTarget: self) { (doc: LiminalSourceDocument) in
-            // NSUndoManager runs this closure during `undo()`. Walk
-            // history one step back and apply.
-            if let prior = doc.undoHistory.undo() {
-                doc.installSnapshotAndUpdateView(prior)
-            }
-            // We're inside an undo group, so this registers the
-            // matching REDO. Inside the redo it'll register the next
-            // UNDO, and so on.
-            doc.registerRedoStep()
+        syncFromSession()
+        if let root = currentRootSyntax {
+            cstInspector.refresh(
+                cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
+                root: root,
+                source: session.source
+            )
         }
-    }
-
-    @MainActor
-    private func registerRedoStep() {
-        undoManager.registerUndo(withTarget: self) { (doc: LiminalSourceDocument) in
-            if let next = doc.undoHistory.redo() {
-                doc.installSnapshotAndUpdateView(next)
-            }
-            doc.registerUndoStep()
-        }
+        indexInVault()
+        writeThroughIfNeeded()
     }
 
     private func syncFromSession() {
