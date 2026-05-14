@@ -112,7 +112,7 @@ struct VaultIndexerTests {
         #expect(names == ["Source.lim", "Target.lim"])
 
         let source = results.first { $0.url.lastPathComponent == "Source.lim" }
-        #expect(source?.content == "[[Target]]")
+        #expect(source?.origin == .parsed)
         #expect(source?.index.references.count == 1)
         #expect(source?.index.references.first?.target.notePath == "Target")
 
@@ -159,80 +159,142 @@ struct VaultIndexerTests {
         #expect(entry.indexes[canonical] != nil)
     }
 
-    @Test("applyDiff adds new on-disk notes without dropping existing entries")
-    func applyDiffAddsAndPreserves() throws {
+    @Test("refresh adds new on-disk notes and leaves open documents untouched")
+    func refreshAddsNewNotesAndKeepsOpenDocs() throws {
         let root = try makeTempVault(files: [
-            "Existing.lim": "old"
+            "Existing.lim": "[[DiskTarget]]"
         ])
         defer { try? FileManager.default.removeItem(at: root) }
 
         let entry = VaultEntry(rootURL: root)
 
-        // Pre-populate with an open-doc index for "Existing.lim".
+        // Pre-populate with an open-doc index for "Existing.lim". Use
+        // distinguishable wikilink targets so the resulting DocumentIndex
+        // proves the open-doc version survived the refresh (metadata no
+        // longer carries source bytes).
         let existingURL = root.appendingPathComponent("Existing.lim")
-        let existingParsed = try LiminalParser().parse("open content")
+        let canonicalExisting = VaultRegistry.canonicalNoteURL(for: existingURL)
+        let openContent = "[[InMemTarget]]"
+        let existingParsed = try LiminalParser().parse(openContent)
         entry.indexCurrentDocument(
             existingURL,
             rootSyntax: existingParsed.rootSyntax,
-            content: "open content"
+            content: openContent
         )
 
-        // Drop a new file on disk; refresh.
+        // Drop a new file on disk; rescan against the current state.
         let newURL = root.appendingPathComponent("New.lim")
         try "Hello".data(using: .utf8)!.write(to: newURL)
+        let rescan = VaultIndexer.scanSyncUsingCache(
+            rootURL: root,
+            cache: entry.makeCacheSnapshot()
+        )
+        entry.applyRefresh(results: rescan, openDocumentURLs: [canonicalExisting])
 
-        let scan = VaultIndexer.scanSync(rootURL: root)
-        entry.applyDiff(from: scan)
-
-        let canonicalExisting = VaultRegistry.canonicalNoteURL(for: existingURL)
         let canonicalNew = VaultRegistry.canonicalNoteURL(for: newURL)
-
-        // Open doc untouched; new file picked up.
-        #expect(entry.notes[canonicalExisting]?.content == "open content")
-        #expect(entry.notes[canonicalNew]?.content == "Hello")
+        // Open doc untouched (its DocumentIndex still references
+        // InMemTarget, not DiskTarget); new file picked up.
+        #expect(entry.notes[canonicalExisting] != nil)
+        #expect(entry.indexes[canonicalExisting]?.references.first?.target.notePath == "InMemTarget")
+        #expect(entry.notes[canonicalNew] != nil)
+        #expect(entry.indexes[canonicalNew] != nil)
     }
 
-    @Test("applyDiff does not drop notes that disappear from disk")
-    func applyDiffPreservesAfterDiskRemoval() throws {
-        let root = try makeTempVault(files: [
-            "Doc.lim": "hi"
-        ])
+    @Test("refresh keeps an open document even when its file vanishes from disk")
+    func refreshKeepsOpenDocsWhoseFileVanished() throws {
+        let root = try makeTempVault(files: ["Doc.lim": "hi"])
         defer { try? FileManager.default.removeItem(at: root) }
 
         let entry = VaultEntry(rootURL: root)
         let docURL = root.appendingPathComponent("Doc.lim")
+        let canonical = VaultRegistry.canonicalNoteURL(for: docURL)
         let parsed = try LiminalParser().parse("hi")
         entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: "hi")
 
-        // Remove the file from disk.
+        // Remove the file from disk, then refresh — the open document is
+        // authoritative and must not be dropped.
         try FileManager.default.removeItem(at: docURL)
+        let rescan = VaultIndexer.scanSyncUsingCache(
+            rootURL: root,
+            cache: entry.makeCacheSnapshot()
+        )
+        entry.applyRefresh(results: rescan, openDocumentURLs: [canonical])
 
-        let scan = VaultIndexer.scanSync(rootURL: root)
-        entry.applyDiff(from: scan)
-
-        let canonical = VaultRegistry.canonicalNoteURL(for: docURL)
         #expect(entry.notes[canonical] != nil)
+    }
+
+    @Test("refresh drops a closed note whose file vanished from disk")
+    func refreshDropsClosedNotesWhoseFileVanished() throws {
+        let root = try makeTempVault(files: [
+            "Keep.lim": "kept",
+            "Gone.lim": "[[Keep]]"
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Both notes enter the entry as *closed* (cold-start absorb).
+        let entry = VaultEntry(rootURL: root)
+        entry.absorb(scanResults: VaultIndexer.scanSync(rootURL: root))
+        let goneURL = root.appendingPathComponent("Gone.lim")
+        let keepURL = root.appendingPathComponent("Keep.lim")
+        #expect(entry.notes[VaultRegistry.canonicalNoteURL(for: goneURL)] != nil)
+
+        try FileManager.default.removeItem(at: goneURL)
+        let rescan = VaultIndexer.scanSyncUsingCache(
+            rootURL: root,
+            cache: entry.makeCacheSnapshot()
+        )
+        entry.applyRefresh(results: rescan, openDocumentURLs: [])
+
+        // The deleted closed note is dropped; the survivor remains.
+        #expect(entry.notes[VaultRegistry.canonicalNoteURL(for: goneURL)] == nil)
+        #expect(entry.notes[VaultRegistry.canonicalNoteURL(for: keepURL)] != nil)
+    }
+
+    @Test("refresh reparses a closed note that changed on disk")
+    func refreshReparsesChangedClosedNotes() throws {
+        let root = try makeTempVault(files: ["Doc.lim": "[[Before]]"])
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let entry = VaultEntry(rootURL: root)
+        entry.absorb(scanResults: VaultIndexer.scanSync(rootURL: root))
+        let docURL = root.appendingPathComponent("Doc.lim")
+        let canonical = VaultRegistry.canonicalNoteURL(for: docURL)
+        #expect(entry.indexes[canonical]?.references.first?.target.notePath == "Before")
+
+        // Edit the file externally (different content AND length), then refresh.
+        try "[[After]] with more text".data(using: .utf8)!.write(to: docURL)
+        let rescan = VaultIndexer.scanSyncUsingCache(
+            rootURL: root,
+            cache: entry.makeCacheSnapshot()
+        )
+        entry.applyRefresh(results: rescan, openDocumentURLs: [])
+
+        #expect(entry.indexes[canonical]?.references.first?.target.notePath == "After")
     }
 
     @Test("absorb does not clobber an open document's index")
     func absorbPreservesOpenDocs() throws {
-        // Disk says "old"; in-memory says "new". The in-memory wins.
+        // Disk says one thing; in-memory says another. The in-memory wins.
+        // Use distinguishable wikilink targets so we can verify the
+        // DocumentIndex (not just metadata identity) is the open-doc one.
         let root = try makeTempVault(files: [
-            "Doc.lim": "old"
+            "Doc.lim": "[[DiskTarget]]"
         ])
         defer { try? FileManager.default.removeItem(at: root) }
 
         let docURL = root.appendingPathComponent("Doc.lim")
         let entry = VaultEntry(rootURL: root)
 
-        let parsed = try LiminalParser().parse("new")
-        entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: "new")
+        let openContent = "[[OpenDocTarget]]"
+        let parsed = try LiminalParser().parse(openContent)
+        entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: openContent)
 
         let scan = VaultIndexer.scanSync(rootURL: root)
         entry.absorb(scanResults: scan)
 
         let canonical = VaultRegistry.canonicalNoteURL(for: docURL)
-        #expect(entry.notes[canonical]?.content == "new")
+        #expect(entry.notes[canonical] != nil)
+        #expect(entry.indexes[canonical]?.references.first?.target.notePath == "OpenDocTarget")
     }
 }
 

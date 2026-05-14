@@ -49,10 +49,9 @@ struct CmdClickActivationTests {
             headings: [HeadingAnchor(title: "Goals", sourceOffset: 100)],
             references: [ref]
         )
-        let note = LiminalNote(
+        let note = LiminalNoteMetadata(
             url: docURL,
-            relativePath: "Source.lim",
-            content: ""
+            relativePath: "Source.lim"
         )
         let vault = VaultLinkIndex.build(
             notes: [note],
@@ -79,10 +78,9 @@ struct CmdClickActivationTests {
             blocks: [BlockAnchor(blockID: "para-1", sourceOffset: 50)],
             references: [ref]
         )
-        let note = LiminalNote(
+        let note = LiminalNoteMetadata(
             url: docURL,
-            relativePath: "Source.lim",
-            content: ""
+            relativePath: "Source.lim"
         )
         let vault = VaultLinkIndex.build(
             notes: [note],
@@ -107,8 +105,8 @@ struct CmdClickActivationTests {
             sourceRange: LiminalSourceRange(start: 0, length: 10)
         )
         let sourceIndex = DocumentIndex(references: [ref])
-        let sourceNote = LiminalNote(url: sourceURL, relativePath: "Source.lim")
-        let targetNote = LiminalNote(url: targetURL, relativePath: "Target.lim")
+        let sourceNote = LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim")
+        let targetNote = LiminalNoteMetadata(url: targetURL, relativePath: "Target.lim")
         let vault = VaultLinkIndex.build(
             notes: [sourceNote, targetNote],
             documentIndexes: [sourceURL: sourceIndex, targetURL: .empty]
@@ -131,7 +129,7 @@ struct CmdClickActivationTests {
             sourceRange: LiminalSourceRange(start: 0, length: 11)
         )
         let sourceIndex = DocumentIndex(references: [ref])
-        let sourceNote = LiminalNote(url: sourceURL, relativePath: "Source.lim")
+        let sourceNote = LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim")
         let vault = VaultLinkIndex.build(
             notes: [sourceNote],
             documentIndexes: [sourceURL: sourceIndex]
@@ -156,9 +154,9 @@ struct CmdClickActivationTests {
             sourceRange: LiminalSourceRange(start: 0, length: 7)
         )
         let sourceIndex = DocumentIndex(references: [ref])
-        let sourceNote = LiminalNote(url: sourceURL, relativePath: "Source.lim")
-        let dupA = LiminalNote(url: dupAURL, relativePath: "folder-a/Dup.lim")
-        let dupB = LiminalNote(url: dupBURL, relativePath: "folder-b/Dup.lim")
+        let sourceNote = LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim")
+        let dupA = LiminalNoteMetadata(url: dupAURL, relativePath: "folder-a/Dup.lim")
+        let dupB = LiminalNoteMetadata(url: dupBURL, relativePath: "folder-b/Dup.lim")
         let vault = VaultLinkIndex.build(
             notes: [sourceNote, dupA, dupB],
             documentIndexes: [sourceURL: sourceIndex]

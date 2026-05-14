@@ -89,6 +89,9 @@ final class LiminalSourceDocument: ReferenceFileDocument {
               let root = currentRootSyntax
         else { return }
         let entry = VaultRegistry.shared.entry(for: url)
+        // Mark this URL as backed by a live editor so the watcher's
+        // refresh path won't reparse it from disk out from under us.
+        entry.registerOpenDocument(url)
         entry.indexCurrentDocument(
             url,
             rootSyntax: root,
@@ -97,6 +100,16 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         // Kick off the one-shot vault scan so Cmd-clicks to
         // not-yet-open notes can resolve. Idempotent across calls.
         entry.beginColdStartScanIfNeeded()
+    }
+
+    deinit {
+        // When the last reference to this document drops (tab closed and
+        // not retained), clear its open-document registration so the
+        // vault watcher resumes treating the file as a closed note.
+        guard let url = fileURL else { return }
+        Task { @MainActor in
+            VaultRegistry.shared.entry(for: url).unregisterOpenDocument(url)
+        }
     }
 
     init() {
@@ -279,6 +292,13 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         guard writesThroughToFile, let fileURL else { return false }
         do {
             try Data(session.source.utf8).write(to: fileURL, options: .atomic)
+            // The file on disk now matches the buffer — snap this note's
+            // vault fingerprint forward so the watcher doesn't mistake
+            // our own save for an external edit, then opportunistically
+            // flush the warm-tier cache (a no-op when nothing's dirty).
+            let entry = VaultRegistry.shared.entry(for: fileURL)
+            entry.noteFileWrittenThrough(fileURL, content: session.source)
+            Task { await entry.flushCacheIfDirty() }
             return true
         } catch {
             NSLog("LiminalSourceDocument: write-through failed for \(fileURL.path): \(error)")

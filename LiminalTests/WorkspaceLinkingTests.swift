@@ -329,9 +329,13 @@ struct WorkspaceLinkingTests {
 
     @Test("target ranges propagate through vault link indexes")
     func targetRangesPropagateThroughVaultLinkIndexes() throws {
-        let sourceNote = makeNote(relativePath: "Source.md", content: "See [[Target]].\n")
+        let sourceContent = "See [[Target]].\n"
+        let sourceNote = makeNote(relativePath: "Source.md")
         let targetNote = makeNote(relativePath: "Target.md")
-        let sourceIndex = try DocumentIndex.build(from: LiminalParser().parse(sourceNote.content))
+        let sourceIndex = try DocumentIndex.build(
+            root: LiminalParser().parse(sourceContent).rootSyntax,
+            source: sourceContent
+        )
 
         let index = VaultLinkIndex.build(
             notes: [sourceNote, targetNote],
@@ -340,7 +344,7 @@ struct WorkspaceLinkingTests {
         let reference = try #require(index.outgoing(for: sourceNote.id).first)
 
         #expect(reference.target.rawTargetString == "Target")
-        let targetRange = try sourceRange(of: "Target", in: sourceNote.content)
+        let targetRange = try sourceRange(of: "Target", in: sourceContent)
         #expect(reference.targetRange == targetRange)
     }
 
@@ -482,14 +486,8 @@ struct WorkspaceLinkingTests {
 
     @Test("vault link index resolves anchors and backlinks from explicit indexes")
     func vaultLinkIndexResolvesAnchorsAndBacklinksFromExplicitIndexes() {
-        let sourceNote = makeNote(
-            relativePath: "Source.md",
-            content: "[[Beta#Section]]\n[[Beta#^block-one]]\n[[Gamma]]\n"
-        )
-        let beta = makeNote(
-            relativePath: "Beta.md",
-            content: "# Section\n\nParagraph ^block-one\n"
-        )
+        let sourceNote = makeNote(relativePath: "Source.md")
+        let beta = makeNote(relativePath: "Beta.md")
         let sourceIndex = DocumentIndex(
             references: [
                 DocumentReference(
@@ -827,12 +825,10 @@ struct WorkspaceLinkingTests {
         #expect(index.reference(after: 999) == nil)
     }
 
-    private func makeNote(relativePath: String, content: String = "") -> LiminalNote {
-        LiminalNote(
+    private func makeNote(relativePath: String) -> LiminalNoteMetadata {
+        LiminalNoteMetadata(
             url: URL(fileURLWithPath: "/tmp/liminal-tests/\(relativePath)"),
-            relativePath: relativePath,
-            content: content,
-            lastModified: .distantPast
+            relativePath: relativePath
         )
     }
 
@@ -848,7 +844,7 @@ struct WorkspaceLinkingTests {
             target: target,
             alias: nil,
             sourceRange: sourceRange,
-            sourceSnippet: "[[Target]]",
+            snippet: DocumentSnippet(text: "[[Target]]", referenceOffset: 0, referenceLength: 10),
             resolution: resolution
         )
     }

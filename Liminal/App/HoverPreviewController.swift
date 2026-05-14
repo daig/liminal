@@ -310,7 +310,13 @@ final class HoverPreviewController {
         let canonical = target.targetURL
         let entry = VaultRegistry.shared.entry(for: canonical)
 
-        guard let content = entry.notes[canonical]?.content else {
+        // Source bytes for the hover target come from disk: the
+        // hot-tier `LiminalNoteMetadata` no longer carries content for
+        // closed notes (and the hover target is almost always a
+        // *different* note than the one the user is editing). The
+        // `lastParse` cache below avoids re-parsing when the same
+        // target is hovered repeatedly without disk churn.
+        guard let content = try? String(contentsOf: canonical, encoding: .utf8) else {
             return HoverPreviewSnapshot.unavailable(target: target, theme: theme)
         }
 

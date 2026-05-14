@@ -6,8 +6,16 @@ struct DocumentIndexBuilder {
     private var headings: [HeadingAnchor] = []
     private var blocks: [BlockAnchor] = []
     private var references: [DocumentReference] = []
+    /// UTF-8 bytes of the source document. When non-empty, each emitted
+    /// `DocumentReference` carries a pre-computed `DocumentSnippet` of
+    /// context around its `sourceRange`. When empty (no source provided),
+    /// every reference's snippet is `.empty` — used by callsites that
+    /// don't yet care about backlink context (test fixtures, some
+    /// inspector / printer paths).
+    private var sourceUTF8: [UInt8] = []
 
-    mutating func build(root: RootSyntax) -> DocumentIndex {
+    mutating func build(root: RootSyntax, sourceUTF8: [UInt8] = []) -> DocumentIndex {
+        self.sourceUTF8 = sourceUTF8
         for item in root.documentItems {
             appendTopLevelItem(item)
         }
@@ -18,6 +26,83 @@ struct DocumentIndexBuilder {
             blocks: blocks,
             references: references
         )
+    }
+
+    /// Build a snippet from `sourceUTF8` around the given range. The default
+    /// context window is ±36 UTF-8 bytes on each side. The returned
+    /// `text` has newlines (`\n`, `\r`) collapsed to spaces and ASCII
+    /// whitespace (`0x20`, `0x09`) trimmed from both ends — but never
+    /// past the reference boundary. UTF-8 codepoint boundaries are
+    /// respected so the snippet is always a valid string.
+    fileprivate static func snippet(
+        in sourceUTF8: [UInt8],
+        around range: LiminalSourceRange,
+        context: Int = 36
+    ) -> DocumentSnippet {
+        let total = sourceUTF8.count
+        let start = Int(range.start.rawValue)
+        let end = Int(range.end.rawValue)
+        guard total > 0, start <= total, end >= start, end <= total else {
+            return .empty
+        }
+
+        var lower = max(0, start - context)
+        var upper = min(total, end + context)
+        // Walk left from `lower` past any UTF-8 continuation bytes so we
+        // don't split a multibyte sequence at the head. Walk right from
+        // `upper` for the same reason at the tail.
+        while lower > 0, isContinuationByte(sourceUTF8[lower]) {
+            lower -= 1
+        }
+        while upper < total, isContinuationByte(sourceUTF8[upper]) {
+            upper += 1
+        }
+
+        var bytes = Array(sourceUTF8[lower..<upper])
+        for i in 0..<bytes.count {
+            if bytes[i] == 0x0A || bytes[i] == 0x0D {
+                bytes[i] = 0x20
+            }
+        }
+
+        let initialOffset = start - lower
+        let initialLength = end - start
+        let refEnd = initialOffset + initialLength
+
+        var leading = 0
+        while leading < bytes.count, leading < initialOffset, isAsciiWhitespace(bytes[leading]) {
+            leading += 1
+        }
+        var trailing = 0
+        while trailing < bytes.count - leading,
+              bytes.count - trailing > refEnd,
+              isAsciiWhitespace(bytes[bytes.count - trailing - 1])
+        {
+            trailing += 1
+        }
+
+        let slice = Array(bytes[leading..<(bytes.count - trailing)])
+        let text = String(decoding: slice, as: UTF8.self)
+        let finalOffset = max(0, initialOffset - leading)
+        let finalLength = min(initialLength, max(0, slice.count - finalOffset))
+        return DocumentSnippet(
+            text: text,
+            referenceOffset: UInt32(finalOffset),
+            referenceLength: UInt32(finalLength)
+        )
+    }
+
+    private static func isContinuationByte(_ byte: UInt8) -> Bool {
+        (byte & 0xC0) == 0x80
+    }
+
+    private static func isAsciiWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09
+    }
+
+    private func makeSnippet(around range: LiminalSourceRange) -> DocumentSnippet {
+        guard !sourceUTF8.isEmpty else { return .empty }
+        return DocumentIndexBuilder.snippet(in: sourceUTF8, around: range)
     }
 
     private mutating func appendTopLevelItem(_ item: DocumentItemSyntax) {
@@ -296,7 +381,8 @@ struct DocumentIndexBuilder {
             target: WikiTarget.parse(targetToken.text),
             alias: alias,
             sourceRange: sourceRange,
-            targetRange: targetToken.range
+            targetRange: targetToken.range,
+            snippet: makeSnippet(around: sourceRange)
         ))
     }
 
@@ -314,7 +400,8 @@ struct DocumentIndexBuilder {
             target: WikiTarget.parse(targetToken.text),
             alias: alias,
             sourceRange: sourceRange,
-            targetRange: targetToken.range
+            targetRange: targetToken.range,
+            snippet: makeSnippet(around: sourceRange)
         ))
     }
 
@@ -365,7 +452,8 @@ struct DocumentIndexBuilder {
             target: target,
             alias: trimmedAlias,
             sourceRange: sourceRange,
-            targetRange: targetToken.range
+            targetRange: targetToken.range,
+            snippet: makeSnippet(around: sourceRange)
         ))
     }
 }

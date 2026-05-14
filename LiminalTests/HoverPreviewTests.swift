@@ -180,8 +180,8 @@ struct HoverPreviewTargetTests {
             target: WikiTarget.parse("Target"),
             sourceRange: LiminalSourceRange(start: 0, length: 10)
         )
-        let sourceNote = LiminalNote(url: sourceURL, relativePath: "Source.lim")
-        let targetNote = LiminalNote(url: targetURL, relativePath: "Target.lim")
+        let sourceNote = LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim")
+        let targetNote = LiminalNoteMetadata(url: targetURL, relativePath: "Target.lim")
         let vault = VaultLinkIndex.build(
             notes: [sourceNote, targetNote],
             documentIndexes: [
@@ -208,8 +208,8 @@ struct HoverPreviewTargetTests {
             target: WikiTarget.parse("Target#Missing"),
             sourceRange: LiminalSourceRange(start: 0, length: 18)
         )
-        let sourceNote = LiminalNote(url: sourceURL, relativePath: "Source.lim")
-        let targetNote = LiminalNote(url: targetURL, relativePath: "Target.lim")
+        let sourceNote = LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim")
+        let targetNote = LiminalNoteMetadata(url: targetURL, relativePath: "Target.lim")
         let vault = VaultLinkIndex.build(
             notes: [sourceNote, targetNote],
             documentIndexes: [
@@ -236,7 +236,7 @@ struct HoverPreviewTargetTests {
             sourceRange: LiminalSourceRange(start: 0, length: 11)
         )
         let vault = VaultLinkIndex.build(
-            notes: [LiminalNote(url: sourceURL, relativePath: "Source.lim")],
+            notes: [LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim")],
             documentIndexes: [sourceURL: DocumentIndex(references: [ref])]
         )
         #expect(HoverPreviewController.hoverTarget(
@@ -258,9 +258,9 @@ struct HoverPreviewTargetTests {
         )
         let vault = VaultLinkIndex.build(
             notes: [
-                LiminalNote(url: sourceURL, relativePath: "Source.lim"),
-                LiminalNote(url: dupAURL, relativePath: "A/Dup.lim"),
-                LiminalNote(url: dupBURL, relativePath: "B/Dup.lim")
+                LiminalNoteMetadata(url: sourceURL, relativePath: "Source.lim"),
+                LiminalNoteMetadata(url: dupAURL, relativePath: "A/Dup.lim"),
+                LiminalNoteMetadata(url: dupBURL, relativePath: "B/Dup.lim")
             ],
             documentIndexes: [sourceURL: DocumentIndex(references: [ref])]
         )
@@ -284,7 +284,7 @@ struct HoverPreviewTargetTests {
             references: [ref]
         )
         let vault = VaultLinkIndex.build(
-            notes: [LiminalNote(url: docURL, relativePath: "Source.lim")],
+            notes: [LiminalNoteMetadata(url: docURL, relativePath: "Source.lim")],
             documentIndexes: [docURL: docIndex]
         )
         let result = HoverPreviewController.hoverTarget(

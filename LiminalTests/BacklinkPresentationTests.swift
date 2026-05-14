@@ -8,7 +8,7 @@ struct BacklinkPresentationTests {
     @Test("source label uses vault-relative path with .lim stripped")
     func sourceLabelStripsExtension() {
         let url = URL(fileURLWithPath: "/v/sub/Note.lim")
-        let note = LiminalNote(url: url, relativePath: "sub/Note.lim")
+        let note = LiminalNoteMetadata(url: url, relativePath: "sub/Note.lim")
         let ref = makeRef(sourceURL: url, start: 0)
 
         let label = BacklinkPresentation.sourceDisplayLabel(
@@ -36,10 +36,10 @@ struct BacklinkPresentationTests {
         let bravoURL = URL(fileURLWithPath: "/v/Bravo.lim")
         let charlieURL = URL(fileURLWithPath: "/v/Charlie.lim")
 
-        let notes: [URL: LiminalNote] = [
-            alphaURL: LiminalNote(url: alphaURL, relativePath: "Alpha.lim"),
-            bravoURL: LiminalNote(url: bravoURL, relativePath: "Bravo.lim"),
-            charlieURL: LiminalNote(url: charlieURL, relativePath: "Charlie.lim")
+        let notes: [URL: LiminalNoteMetadata] = [
+            alphaURL: LiminalNoteMetadata(url: alphaURL, relativePath: "Alpha.lim"),
+            bravoURL: LiminalNoteMetadata(url: bravoURL, relativePath: "Bravo.lim"),
+            charlieURL: LiminalNoteMetadata(url: charlieURL, relativePath: "Charlie.lim")
         ]
 
         // Two refs from Bravo (different offsets); one from Alpha;
@@ -62,8 +62,8 @@ struct BacklinkPresentationTests {
         let urlA = URL(fileURLWithPath: "/v/aaa.lim")
         let urlB = URL(fileURLWithPath: "/v/BBB.lim")
         let notes = [
-            urlA: LiminalNote(url: urlA, relativePath: "aaa.lim"),
-            urlB: LiminalNote(url: urlB, relativePath: "BBB.lim")
+            urlA: LiminalNoteMetadata(url: urlA, relativePath: "aaa.lim"),
+            urlB: LiminalNoteMetadata(url: urlB, relativePath: "BBB.lim")
         ]
         let refs = [
             makeRef(sourceURL: urlB, start: 0),
@@ -79,8 +79,8 @@ struct BacklinkPresentationTests {
         let topURL = URL(fileURLWithPath: "/v/Zoo.lim")
         let subURL = URL(fileURLWithPath: "/v/folder/Aardvark.lim")
         let notes = [
-            topURL: LiminalNote(url: topURL, relativePath: "Zoo.lim"),
-            subURL: LiminalNote(url: subURL, relativePath: "folder/Aardvark.lim")
+            topURL: LiminalNoteMetadata(url: topURL, relativePath: "Zoo.lim"),
+            subURL: LiminalNoteMetadata(url: subURL, relativePath: "folder/Aardvark.lim")
         ]
         let refs = [
             makeRef(sourceURL: topURL, start: 0),
@@ -101,7 +101,7 @@ struct BacklinkPresentationTests {
                 start: TextSize(start),
                 length: TextSize(10)
             ),
-            sourceSnippet: "snippet",
+            snippet: DocumentSnippet(text: "snippet", referenceOffset: 0, referenceLength: 7),
             resolution: .resolved(.note(URL(fileURLWithPath: "/v/Target.lim")))
         )
     }

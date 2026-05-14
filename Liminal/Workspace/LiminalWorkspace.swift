@@ -3,12 +3,34 @@ import Foundation
 
 public typealias LiminalSourceRange = CambiumCore.TextRange
 
-public struct LiminalNote: Identifiable, Hashable, Sendable {
+/// Hot-tier (in-memory) record for a vault note.
+///
+/// Holds only the small, derived bits the navigator / link index / backlinks
+/// panel need: identity, display name, and the disk-state fingerprint
+/// (`fileMtime`, `fileByteSize`) used to drive cold-start cache validation
+/// and watcher reparse decisions.
+///
+/// Source bytes are intentionally not held here. Open documents own their
+/// own buffer via `LiminalSourceDocument.session.source`; closed notes are
+/// re-read from disk only on demand (e.g., reparse). Pre-computed snippets
+/// for backlink display live on each `DocumentReference` rather than being
+/// reconstructed from full content at lookup time.
+public struct LiminalNoteMetadata: Identifiable, Hashable, Sendable {
     public let id: URL
     public let relativePath: String
     public var title: String
-    public var content: String
-    public var lastModified: Date
+    /// Disk modification time at the last read or successful write-through.
+    /// For open documents with unsaved edits this stays pinned to the
+    /// on-disk value so the watcher can still detect external changes.
+    public var fileMtime: Date
+    /// Disk byte size at the last read or successful write-through.
+    public var fileByteSize: UInt32
+    /// FNV-1a hash of the note's UTF-8 source as last read from (or
+    /// written to) disk. Travels alongside `fileMtime` / `fileByteSize`
+    /// as the warm-tier cache fingerprint; recorded for a future
+    /// `verify-cache` diagnostic but not consulted on the cold-start hot
+    /// path, which uses `(mtime, size)` only.
+    public var contentHash: UInt64
 
     public var filename: String { id.lastPathComponent }
 
@@ -19,28 +41,56 @@ public struct LiminalNote: Identifiable, Hashable, Sendable {
     public init(
         url: URL,
         relativePath: String,
-        content: String = "",
-        lastModified: Date = .now
+        fileMtime: Date = .distantPast,
+        fileByteSize: UInt32 = 0,
+        contentHash: UInt64 = 0
     ) {
         self.id = url
         self.relativePath = relativePath
         self.title = url.deletingPathExtension().lastPathComponent
-        self.content = content
-        self.lastModified = lastModified
+        self.fileMtime = fileMtime
+        self.fileByteSize = fileByteSize
+        self.contentHash = contentHash
     }
 }
 
 public struct LiminalVault: Identifiable, Hashable, Sendable {
     public let id: URL
     public var name: String
-    public var notes: [LiminalNote]
+    public var notes: [LiminalNoteMetadata]
 
     public var url: URL { id }
 
-    public init(url: URL, notes: [LiminalNote] = []) {
+    public init(url: URL, notes: [LiminalNoteMetadata] = []) {
         self.id = url
         self.name = url.lastPathComponent
         self.notes = notes
+    }
+}
+
+/// Pre-computed backlink-context slice for one `DocumentReference`.
+///
+/// `text` is up to ~100 UTF-8 bytes of context around the reference (default
+/// ±36 bytes on each side, newlines collapsed to spaces, ASCII whitespace
+/// trimmed without crossing the reference boundary). `referenceOffset` /
+/// `referenceLength` locate the link span inside `text` so a UI can
+/// highlight it without re-finding it in the surrounding text.
+///
+/// Built once at parse time by `DocumentIndexBuilder` while the source bytes
+/// are in hand; persisted in the warm-tier vault cache alongside the
+/// `DocumentReference` so the backlinks panel can render closed-note
+/// context without reading any source files.
+public struct DocumentSnippet: Equatable, Hashable, Sendable {
+    public var text: String
+    public var referenceOffset: UInt32
+    public var referenceLength: UInt32
+
+    public static let empty = DocumentSnippet(text: "", referenceOffset: 0, referenceLength: 0)
+
+    public init(text: String, referenceOffset: UInt32, referenceLength: UInt32) {
+        self.text = text
+        self.referenceOffset = referenceOffset
+        self.referenceLength = referenceLength
     }
 }
 
@@ -81,19 +131,26 @@ public struct DocumentReference: Equatable, Hashable, Sendable {
     public let alias: String?
     public let sourceRange: LiminalSourceRange
     public let targetRange: LiminalSourceRange?
+    /// Backlink-context slice for this reference. Computed at parse time
+    /// when the source bytes are available; `.empty` for indexes built
+    /// without source (e.g., test fixtures, paths that didn't carry the
+    /// source through).
+    public let snippet: DocumentSnippet
 
     public init(
         kind: ReferenceKind,
         target: WikiTarget,
         alias: String? = nil,
         sourceRange: LiminalSourceRange,
-        targetRange: LiminalSourceRange? = nil
+        targetRange: LiminalSourceRange? = nil,
+        snippet: DocumentSnippet = .empty
     ) {
         self.kind = kind
         self.target = target
         self.alias = alias
         self.sourceRange = sourceRange
         self.targetRange = targetRange
+        self.snippet = snippet
     }
 }
 
@@ -124,9 +181,21 @@ public struct DocumentIndex: Equatable, Sendable {
     /// Build an index directly from a root syntax handle. Lets callers
     /// re-index after a structural edit (where `LiminalParseResult` is
     /// nil but `currentTree` advanced) without having to re-parse.
+    /// Without `source`, every emitted reference's `snippet` is
+    /// `.empty` — backlinks-panel context relies on the source-bearing
+    /// overload below.
     public static func build(root: RootSyntax) -> DocumentIndex {
         var builder = DocumentIndexBuilder()
         return builder.build(root: root)
+    }
+
+    /// Source-bearing variant: each reference also carries a pre-computed
+    /// `DocumentSnippet` of context around its source range. Used by the
+    /// open-doc reindex path and the cold-start scan so backlinks display
+    /// works without re-reading source bytes.
+    public static func build(root: RootSyntax, source: String) -> DocumentIndex {
+        var builder = DocumentIndexBuilder()
+        return builder.build(root: root, sourceUTF8: Array(source.utf8))
     }
 
     public func reference(containing offset: TextSize) -> DocumentReference? {
@@ -389,8 +458,13 @@ public struct ResolvedReference: Identifiable, Equatable, Hashable, Sendable {
     public let alias: String?
     public let sourceRange: LiminalSourceRange
     public let targetRange: LiminalSourceRange?
-    public let sourceSnippet: String
+    public let snippet: DocumentSnippet
     public let resolution: ReferenceResolution
+
+    /// Plain text of the backlink snippet. Preserved as the existing entry
+    /// point for view code that doesn't yet care about the in-snippet
+    /// reference offset.
+    public var sourceSnippet: String { snippet.text }
 
     public var id: String {
         [
@@ -409,7 +483,7 @@ public struct ResolvedReference: Identifiable, Equatable, Hashable, Sendable {
         alias: String?,
         sourceRange: LiminalSourceRange,
         targetRange: LiminalSourceRange? = nil,
-        sourceSnippet: String,
+        snippet: DocumentSnippet = .empty,
         resolution: ReferenceResolution
     ) {
         self.sourceNoteID = sourceNoteID
@@ -418,7 +492,7 @@ public struct ResolvedReference: Identifiable, Equatable, Hashable, Sendable {
         self.alias = alias
         self.sourceRange = sourceRange
         self.targetRange = targetRange
-        self.sourceSnippet = sourceSnippet
+        self.snippet = snippet
         self.resolution = resolution
     }
 }
@@ -524,14 +598,19 @@ public enum LinkActivationPolicy {
 }
 
 public struct VaultLinkIndex: Equatable, Sendable {
-    private let notesByID: [URL: LiminalNote]
-    private let documentIndexesByNote: [URL: DocumentIndex]
-    private let outgoingByNote: [URL: [ResolvedReference]]
-    private let backlinksByNote: [URL: [ResolvedReference]]
-    private let titleLookup: [String: [URL]]
-    private let pathLookup: [String: URL]
-    private let headingLookupByNote: [URL: [String: HeadingAnchor]]
-    private let blockLookupByNote: [URL: [String: BlockAnchor]]
+    fileprivate var notesByID: [URL: LiminalNoteMetadata]
+    fileprivate var documentIndexesByNote: [URL: DocumentIndex]
+    fileprivate var outgoingByNote: [URL: [ResolvedReference]]
+    fileprivate var backlinksByNote: [URL: [ResolvedReference]]
+    fileprivate var titleLookup: [String: [URL]]
+    fileprivate var pathLookup: [String: URL]
+    fileprivate var headingLookupByNote: [URL: [String: HeadingAnchor]]
+    fileprivate var blockLookupByNote: [URL: [String: BlockAnchor]]
+    /// Inverse index: for each normalized path key, the URLs of notes whose
+    /// outgoing references resolve (or no-anchor-resolve) into that target.
+    /// Powers cheap re-resolution when a doc's anchors or path identity
+    /// change without rewalking every other note's outgoing list.
+    fileprivate var sourcesByTargetPathKey: [String: Set<URL>]
 
     public static let empty = VaultLinkIndex(
         notesByID: [:],
@@ -541,11 +620,12 @@ public struct VaultLinkIndex: Equatable, Sendable {
         titleLookup: [:],
         pathLookup: [:],
         headingLookupByNote: [:],
-        blockLookupByNote: [:]
+        blockLookupByNote: [:],
+        sourcesByTargetPathKey: [:]
     )
 
     public static func build(
-        notes: [LiminalNote],
+        notes: [LiminalNoteMetadata],
         documentIndexes: [URL: DocumentIndex] = [:]
     ) -> VaultLinkIndex {
         let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
@@ -554,7 +634,9 @@ public struct VaultLinkIndex: Equatable, Sendable {
         })
         let titleLookup = Dictionary(grouping: notes, by: {
             WikiLinkNormalizer.noteLookupKey($0.title)
-        }).mapValues { $0.map(\.id) }
+        }).mapValues { group in
+            group.map(\.id).sorted { $0.absoluteString < $1.absoluteString }
+        }
         let pathLookup = Dictionary(uniqueKeysWithValues: notes.map {
             (WikiLinkNormalizer.noteLookupKey($0.relativePathWithoutExtension), $0.id)
         })
@@ -573,11 +655,13 @@ public struct VaultLinkIndex: Equatable, Sendable {
             titleLookup: titleLookup,
             pathLookup: pathLookup,
             headingLookupByNote: headingLookupByNote,
-            blockLookupByNote: blockLookupByNote
+            blockLookupByNote: blockLookupByNote,
+            sourcesByTargetPathKey: [:]
         )
 
         var outgoingByNote: [URL: [ResolvedReference]] = [:]
         var backlinksByNote: [URL: [ResolvedReference]] = [:]
+        var sourcesByTargetPathKey: [String: Set<URL>] = [:]
 
         for note in notes {
             let references = (indexes[note.id]?.references ?? []).map { reference in
@@ -588,7 +672,7 @@ public struct VaultLinkIndex: Equatable, Sendable {
                     alias: reference.alias,
                     sourceRange: reference.sourceRange,
                     targetRange: reference.targetRange,
-                    sourceSnippet: snippet(in: note.content, around: reference.sourceRange),
+                    snippet: reference.snippet,
                     resolution: resolver.resolve(target: reference.target, from: note.id)
                 )
             }
@@ -596,11 +680,21 @@ public struct VaultLinkIndex: Equatable, Sendable {
             outgoingByNote[note.id] = references
 
             for reference in references {
-                guard let recipientNoteID = recipientNoteID(for: reference.resolution) else {
-                    continue
+                if let recipientNoteID = recipientNoteID(for: reference.resolution) {
+                    backlinksByNote[recipientNoteID, default: []].append(reference)
                 }
-                backlinksByNote[recipientNoteID, default: []].append(reference)
+                if let key = targetPathKey(for: reference.target) {
+                    sourcesByTargetPathKey[key, default: []].insert(note.id)
+                }
             }
+        }
+
+        // Canonicalize backlink order so the result of `build` is
+        // structurally identical to the result of any sequence of
+        // `applying(...)` calls reaching the same state — see
+        // `backlinkOrder`.
+        for (key, refs) in backlinksByNote {
+            backlinksByNote[key] = refs.sorted(by: backlinkOrder)
         }
 
         return VaultLinkIndex(
@@ -611,8 +705,20 @@ public struct VaultLinkIndex: Equatable, Sendable {
             titleLookup: titleLookup,
             pathLookup: pathLookup,
             headingLookupByNote: headingLookupByNote,
-            blockLookupByNote: blockLookupByNote
+            blockLookupByNote: blockLookupByNote,
+            sourcesByTargetPathKey: sourcesByTargetPathKey
         )
+    }
+
+    /// Stable backlink ordering: by source note URL, then by source-range
+    /// start. Both `build` and the incremental `applying(...)` paths sort
+    /// `backlinksByNote` lists this way so the two are `Equatable`-identical
+    /// regardless of how a given index state was reached.
+    fileprivate static func backlinkOrder(_ a: ResolvedReference, _ b: ResolvedReference) -> Bool {
+        let lhs = a.sourceNoteID.absoluteString
+        let rhs = b.sourceNoteID.absoluteString
+        if lhs != rhs { return lhs < rhs }
+        return a.sourceRange.start.rawValue < b.sourceRange.start.rawValue
     }
 
     public func outgoing(for noteID: URL?) -> [ResolvedReference] {
@@ -630,7 +736,7 @@ public struct VaultLinkIndex: Equatable, Sendable {
         return documentIndexesByNote[noteID] ?? .empty
     }
 
-    public func note(for noteID: URL?) -> LiminalNote? {
+    public func note(for noteID: URL?) -> LiminalNoteMetadata? {
         guard let noteID else { return nil }
         return notesByID[noteID]
     }
@@ -701,18 +807,291 @@ public struct VaultLinkIndex: Equatable, Sendable {
         }
     }
 
-    private static func snippet(in content: String, around range: LiminalSourceRange) -> String {
-        let text = content as NSString
-        guard text.length > 0 else { return "" }
+    /// Normalized lookup key for a reference's target, or `nil` when the
+    /// target makes no vault-path claim (external URI; pure-anchor target
+    /// like `[[#Heading]]`). Used to maintain the inverse
+    /// `sourcesByTargetPathKey` index so that anchor / path changes can
+    /// re-resolve only the affected source notes.
+    fileprivate static func targetPathKey(for target: WikiTarget) -> String? {
+        guard !target.isExternal, let notePath = target.notePath else {
+            return nil
+        }
+        return WikiLinkNormalizer.noteLookupKey(notePath)
+    }
 
-        let location = Int(range.start.rawValue)
-        let upperBound = Int(range.end.rawValue)
-        let lowerBound = max(0, location - 36)
-        let snippetUpperBound = min(text.length, upperBound + 36)
-        let snippetRange = NSRange(location: lowerBound, length: snippetUpperBound - lowerBound)
-        return text.substring(with: snippetRange)
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    // MARK: - Incremental updates
+
+    /// Re-fold the index for a single note's add-or-update.
+    ///
+    /// Covers both "new note tracked" and "open document re-indexed after
+    /// an edit". Cost is bounded by the references in `index` plus the
+    /// references *targeting* this note (found via `sourcesByTargetPathKey`)
+    /// — not by vault size. The result is `Equatable`-identical to
+    /// `VaultLinkIndex.build(...)` over the same final note/index set.
+    public func applying(
+        documentChange url: URL,
+        metadata: LiminalNoteMetadata,
+        index: DocumentIndex
+    ) -> VaultLinkIndex {
+        var copy = self
+        copy.applyDocumentChange(url: url, metadata: metadata, index: index)
+        return copy
+    }
+
+    /// Re-fold the index for a note removal (file deleted, or document
+    /// closed with no backing file). Drops the note's own rows and
+    /// re-resolves every reference that targeted it.
+    public func applying(removalOf url: URL) -> VaultLinkIndex {
+        var copy = self
+        copy.applyRemoval(of: url)
+        return copy
+    }
+
+    private mutating func applyDocumentChange(
+        url: URL,
+        metadata: LiminalNoteMetadata,
+        index newIndex: DocumentIndex
+    ) {
+        let oldMetadata = notesByID[url]
+        let oldIndex = documentIndexesByNote[url]
+        let isNew = oldMetadata == nil
+
+        let titleChanged = oldMetadata?.title != metadata.title
+        let pathChanged = oldMetadata?.relativePathWithoutExtension
+            != metadata.relativePathWithoutExtension
+        let anchorsChanged = oldIndex?.headings != newIndex.headings
+            || oldIndex?.blocks != newIndex.blocks
+
+        // 1. Per-note rows.
+        notesByID[url] = metadata
+        documentIndexesByNote[url] = newIndex
+        headingLookupByNote[url] = Self.firstValueMap(newIndex.headings) { $0.normalizedKey }
+        blockLookupByNote[url] = Self.firstValueMap(newIndex.blocks) { $0.normalizedKey }
+
+        // 2. titleLookup — drop the stale title entry, add the current one.
+        if let oldMetadata, titleChanged {
+            removeFromTitleLookup(url: url, title: oldMetadata.title)
+        }
+        if isNew || titleChanged {
+            let key = WikiLinkNormalizer.noteLookupKey(metadata.title)
+            var urls = titleLookup[key] ?? []
+            if !urls.contains(url) {
+                urls.append(url)
+                urls.sort { $0.absoluteString < $1.absoluteString }
+                titleLookup[key] = urls
+            }
+        }
+
+        // 3. pathLookup — single-valued; drop the stale key, set the new one.
+        if let oldMetadata, pathChanged {
+            let oldKey = WikiLinkNormalizer.noteLookupKey(oldMetadata.relativePathWithoutExtension)
+            if pathLookup[oldKey] == url { pathLookup[oldKey] = nil }
+        }
+        pathLookup[WikiLinkNormalizer.noteLookupKey(metadata.relativePathWithoutExtension)] = url
+
+        // 4. Detach this note's previous outgoing references from the
+        //    backlink and inverse-target indexes.
+        detachOutgoing(of: url)
+
+        // 5. Re-resolve and attach this note's new outgoing references.
+        //    Steps 1-3 already updated this note's own identity rows, so
+        //    `resolve` sees the note's current title / path / anchors —
+        //    self-references resolve correctly.
+        let resolved = newIndex.references.map { reference in
+            ResolvedReference(
+                sourceNoteID: url,
+                kind: reference.kind,
+                target: reference.target,
+                alias: reference.alias,
+                sourceRange: reference.sourceRange,
+                targetRange: reference.targetRange,
+                snippet: reference.snippet,
+                resolution: resolve(target: reference.target, from: url)
+            )
+        }
+        attachOutgoing(resolved, of: url)
+
+        // 6. This note's identity (title / path) or anchor set changed —
+        //    or it's brand new — so every *other* note whose references
+        //    target this note may now resolve differently. Find them via
+        //    the inverse index and re-resolve just those.
+        if titleChanged || pathChanged || anchorsChanged || isNew {
+            var affectedKeys: Set<String> = [
+                WikiLinkNormalizer.noteLookupKey(metadata.title),
+                WikiLinkNormalizer.noteLookupKey(metadata.relativePathWithoutExtension)
+            ]
+            if let oldMetadata {
+                affectedKeys.insert(WikiLinkNormalizer.noteLookupKey(oldMetadata.title))
+                affectedKeys.insert(
+                    WikiLinkNormalizer.noteLookupKey(oldMetadata.relativePathWithoutExtension)
+                )
+            }
+            var sources: Set<URL> = []
+            for key in affectedKeys {
+                if let bucket = sourcesByTargetPathKey[key] { sources.formUnion(bucket) }
+            }
+            sources.remove(url) // already handled in step 5
+            for source in sources {
+                reresolveOutgoing(of: source)
+            }
+        }
+    }
+
+    private mutating func applyRemoval(of url: URL) {
+        guard let oldMetadata = notesByID.removeValue(forKey: url) else { return }
+        documentIndexesByNote[url] = nil
+        headingLookupByNote[url] = nil
+        blockLookupByNote[url] = nil
+        removeFromTitleLookup(url: url, title: oldMetadata.title)
+        let pathKey = WikiLinkNormalizer.noteLookupKey(oldMetadata.relativePathWithoutExtension)
+        if pathLookup[pathKey] == url { pathLookup[pathKey] = nil }
+
+        // Drop this note's own outgoing references entirely.
+        detachOutgoing(of: url)
+        outgoingByNote[url] = nil
+
+        // Anything that resolved (or ambiguously pointed) *into* this note
+        // must be re-resolved. Backlinks cover resolved/noteResolved
+        // sources; the inverse index additionally covers `.ambiguous`
+        // sources that removing this note may now disambiguate.
+        var sources: Set<URL> = Set((backlinksByNote[url] ?? []).map(\.sourceNoteID))
+        for key in [WikiLinkNormalizer.noteLookupKey(oldMetadata.title), pathKey] {
+            if let bucket = sourcesByTargetPathKey[key] { sources.formUnion(bucket) }
+        }
+        backlinksByNote[url] = nil
+        sources.remove(url)
+        for source in sources {
+            reresolveOutgoing(of: source)
+        }
+    }
+
+    /// Recompute every outgoing reference for `url` against the current
+    /// index state, patching `backlinksByNote` for any that changed
+    /// recipient. `outgoingByNote[url]` is rewritten with refreshed
+    /// resolutions; `sourcesByTargetPathKey` is left intact (the targets
+    /// themselves didn't change — only their resolution may have).
+    private mutating func reresolveOutgoing(of url: URL) {
+        guard let current = outgoingByNote[url] else { return }
+        var updated: [ResolvedReference] = []
+        updated.reserveCapacity(current.count)
+        for old in current {
+            let new = ResolvedReference(
+                sourceNoteID: old.sourceNoteID,
+                kind: old.kind,
+                target: old.target,
+                alias: old.alias,
+                sourceRange: old.sourceRange,
+                targetRange: old.targetRange,
+                snippet: old.snippet,
+                resolution: resolve(target: old.target, from: url)
+            )
+            updated.append(new)
+
+            let oldRecipient = Self.recipientNoteID(for: old.resolution)
+            let newRecipient = Self.recipientNoteID(for: new.resolution)
+            if oldRecipient == newRecipient {
+                // Same recipient, but the resolved value may still differ
+                // (e.g. resolved ↔ noteResolved). Replace in place.
+                if let recipient = newRecipient {
+                    replaceBacklink(
+                        in: recipient,
+                        from: url,
+                        sourceRange: old.sourceRange,
+                        with: new
+                    )
+                }
+            } else {
+                if let oldRecipient {
+                    removeBacklink(in: oldRecipient, from: url, sourceRange: old.sourceRange)
+                }
+                if let newRecipient {
+                    insertBacklink(in: newRecipient, ref: new)
+                }
+            }
+        }
+        outgoingByNote[url] = updated
+    }
+
+    // MARK: Incremental-update helpers
+
+    /// Remove `url`'s outgoing references from the backlink and inverse-
+    /// target indexes, and clear its `outgoingByNote` row.
+    private mutating func detachOutgoing(of url: URL) {
+        for ref in outgoingByNote[url] ?? [] {
+            if let recipient = Self.recipientNoteID(for: ref.resolution) {
+                removeBacklink(in: recipient, from: url, sourceRange: ref.sourceRange)
+            }
+        }
+        for (key, bucket) in sourcesByTargetPathKey where bucket.contains(url) {
+            var next = bucket
+            next.remove(url)
+            sourcesByTargetPathKey[key] = next.isEmpty ? nil : next
+        }
+        outgoingByNote[url] = nil
+    }
+
+    /// Install `resolved` as `url`'s outgoing references, registering each
+    /// into the backlink and inverse-target indexes.
+    private mutating func attachOutgoing(_ resolved: [ResolvedReference], of url: URL) {
+        outgoingByNote[url] = resolved
+        for ref in resolved {
+            if let recipient = Self.recipientNoteID(for: ref.resolution) {
+                insertBacklink(in: recipient, ref: ref)
+            }
+            if let key = Self.targetPathKey(for: ref.target) {
+                sourcesByTargetPathKey[key, default: []].insert(url)
+            }
+        }
+    }
+
+    private mutating func insertBacklink(in recipient: URL, ref: ResolvedReference) {
+        var list = backlinksByNote[recipient] ?? []
+        let insertAt = list.firstIndex { Self.backlinkOrder(ref, $0) } ?? list.endIndex
+        list.insert(ref, at: insertAt)
+        backlinksByNote[recipient] = list
+    }
+
+    private mutating func removeBacklink(
+        in recipient: URL,
+        from sourceURL: URL,
+        sourceRange: LiminalSourceRange
+    ) {
+        guard var list = backlinksByNote[recipient] else { return }
+        if let idx = list.firstIndex(where: {
+            $0.sourceNoteID == sourceURL && $0.sourceRange == sourceRange
+        }) {
+            list.remove(at: idx)
+        }
+        backlinksByNote[recipient] = list.isEmpty ? nil : list
+    }
+
+    private mutating func replaceBacklink(
+        in recipient: URL,
+        from sourceURL: URL,
+        sourceRange: LiminalSourceRange,
+        with ref: ResolvedReference
+    ) {
+        guard var list = backlinksByNote[recipient] else {
+            insertBacklink(in: recipient, ref: ref)
+            return
+        }
+        if let idx = list.firstIndex(where: {
+            $0.sourceNoteID == sourceURL && $0.sourceRange == sourceRange
+        }) {
+            // Source URL + source range are stable across a re-resolve, so
+            // the sort position is unchanged — replace in place.
+            list[idx] = ref
+            backlinksByNote[recipient] = list
+        } else {
+            insertBacklink(in: recipient, ref: ref)
+        }
+    }
+
+    private mutating func removeFromTitleLookup(url: URL, title: String) {
+        let key = WikiLinkNormalizer.noteLookupKey(title)
+        guard var urls = titleLookup[key] else { return }
+        urls.removeAll { $0 == url }
+        titleLookup[key] = urls.isEmpty ? nil : urls
     }
 
     private static func firstValueMap<Value>(

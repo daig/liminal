@@ -13,7 +13,7 @@ enum BacklinkPresentation {
     /// the same source appear top-to-bottom as they do in that note.
     static func sorted(
         _ refs: [ResolvedReference],
-        notes: [URL: LiminalNote]
+        notes: [URL: LiminalNoteMetadata]
     ) -> [ResolvedReference] {
         refs.sorted { a, b in
             let aPath = sortKey(for: a, notes: notes)
@@ -31,7 +31,7 @@ enum BacklinkPresentation {
     /// disk while still backlinked from a stale entry — defensive).
     static func sourceDisplayLabel(
         for reference: ResolvedReference,
-        notes: [URL: LiminalNote]
+        notes: [URL: LiminalNoteMetadata]
     ) -> String {
         if let path = notes[reference.sourceNoteID]?.relativePath {
             return (path as NSString).deletingPathExtension
@@ -42,7 +42,7 @@ enum BacklinkPresentation {
 
     private static func sortKey(
         for reference: ResolvedReference,
-        notes: [URL: LiminalNote]
+        notes: [URL: LiminalNoteMetadata]
     ) -> String {
         notes[reference.sourceNoteID]?.relativePath
             ?? reference.sourceNoteID.lastPathComponent

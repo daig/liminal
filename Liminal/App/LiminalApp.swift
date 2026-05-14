@@ -8,6 +8,8 @@ extension UTType {
 
 @main
 struct LiminalApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         DocumentGroup(newDocument: LiminalSourceDocument.init) { configuration in
             LiminalEditorView(
@@ -27,6 +29,17 @@ struct LiminalApp: App {
             CommandMenu("View") {
                 ViewMenu()
             }
+        }
+    }
+}
+
+/// Hooks `applicationWillTerminate` so every vault's warm-tier cache is
+/// flushed to disk before the process exits — the debounced async flush
+/// has no chance to run during termination.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            VaultRegistry.shared.flushAllCachesSynchronously()
         }
     }
 }
