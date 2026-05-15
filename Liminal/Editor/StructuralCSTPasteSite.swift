@@ -4,10 +4,10 @@ import CambiumSelection
 enum StructuralCSTPasteTargetScope: Sendable, Equatable {
     case exactCursor
     case rootProjectedFromCursor
+    case parentProjectedFromCursor(levels: UInt32)
+    case nearestAncestorProjectedFromCursor(kind: LiminalKind)
 
     // Future scopes:
-    // case parentProjectedFromCursor(levels: Int)
-    // case nearestAncestorProjectedFromCursor(kind: LiminalKind)
     // case outermostAncestorProjectedFromCursor(kind: LiminalKind)
     // case selectedTarget(origin: LiminalCSTPath, target: LiminalCSTPath)
     // case markedTarget(name: Character)
@@ -49,6 +49,11 @@ struct ResolvedStructuralCSTPasteSite {
 }
 
 enum StructuralCSTPasteSiteResolver {
+    private struct CursorFocus {
+        let forest: LiminalForest
+        let value: StructuralCSTPasteCursorFocus
+    }
+
     static func resolve(
         scope: StructuralCSTPasteTargetScope,
         in tree: SharedSyntaxTree<LiminalLanguage>,
@@ -59,6 +64,18 @@ enum StructuralCSTPasteSiteResolver {
             return resolveExactCursor(in: tree, cursorByteOffset: cursorByteOffset)
         case .rootProjectedFromCursor:
             return resolveRootProjectedFromCursor(
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            )
+        case .parentProjectedFromCursor(let levels):
+            return resolveParentProjectedFromCursor(
+                levels: levels,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            )
+        case .nearestAncestorProjectedFromCursor(let kind):
+            return resolveNearestAncestorProjectedFromCursor(
+                kind: kind,
                 in: tree,
                 cursorByteOffset: cursorByteOffset
             )
@@ -85,29 +102,95 @@ enum StructuralCSTPasteSiteResolver {
         )
     }
 
+    private static func resolveParentProjectedFromCursor(
+        levels: UInt32,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize
+    ) -> ResolvedStructuralCSTPasteSite? {
+        guard levels > 0,
+              let focus = cursorFocus(in: tree, cursorByteOffset: cursorByteOffset)
+        else { return nil }
+
+        let childPath = focus.value.childPath
+        guard Int(levels) <= childPath.depth else { return nil }
+
+        let targetDepth = childPath.depth - Int(levels)
+        let containerPath = LiminalCSTPath(
+            Array(childPath.rawValue.prefix(targetDepth))
+        )
+        guard let referenceChildIndex = containerPath.projectedChildIndex(
+            containing: childPath
+        ) else { return nil }
+
+        return resolveProjectedContainer(
+            scope: .parentProjectedFromCursor(levels: levels),
+            focus: focus,
+            in: tree,
+            containerPath: containerPath,
+            referenceChildIndex: referenceChildIndex
+        )
+    }
+
+    private static func resolveNearestAncestorProjectedFromCursor(
+        kind: LiminalKind,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize
+    ) -> ResolvedStructuralCSTPasteSite? {
+        guard let focus = cursorFocus(in: tree, cursorByteOffset: cursorByteOffset)
+        else { return nil }
+
+        let childPath = focus.value.childPath
+        for depth in stride(from: childPath.depth, through: 0, by: -1) {
+            let containerPath = LiminalCSTPath(
+                Array(childPath.rawValue.prefix(depth))
+            )
+            let isExactFocusedChild = containerPath == childPath
+            let referenceChildIndex = isExactFocusedChild
+                ? nil
+                : containerPath.projectedChildIndex(containing: childPath)
+
+            guard let resolved = resolveProjectedContainer(
+                scope: .nearestAncestorProjectedFromCursor(kind: kind),
+                focus: focus,
+                in: tree,
+                containerPath: containerPath,
+                referenceChildIndex: referenceChildIndex,
+                cursorByteOffsetForExactContainer: isExactFocusedChild
+                    ? cursorByteOffset
+                    : nil
+            ) else { continue }
+
+            guard case .projectedContainer(let projected) = resolved.site.target,
+                  projected.containerKind == kind
+            else { continue }
+            if isExactFocusedChild,
+               projected.referenceChildIndex == nil
+            {
+                continue
+            }
+
+            return resolved
+        }
+        return nil
+    }
+
     private static func resolveRootProjectedFromCursor(
         in tree: SharedSyntaxTree<LiminalLanguage>,
         cursorByteOffset: TextSize
-    ) -> ResolvedStructuralCSTPasteSite {
+    ) -> ResolvedStructuralCSTPasteSite? {
         let focus = cursorFocus(in: tree, cursorByteOffset: cursorByteOffset)
         return tree.withRoot { root in
-            let rootHandle = root.makeHandle()
             let rootPath = root.liminalCSTPath
-            let projected = rootProjectedContainer(
-                root: root,
-                rootPath: rootPath,
+            let referenceChildIndex = projectedReferenceChildIndex(
+                in: root,
                 cursorByteOffset: cursorByteOffset
             )
-            let site = StructuralCSTPasteSite(
+            return resolvedProjectedSite(
                 scope: .rootProjectedFromCursor,
-                originFocus: focus?.value,
-                target: .projectedContainer(projected)
-            )
-            return ResolvedStructuralCSTPasteSite(
-                site: site,
-                originForest: focus?.forest,
-                containerHandle: rootHandle,
-                exactTargetForest: nil
+                focus: focus,
+                container: root,
+                containerPath: rootPath,
+                referenceChildIndex: referenceChildIndex
             )
         }
     }
@@ -115,7 +198,7 @@ enum StructuralCSTPasteSiteResolver {
     private static func cursorFocus(
         in tree: SharedSyntaxTree<LiminalLanguage>,
         cursorByteOffset: TextSize
-    ) -> (forest: LiminalForest, value: StructuralCSTPasteCursorFocus)? {
+    ) -> CursorFocus? {
         guard let forest = LiminalForest.cursorTarget(
             at: cursorByteOffset,
             in: tree
@@ -129,9 +212,9 @@ enum StructuralCSTPasteSiteResolver {
             let childKind = parent.green { green in
                 green.child(at: forest.anchorChildIndex)
             }.kind
-            return (
-                forest,
-                StructuralCSTPasteCursorFocus(
+            return CursorFocus(
+                forest: forest,
+                value: StructuralCSTPasteCursorFocus(
                     parentPath: parentPath,
                     childPath: parentPath.appending(childIndex),
                     childIndex: childIndex,
@@ -142,42 +225,122 @@ enum StructuralCSTPasteSiteResolver {
         }
     }
 
-    private static func rootProjectedContainer(
-        root: borrowing SyntaxNodeCursor<LiminalLanguage>,
-        rootPath: LiminalCSTPath,
+    private static func resolveProjectedContainer(
+        scope: StructuralCSTPasteTargetScope,
+        focus: CursorFocus,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        containerPath: LiminalCSTPath,
+        referenceChildIndex: UInt32?,
+        cursorByteOffsetForExactContainer: TextSize? = nil
+    ) -> ResolvedStructuralCSTPasteSite? {
+        tree.withRoot { root in
+            if containerPath.isRoot {
+                let referenceChildIndex = cursorByteOffsetForExactContainer.map {
+                    projectedReferenceChildIndex(
+                        in: root,
+                        cursorByteOffset: $0
+                    )
+                } ?? referenceChildIndex
+                return resolvedProjectedSite(
+                    scope: scope,
+                    focus: focus,
+                    container: root,
+                    containerPath: containerPath,
+                    referenceChildIndex: referenceChildIndex
+                )
+            }
+
+            return root.withDescendant(atPath: containerPath.rawValue) {
+                container -> ResolvedStructuralCSTPasteSite? in
+                let referenceChildIndex = cursorByteOffsetForExactContainer.map {
+                    projectedReferenceChildIndex(
+                        in: container,
+                        cursorByteOffset: $0
+                    )
+                } ?? referenceChildIndex
+                return resolvedProjectedSite(
+                    scope: scope,
+                    focus: focus,
+                    container: container,
+                    containerPath: containerPath,
+                    referenceChildIndex: referenceChildIndex
+                )
+            } ?? nil
+        }
+    }
+
+    private static func resolvedProjectedSite(
+        scope: StructuralCSTPasteTargetScope,
+        focus: CursorFocus?,
+        container: borrowing SyntaxNodeCursor<LiminalLanguage>,
+        containerPath: LiminalCSTPath,
+        referenceChildIndex: UInt32?
+    ) -> ResolvedStructuralCSTPasteSite? {
+        guard let projected = projectedContainer(
+            container: container,
+            containerPath: containerPath,
+            referenceChildIndex: referenceChildIndex
+        ) else { return nil }
+
+        let site = StructuralCSTPasteSite(
+            scope: scope,
+            originFocus: focus?.value,
+            target: .projectedContainer(projected)
+        )
+        return ResolvedStructuralCSTPasteSite(
+            site: site,
+            originForest: focus?.forest,
+            containerHandle: container.makeHandle(),
+            exactTargetForest: nil
+        )
+    }
+
+    private static func projectedReferenceChildIndex(
+        in container: borrowing SyntaxNodeCursor<LiminalLanguage>,
         cursorByteOffset: TextSize
-    ) -> StructuralCSTPasteProjectedContainer {
-        let count = root.childOrTokenCount
-        guard count > 0 else {
+    ) -> UInt32? {
+        let count = container.childOrTokenCount
+        guard count > 0 else { return nil }
+
+        let cursor = min(cursorByteOffset.rawValue, container.textRange.end.rawValue)
+        var containingIndex = count - 1
+        for index in 0..<count {
+            let range = container.childTextRange(at: index)
+            if cursor <= range.start.rawValue || cursor < range.end.rawValue {
+                containingIndex = index
+                break
+            }
+        }
+        return UInt32(containingIndex)
+    }
+
+    private static func projectedContainer(
+        container: borrowing SyntaxNodeCursor<LiminalLanguage>,
+        containerPath: LiminalCSTPath,
+        referenceChildIndex: UInt32?
+    ) -> StructuralCSTPasteProjectedContainer? {
+        guard let referenceChildIndex else {
             return StructuralCSTPasteProjectedContainer(
-                containerPath: rootPath,
-                containerKind: root.kind,
+                containerPath: containerPath,
+                containerKind: container.kind,
                 referenceChildIndex: nil,
                 referenceChildKind: nil,
                 referenceChildPath: nil
             )
         }
 
-        let cursor = min(cursorByteOffset.rawValue, root.textRange.end.rawValue)
-        var containingIndex = count - 1
-        for index in 0..<count {
-            let range = root.childTextRange(at: index)
-            if cursor <= range.start.rawValue || cursor < range.end.rawValue {
-                containingIndex = index
-                break
-            }
-        }
+        let index = Int(referenceChildIndex)
+        guard index < container.childOrTokenCount else { return nil }
 
-        let childIndex = UInt32(containingIndex)
-        let childKind = root.green { green in
-            green.child(at: containingIndex)
+        let childKind = container.green { green in
+            green.child(at: index)
         }.kind
         return StructuralCSTPasteProjectedContainer(
-            containerPath: rootPath,
-            containerKind: root.kind,
-            referenceChildIndex: childIndex,
+            containerPath: containerPath,
+            containerKind: container.kind,
+            referenceChildIndex: referenceChildIndex,
             referenceChildKind: childKind,
-            referenceChildPath: rootPath.appending(childIndex)
+            referenceChildPath: containerPath.appending(referenceChildIndex)
         )
     }
 }

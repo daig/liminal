@@ -138,6 +138,124 @@ struct StructuralCSTPasteSiteTests {
         #expect(projected.referenceChildPath == [UInt32(listIndex)])
     }
 
+    @Test("parent projection one level from paragraph text targets inline content")
+    func parentProjectionOneLevelTargetsInlineContent() throws {
+        let parsed = try LiminalParser().parse("Hello.\n")
+        let resolved = try #require(
+            StructuralCSTPasteSiteResolver.resolve(
+                scope: .parentProjectedFromCursor(levels: 1),
+                in: parsed.tree,
+                cursorByteOffset: .zero
+            )
+        )
+        let projected = try projectedContainer(from: resolved.site)
+        let referenceChildIndex = try #require(projected.referenceChildIndex)
+
+        #expect(resolved.site.scope == .parentProjectedFromCursor(levels: 1))
+        #expect(resolved.originForest != nil)
+        #expect(resolved.exactTargetForest == nil)
+        #expect(projected.containerKind == .inlineContent)
+        #expect(projected.referenceChildKind == .inlineText)
+        #expect(projected.referenceChildPath == projected.containerPath.appending(
+            referenceChildIndex
+        ))
+        #expect(resolved.containerHandle.withCursor { $0.kind } == .inlineContent)
+    }
+
+    @Test("parent projection two levels from paragraph text targets paragraph")
+    func parentProjectionTwoLevelsTargetsParagraph() throws {
+        let parsed = try LiminalParser().parse("Hello.\n")
+        let resolved = try #require(
+            StructuralCSTPasteSiteResolver.resolve(
+                scope: .parentProjectedFromCursor(levels: 2),
+                in: parsed.tree,
+                cursorByteOffset: .zero
+            )
+        )
+        let projected = try projectedContainer(from: resolved.site)
+
+        #expect(projected.containerKind == .paragraph)
+        #expect(projected.referenceChildKind == .inlineContent)
+        #expect(resolved.containerHandle.withCursor { $0.kind } == .paragraph)
+    }
+
+    @Test("parent projection rejects zero and excessive levels")
+    func parentProjectionRejectsInvalidLevels() throws {
+        let parsed = try LiminalParser().parse("Hello.\n")
+        let zero = StructuralCSTPasteSiteResolver.resolve(
+            scope: .parentProjectedFromCursor(levels: 0),
+            in: parsed.tree,
+            cursorByteOffset: .zero
+        )
+        let excessive = StructuralCSTPasteSiteResolver.resolve(
+            scope: .parentProjectedFromCursor(levels: 99),
+            in: parsed.tree,
+            cursorByteOffset: .zero
+        )
+
+        if zero != nil {
+            Issue.record("expected zero-level parent projection to fail")
+        }
+        if excessive != nil {
+            Issue.record("expected excessive parent projection to fail")
+        }
+    }
+
+    @Test("nearest ancestor projection from list content targets the list item")
+    func nearestAncestorProjectionTargetsListItem() throws {
+        let source = "- foo\n  - bar\n"
+        let parsed = try LiminalParser().parse(source)
+        let cursorOffset = try byteOffset(of: "bar", in: source)
+
+        let resolved = try #require(
+            StructuralCSTPasteSiteResolver.resolve(
+                scope: .nearestAncestorProjectedFromCursor(kind: .listItem),
+                in: parsed.tree,
+                cursorByteOffset: TextSize(UInt32(cursorOffset))
+            )
+        )
+        let projected = try projectedContainer(from: resolved.site)
+
+        #expect(projected.containerKind == .listItem)
+        #expect(projected.referenceChildKind == .paragraph)
+        #expect(resolved.containerHandle.withCursor { $0.kind } == .listItem)
+    }
+
+    @Test("nearest ancestor projection from nested list content chooses inner list")
+    func nearestAncestorProjectionChoosesInnerList() throws {
+        let source = "- foo\n  - bar\n"
+        let parsed = try LiminalParser().parse(source)
+        let cursorOffset = try byteOffset(of: "bar", in: source)
+
+        let resolved = try #require(
+            StructuralCSTPasteSiteResolver.resolve(
+                scope: .nearestAncestorProjectedFromCursor(kind: .list),
+                in: parsed.tree,
+                cursorByteOffset: TextSize(UInt32(cursorOffset))
+            )
+        )
+        let projected = try projectedContainer(from: resolved.site)
+        let targetText = resolved.containerHandle.withCursor { $0.makeString() }
+
+        #expect(projected.containerKind == .list)
+        #expect(projected.referenceChildKind == .listItem)
+        #expect(targetText.contains("bar"))
+        #expect(!targetText.contains("foo"))
+    }
+
+    @Test("nearest ancestor projection returns nil when kind is absent")
+    func nearestAncestorProjectionMissingKindReturnsNil() throws {
+        let parsed = try LiminalParser().parse("- foo\n")
+        let resolved = StructuralCSTPasteSiteResolver.resolve(
+            scope: .nearestAncestorProjectedFromCursor(kind: .blockQuote),
+            in: parsed.tree,
+            cursorByteOffset: .zero
+        )
+        if resolved != nil {
+            Issue.record("expected missing nearest ancestor kind to fail")
+        }
+    }
+
     private func exactTarget(
         from site: StructuralCSTPasteSite
     ) throws -> StructuralCSTPasteCursorFocus {
