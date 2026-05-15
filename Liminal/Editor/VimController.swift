@@ -344,10 +344,10 @@ public final class VimController: ObservableObject {
             delegate?.prepareForInsert(at: .atCursor)
         case .paste(let after):
             delegate?.paste(after: after)
-        case .pasteCSTListItems(let after):
-            delegate?.pasteCSTListItems(after: after)
-        case .pasteCSTNested(let after):
-            delegate?.pasteCSTNested(after: after)
+        case .pasteCSTSplice(let after):
+            delegate?.pasteCSTSplice(after: after)
+        case .pasteCSTNest(let after):
+            delegate?.pasteCSTNest(after: after)
         case .moveCursor(let motion, let count):
             delegate?.moveCursor(motion: motion, count: count)
         case .structuralMotion(let motion, let count):
@@ -722,12 +722,12 @@ public final class VimController: ObservableObject {
             .toggleTaskAtCursor
         }
         t.bind(.normal, [.special(.space), .char("p")],
-               description: "Paste CST as list items") { _ in
-            .pasteCSTListItems(after: true)
+               description: "Splice CST paste") { _ in
+            .pasteCSTSplice(after: true)
         }
         t.bind(.normal, [.special(.space), .char("n")],
-               description: "Paste CST nested") { _ in
-            .pasteCSTNested(after: true)
+               description: "Nest CST paste") { _ in
+            .pasteCSTNest(after: true)
         }
 
         // CST-aware undo / redo. Routed to the delegate, which walks
@@ -917,13 +917,12 @@ public protocol VimControllerDelegate: AnyObject {
     /// Paste from the system pasteboard. `after` is `true` for `p`
     /// (after cursor / below line) and `false` for `P`.
     func paste(after: Bool)
-    /// Temporary explicit target-intent paste for CST list-item
-    /// payloads. Refuses non-list payloads rather than falling back to
-    /// plain-text paste.
-    func pasteCSTListItems(after: Bool)
-    /// Temporary explicit target-intent paste for nesting compatible CST
-    /// payloads inside the current list item.
-    func pasteCSTNested(after: Bool)
+    /// Explicit target-intent paste for splicing compatible CST payloads
+    /// into a strict child-sequence target.
+    func pasteCSTSplice(after: Bool)
+    /// Explicit target-intent paste for nesting compatible CST payloads
+    /// inside a strict container target.
+    func pasteCSTNest(after: Bool)
     /// Materialize and apply an operator over the indicated target.
     /// The delegate is responsible for: resolving the affected text
     /// range from `target` (using the current cursor position),
@@ -979,8 +978,8 @@ extension VimControllerDelegate {
     public func redo(count: Int) {}
     public func commitInsertSession() {}
     public func changeSelection() { deleteSelection() }
-    public func pasteCSTListItems(after: Bool) {}
-    public func pasteCSTNested(after: Bool) {}
+    public func pasteCSTSplice(after: Bool) {}
+    public func pasteCSTNest(after: Bool) {}
     // CST visual mode default no-ops — production Coordinator
     // overrides; spy delegates in tests inherit the no-op.
     public func enterCSTVisualMode() {}

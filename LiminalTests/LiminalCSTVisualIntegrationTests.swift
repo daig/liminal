@@ -232,7 +232,7 @@ struct LiminalCSTVisualIntegrationTests {
         let target = "- foo\n  - one\n  - two\n"
         let fixture = try makeFixture(target)
         fixture.placeCursor(atUTF16: try utf16Offset(of: "- one", in: target))
-        fixture.coordinator.pasteCSTListItems(after: true)
+        fixture.coordinator.pasteCSTSplice(after: true)
 
         let expected = "- foo\n  - one\n  - bar\n  - baz\n  - two\n"
         #expect(fixture.textView.string == expected)
@@ -268,7 +268,7 @@ struct LiminalCSTVisualIntegrationTests {
         let target = "before\n\n- foo\n- baz\n"
         let fixture = try makeFixture(target)
         fixture.placeCursor(atUTF16: try utf16Offset(of: "- foo", in: target))
-        fixture.coordinator.pasteCSTListItems(after: true)
+        fixture.coordinator.pasteCSTSplice(after: true)
 
         let expected = "before\n\n- foo\n- bar\n- baz\n"
         #expect(fixture.textView.string == expected)
@@ -303,7 +303,7 @@ struct LiminalCSTVisualIntegrationTests {
         let target = "- foo\n- qux\n"
         let fixture = try makeFixture(target)
         fixture.placeCursor(atUTF16: try utf16Offset(of: "- foo", in: target))
-        fixture.coordinator.pasteCSTListItems(after: true)
+        fixture.coordinator.pasteCSTSplice(after: true)
 
         let expected = "- foo\n- bar\n- baz\n- qux\n"
         #expect(fixture.textView.string == expected)

@@ -57,12 +57,12 @@ struct StructuralCSTPasteTests {
         )
         let fragment = try StructuralCSTFragment.capture(forest)
 
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsed.tree,
             cursorByteOffset: .zero,
             after: true
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "\nOne.\n")
         let newSource = try LiminalEditorSession.applyingEdits(
@@ -72,23 +72,28 @@ struct StructuralCSTPasteTests {
         #expect(newSource == "One.\n\nOne.\n\nTwo.\n")
     }
 
-    @Test("nested list item pasted into top-level list rebases relative indent")
-    func nestedListItemPastedAtTopLevelRebasesIndent() throws {
+    @Test("list item block paste after a top-level list separates root lists")
+    func listItemBlockPasteAfterTopLevelListSeparatesRootLists() throws {
         let fragment = try nestedBarFragment()
         let target = "- zot\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: true
-        ))
+        )
 
-        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- bar\n  - bax\n")
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "\n- bar\n  - bax\n")
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- zot\n\n- bar\n  - bax\n")
     }
 
-    @Test("nested list item pasted into nested list preserves nested base indent")
-    func nestedListItemPastedIntoNestedListKeepsIndent() throws {
+    @Test("list item block paste from inside a nested list targets the root block")
+    func listItemBlockPasteFromNestedListTargetsRootBlock() throws {
         let fragment = try nestedBarFragment()
         let target = """
         - foo
@@ -96,18 +101,23 @@ struct StructuralCSTPasteTests {
         """
         let parsedTarget = try LiminalParser().parse(target)
         let offset = try byteOffset(of: "qux", in: target)
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(offset)),
             after: false
-        ))
+        )
 
-        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "  - bar\n    - bax\n")
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- bar\n  - bax\n\n")
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- bar\n  - bax\n\n- foo\n  - qux")
     }
 
-    @Test("unordered list paste normalizes only the top-level marker")
-    func unorderedListItemPasteNormalizesTargetMarker() throws {
+    @Test("list block paste preserves the source marker")
+    func listBlockPastePreservesSourceMarker() throws {
         let source = "* foo\n  + bar\n"
         let parsedSource = try LiminalParser().parse(source)
         let sourceOffset = try byteOffset(of: "foo", in: source)
@@ -118,18 +128,18 @@ struct StructuralCSTPasteTests {
 
         let target = "- zot\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: true
-        ))
+        )
 
-        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- foo\n  + bar\n")
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "\n* foo\n  + bar\n")
     }
 
-    @Test("EOF list item pasted before a sibling gets a boundary newline")
-    func eofListItemPastedBeforeSiblingGetsBoundaryNewline() throws {
+    @Test("EOF list item block pasted before a list gets a blank boundary")
+    func eofListItemBlockPastedBeforeListGetsBlankBoundary() throws {
         let source = "* foo"
         let parsedSource = try LiminalParser().parse(source)
         let sourceOffset = try byteOffset(of: "foo", in: source)
@@ -141,19 +151,19 @@ struct StructuralCSTPasteTests {
         let target = "- one\n- two\n"
         let parsedTarget = try LiminalParser().parse(target)
         let targetOffset = try byteOffset(of: "two", in: target)
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(targetOffset)),
             after: false
-        ))
+        )
 
-        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- foo\n")
+        #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "* foo\n\n")
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
             to: target
         )
-        #expect(newSource == "- one\n- foo\n- two\n")
+        #expect(newSource == "* foo\n\n- one\n- two\n")
     }
 
     @Test("EOF paragraph pasted before a paragraph gets a blank-line boundary")
@@ -167,12 +177,12 @@ struct StructuralCSTPasteTests {
 
         let target = "Two.\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: false
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "One.\n\n")
         let newSource = try LiminalEditorSession.applyingEdits(
@@ -182,19 +192,22 @@ struct StructuralCSTPasteTests {
         #expect(newSource == "One.\n\nTwo.\n")
     }
 
-    @Test("unordered list fragment refuses ordered-list target")
-    func unorderedIntoOrderedListRefuses() throws {
+    @Test("unordered list fragment refuses ordered-list splice target")
+    func unorderedIntoOrderedListSpliceRefuses() throws {
         let fragment = try nestedBarFragment()
         let target = "1. zot\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try StructuralCSTPastePlanner.plan(
+        let payload = StructuralCSTClipboardPayload(
             fragment: fragment,
-            in: parsedTarget.tree,
-            cursorByteOffset: .zero,
-            after: true
+            projection: StructuralCSTSourceProjection(fragment: fragment)
         )
-        if case .some = plan {
-            Issue.record("unordered fragment should refuse ordered-list target")
+        #expect(throws: StructuralCSTPasteRejection.incompatibleMarkers) {
+            _ = try StructuralCSTPastePlanner.planSplice(
+                payload: payload,
+                in: parsedTarget.tree,
+                cursorByteOffset: .zero,
+                after: true
+            )
         }
     }
 
@@ -214,12 +227,12 @@ struct StructuralCSTPasteTests {
 
         let target = "after\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: false
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\nbar\nbaz\n\n")
         let newSource = try LiminalEditorSession.applyingEdits(
@@ -246,12 +259,12 @@ struct StructuralCSTPasteTests {
         #expect(fragment.sourceText == "foo\n> - item\n")
 
         let parsedTarget = try LiminalParser().parse("")
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: true
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\n- item\n")
     }
@@ -275,12 +288,12 @@ struct StructuralCSTPasteTests {
         #expect(fragment.sourceText == "> nested\n")
 
         let parsedTarget = try LiminalParser().parse("")
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: true
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "> nested\n")
     }
@@ -299,12 +312,12 @@ struct StructuralCSTPasteTests {
         let target = "after\n"
         let parsedTarget = try LiminalParser().parse(target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: false
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\nbar\n\n")
     }
@@ -322,12 +335,12 @@ struct StructuralCSTPasteTests {
         )
         let parsedTarget = try LiminalParser().parse("")
 
-        let plan = try #require(try StructuralCSTPastePlanner.plan(
+        let plan = try StructuralCSTPastePlanner.planBlock(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
             after: true
-        ))
+        )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- bar\n  - bax\n")
     }
@@ -341,12 +354,12 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+        let plan = try StructuralCSTPastePlanner.planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -364,12 +377,12 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+        let plan = try StructuralCSTPastePlanner.planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -387,12 +400,12 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- one", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+        let plan = try StructuralCSTPastePlanner.planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -419,12 +432,12 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+        let plan = try StructuralCSTPastePlanner.planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -448,12 +461,12 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+        let plan = try StructuralCSTPastePlanner.planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -478,12 +491,12 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: " foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planListItems(
+        let plan = try StructuralCSTPastePlanner.planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -501,13 +514,14 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "one", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planListItems(
-            payload: capture.clipboardPayload,
-            in: parsedTarget.tree,
-            cursorByteOffset: TextSize(UInt32(cursorOffset)),
-            after: true
-        )
-        #expect(plan == nil)
+        #expect(throws: StructuralCSTPasteRejection.invalidTarget) {
+            _ = try StructuralCSTPastePlanner.planSplice(
+                payload: capture.clipboardPayload,
+                in: parsedTarget.tree,
+                cursorByteOffset: TextSize(UInt32(cursorOffset)),
+                after: true
+            )
+        }
     }
 
     @Test("explicit list item paste refuses root-list-block payload")
@@ -527,13 +541,14 @@ struct StructuralCSTPasteTests {
         let target = "- foo\n  - one\n"
         let parsedTarget = try LiminalParser().parse(target)
 
-        let plan = try StructuralCSTPastePlanner.planListItems(
-            payload: capture.clipboardPayload,
-            in: parsedTarget.tree,
-            cursorByteOffset: .zero,
-            after: true
-        )
-        #expect(plan == nil)
+        #expect(throws: StructuralCSTPasteRejection.unsupportedSource) {
+            _ = try StructuralCSTPastePlanner.planSplice(
+                payload: capture.clipboardPayload,
+                in: parsedTarget.tree,
+                cursorByteOffset: .zero,
+                after: true
+            )
+        }
     }
 
     @Test("nested list paste creates child list in current list item")
@@ -543,20 +558,39 @@ struct StructuralCSTPasteTests {
         )
         let target = "- foo\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let cursorOffset = try byteOffset(of: "foo", in: target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+        let plan = try StructuralCSTPastePlanner.planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
             to: target
         )
         #expect(newSource == "- foo\n  - bar\n  - baz\n")
+    }
+
+    @Test("nested list paste refuses cursor inside item content")
+    func nestedListPasteRefusesItemContentCursor() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n"
+        )
+        let target = "- foo\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: "foo", in: target)
+
+        #expect(throws: StructuralCSTPasteRejection.invalidTarget) {
+            _ = try StructuralCSTPastePlanner.planNest(
+                payload: capture.clipboardPayload,
+                in: parsedTarget.tree,
+                cursorByteOffset: TextSize(UInt32(cursorOffset)),
+                after: true
+            )
+        }
     }
 
     @Test("nested root list paste creates a child list")
@@ -572,14 +606,14 @@ struct StructuralCSTPasteTests {
         )
         let target = "- foo\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let cursorOffset = try byteOffset(of: "foo", in: target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+        let plan = try StructuralCSTPastePlanner.planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -595,14 +629,14 @@ struct StructuralCSTPasteTests {
         )
         let target = "- foo\n  - bar\n  - baz\n    - quoz\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let cursorOffset = try byteOffset(of: "baz", in: target)
+        let cursorOffset = try byteOffset(of: "- baz", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+        let plan = try StructuralCSTPastePlanner.planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -618,14 +652,14 @@ struct StructuralCSTPasteTests {
         )
         let target = "- foo\n  + one\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let cursorOffset = try byteOffset(of: "foo", in: target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+        let plan = try StructuralCSTPastePlanner.planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -641,14 +675,14 @@ struct StructuralCSTPasteTests {
         )
         let target = "- foo\n  - bar\n  - baz\n    - quoz\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let cursorOffset = try byteOffset(of: "quoz", in: target)
+        let cursorOffset = try byteOffset(of: "- quoz", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+        let plan = try StructuralCSTPastePlanner.planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],
@@ -670,14 +704,14 @@ struct StructuralCSTPasteTests {
         )
         let target = "- foo\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let cursorOffset = try byteOffset(of: "foo", in: target)
+        let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try #require(try StructuralCSTPastePlanner.planNestedListItem(
+        let plan = try StructuralCSTPastePlanner.planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
             after: true
-        ))
+        )
 
         let newSource = try LiminalEditorSession.applyingEdits(
             [plan.edit],

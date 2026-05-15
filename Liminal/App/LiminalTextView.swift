@@ -1359,7 +1359,7 @@ struct LiminalTextView: NSViewRepresentable {
                   let entry = SystemPasteboard.read()
             else { return }
             if entry.kind == .cstForest {
-                pasteStructural(entry, after: after, mode: .automatic)
+                pasteStructural(entry, after: after, mode: .block)
                 return
             }
             let cursor = textView.selectedRange().location
@@ -1391,30 +1391,30 @@ struct LiminalTextView: NSViewRepresentable {
             )
         }
 
-        func pasteCSTListItems(after: Bool) {
+        func pasteCSTSplice(after: Bool) {
             guard let entry = SystemPasteboard.read(),
                   entry.kind == .cstForest
             else {
                 NSSound.beep()
                 return
             }
-            pasteStructural(entry, after: after, mode: .listItems)
+            pasteStructural(entry, after: after, mode: .splice)
         }
 
-        func pasteCSTNested(after: Bool) {
+        func pasteCSTNest(after: Bool) {
             guard let entry = SystemPasteboard.read(),
                   entry.kind == .cstForest
             else {
                 NSSound.beep()
                 return
             }
-            pasteStructural(entry, after: after, mode: .nestedListItem)
+            pasteStructural(entry, after: after, mode: .nest)
         }
 
         private enum StructuralPasteMode {
-            case automatic
-            case listItems
-            case nestedListItem
+            case block
+            case splice
+            case nest
         }
 
         private func pasteStructural(
@@ -1436,33 +1436,29 @@ struct LiminalTextView: NSViewRepresentable {
             let oldSource = textView.string
             let structuralPlan: StructuralCSTPastePlan
             do {
-                let plan: StructuralCSTPastePlan?
+                let plan: StructuralCSTPastePlan
                 switch mode {
-                case .automatic:
-                    plan = try StructuralCSTPastePlanner.plan(
+                case .block:
+                    plan = try StructuralCSTPastePlanner.planBlock(
                         payload: payload,
                         in: tree,
                         cursorByteOffset: TextSize(UInt32(cursorByte)),
                         after: after
                     )
-                case .listItems:
-                    plan = try StructuralCSTPastePlanner.planListItems(
+                case .splice:
+                    plan = try StructuralCSTPastePlanner.planSplice(
                         payload: payload,
                         in: tree,
                         cursorByteOffset: TextSize(UInt32(cursorByte)),
                         after: after
                     )
-                case .nestedListItem:
-                    plan = try StructuralCSTPastePlanner.planNestedListItem(
+                case .nest:
+                    plan = try StructuralCSTPastePlanner.planNest(
                         payload: payload,
                         in: tree,
                         cursorByteOffset: TextSize(UInt32(cursorByte)),
                         after: after
                     )
-                }
-                guard let plan else {
-                    NSSound.beep()
-                    return
                 }
                 structuralPlan = plan
             } catch {

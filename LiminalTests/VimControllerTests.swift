@@ -74,8 +74,8 @@ struct VimControllerTests {
         #expect(c.pendingKeys.isEmpty)
     }
 
-    @Test("Space + p dispatches CST list item paste")
-    func leaderPasteCSTListItems() {
+    @Test("Space + p dispatches CST splice paste")
+    func leaderPasteCSTSplice() {
         let c = VimController()
         let spy = VimDelegateSpy()
         c.delegate = spy
@@ -83,12 +83,12 @@ struct VimControllerTests {
         _ = c.handle(.special(.space))
         #expect(c.pendingKeys == [.special(.space)])
         _ = c.handle(.char("p"))
-        #expect(spy.pasteCSTListItemsCalls == [true])
+        #expect(spy.pasteCSTSpliceCalls == [true])
         #expect(c.pendingKeys.isEmpty)
     }
 
-    @Test("Space + n dispatches nested CST paste")
-    func leaderPasteCSTNested() {
+    @Test("Space + n dispatches CST nest paste")
+    func leaderPasteCSTNest() {
         let c = VimController()
         let spy = VimDelegateSpy()
         c.delegate = spy
@@ -96,7 +96,7 @@ struct VimControllerTests {
         _ = c.handle(.special(.space))
         #expect(c.pendingKeys == [.special(.space)])
         _ = c.handle(.char("n"))
-        #expect(spy.pasteCSTNestedCalls == [true])
+        #expect(spy.pasteCSTNestCalls == [true])
         #expect(c.pendingKeys.isEmpty)
     }
 
@@ -605,8 +605,8 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var yankSelectionCallCount = 0
     var deleteSelectionCallCount = 0
     var pasteCalls: [Bool] = []
-    var pasteCSTListItemsCalls: [Bool] = []
-    var pasteCSTNestedCalls: [Bool] = []
+    var pasteCSTSpliceCalls: [Bool] = []
+    var pasteCSTNestCalls: [Bool] = []
     var applyOperatorCalls: [ApplyOperatorCall] = []
     var undoCalls: [Int] = []
     var redoCalls: [Int] = []
@@ -645,11 +645,11 @@ private final class VimDelegateSpy: VimControllerDelegate {
     func paste(after: Bool) {
         pasteCalls.append(after)
     }
-    func pasteCSTListItems(after: Bool) {
-        pasteCSTListItemsCalls.append(after)
+    func pasteCSTSplice(after: Bool) {
+        pasteCSTSpliceCalls.append(after)
     }
-    func pasteCSTNested(after: Bool) {
-        pasteCSTNestedCalls.append(after)
+    func pasteCSTNest(after: Bool) {
+        pasteCSTNestCalls.append(after)
     }
     func applyOperator(
         _ op: VimOperator,
