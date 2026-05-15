@@ -673,18 +673,12 @@ enum StructuralCSTPastePlanner {
         in tree: SharedSyntaxTree<LiminalLanguage>,
         cursorByteOffset: TextSize
     ) -> NestedListItemTarget? {
-        guard let forest = LiminalForest.cursorTarget(
-            at: cursorByteOffset,
-            in: tree
-        ) else {
-            return nil
-        }
-
-        let parentKind = forest.parent.withCursor { $0.kind }
-        let childKind = forest.parent.withCursor {
-            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
-        }
-        guard parentKind == .list, childKind == .listItem else { return nil }
+        guard let forest = exactCursorChildTarget(
+            in: tree,
+            cursorByteOffset: cursorByteOffset,
+            parentKind: .list,
+            childKind: .listItem
+        ) else { return nil }
 
         return forest.parent.withCursor { list in
             list.withChildNode(atRawIndex: forest.anchorChildIndex) { item in
@@ -885,6 +879,33 @@ enum StructuralCSTPastePlanner {
 
     // MARK: - Targets
 
+    /// The single entry point for explicit target-intent paste modes.
+    /// These modes accept only the exact CST child under the cursor; they
+    /// do not climb to an enclosing compatible node.
+    private static func exactCursorChildTarget(
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        parentKind: LiminalKind,
+        childKind: LiminalKind
+    ) -> LiminalForest? {
+        guard let forest = LiminalForest.cursorTarget(
+            at: cursorByteOffset,
+            in: tree
+        ) else {
+            return nil
+        }
+
+        let actualParentKind = forest.parent.withCursor { $0.kind }
+        let actualChildKind = forest.parent.withCursor {
+            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
+        }
+        guard actualParentKind == parentKind,
+              actualChildKind == childKind
+        else { return nil }
+
+        return forest
+    }
+
     private struct RootInsertionTarget {
         let parent: SyntaxNodeHandle<LiminalLanguage>
         let childIndex: Int
@@ -901,6 +922,10 @@ enum StructuralCSTPastePlanner {
         cursorByteOffset: TextSize,
         after: Bool
     ) -> RootInsertionTarget {
+        // Block/toplevel paste targets the root document-item sequence:
+        // the cursor position chooses the current root child, and the
+        // paste is inserted as its sibling. This is a different target
+        // domain from exact target-intent adapters such as splice/nest.
         tree.withRoot { root in
             let count = root.childOrTokenCount
             guard count > 0 else {
@@ -963,28 +988,23 @@ enum StructuralCSTPastePlanner {
         cursorByteOffset: TextSize,
         after: Bool
     ) -> ListInsertionTarget? {
-        guard let forest = LiminalForest.cursorTarget(
-            at: cursorByteOffset,
-            in: tree
-        ) else {
-            return nil
-        }
+        guard let forest = exactCursorChildTarget(
+            in: tree,
+            cursorByteOffset: cursorByteOffset,
+            parentKind: .list,
+            childKind: .listItem
+        ) else { return nil }
+
         return listInsertionTarget(forListItem: forest, after: after)
     }
 
     private static func listInsertionTarget(
-        forListItem candidate: LiminalForest,
+        forListItem forest: LiminalForest,
         after: Bool
     ) -> ListInsertionTarget? {
-        let parentKind = candidate.parent.withCursor { $0.kind }
-        let childKind = candidate.parent.withCursor {
-            $0.green { green in green.child(at: candidate.anchorChildIndex) }.kind
-        }
-        guard parentKind == .list, childKind == .listItem else { return nil }
-
-        return candidate.parent.withCursor { list in
+        forest.parent.withCursor { list in
             let count = list.childOrTokenCount
-            let itemIndex = candidate.anchorChildIndex
+            let itemIndex = forest.anchorChildIndex
             let childIndex = after ? itemIndex + 1 : itemIndex
             let byteOffset = childIndex < count
                 ? list.childTextRange(at: childIndex).start

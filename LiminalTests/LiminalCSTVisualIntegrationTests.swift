@@ -206,8 +206,8 @@ struct LiminalCSTVisualIntegrationTests {
         ])
     }
 
-    @Test("explicit CST list item paste splices after current item marker")
-    func explicitCSTListItemPasteSplicesAfterItemMarker() throws {
+    @Test("explicit CST list item paste splices after current list item prefix")
+    func explicitCSTListItemPasteSplicesAfterListItemPrefix() throws {
         let originalPasteboard = SystemPasteboard.pasteboard
         SystemPasteboard.pasteboard = NSPasteboard(name: NSPasteboard.Name(
             "dev.sub.liminal.cst-list-paste.tests.\(UUID().uuidString)"
@@ -239,8 +239,8 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(fixture.document.session.source == expected)
     }
 
-    @Test("explicit CST list item paste handles marker after blank line")
-    func explicitCSTListItemPasteHandlesMarkerAfterBlankLine() throws {
+    @Test("explicit CST list item paste handles target list item after blank line")
+    func explicitCSTListItemPasteHandlesTargetListItemAfterBlankLine() throws {
         let originalPasteboard = SystemPasteboard.pasteboard
         SystemPasteboard.pasteboard = NSPasteboard(name: NSPasteboard.Name(
             "dev.sub.liminal.cst-list-paste-boundary.tests.\(UUID().uuidString)"

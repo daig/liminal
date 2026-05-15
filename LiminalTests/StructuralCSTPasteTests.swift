@@ -345,8 +345,8 @@ struct StructuralCSTPasteTests {
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- bar\n  - bax\n")
     }
 
-    @Test("explicit list item paste splices after a top-level item marker")
-    func explicitListItemPasteSplicesAfterTopLevelMarker() throws {
+    @Test("explicit list item paste splices after a top-level list item prefix")
+    func explicitListItemPasteSplicesAfterTopLevelListItemPrefix() throws {
         let capture = try childListCapture(
             from: "- source\n  - bar\n  - baz\n"
         )
@@ -368,8 +368,8 @@ struct StructuralCSTPasteTests {
         #expect(newSource == "- foo\n  - one\n- bar\n- baz\n- qux\n")
     }
 
-    @Test("explicit list item paste finds a target marker after a blank line")
-    func explicitListItemPasteFindsMarkerAfterBlankLine() throws {
+    @Test("explicit list item paste finds a target list item after a blank line")
+    func explicitListItemPasteFindsTargetListItemAfterBlankLine() throws {
         let capture = try childListCapture(
             from: "- source\n  - bar\n  - baz\n"
         )
@@ -391,8 +391,8 @@ struct StructuralCSTPasteTests {
         #expect(newSource == "\n- foo\n- bar\n- baz\n- qux\n")
     }
 
-    @Test("explicit list item paste splices after a nested item marker")
-    func explicitListItemPasteSplicesAfterNestedItemMarker() throws {
+    @Test("explicit list item paste splices after a nested list item prefix")
+    func explicitListItemPasteSplicesAfterNestedListItemPrefix() throws {
         let capture = try childListCapture(
             from: "- source\n  - bar\n  - baz\n"
         )
@@ -446,8 +446,8 @@ struct StructuralCSTPasteTests {
         #expect(newSource == "- foo\n- bar\n- baz\n- qux\n")
     }
 
-    @Test("explicit direct list-item paste finds a target marker after a blank line")
-    func explicitDirectListItemPasteFindsMarkerAfterBlankLine() throws {
+    @Test("explicit direct list-item paste finds a target list item after a blank line")
+    func explicitDirectListItemPasteFindsTargetListItemAfterBlankLine() throws {
         let source = "- bar\n- baz\n"
         let parsedSource = try LiminalParser().parse(source)
         let forest = try #require(
