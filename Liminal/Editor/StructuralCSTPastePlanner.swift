@@ -680,26 +680,17 @@ enum StructuralCSTPastePlanner {
             return nil
         }
 
-        var current: LiminalForest? = forest
-        while let candidate = current {
-            let parentKind = candidate.parent.withCursor { $0.kind }
-            let childKind = candidate.parent.withCursor {
-                $0.green { green in green.child(at: candidate.anchorChildIndex) }.kind
-            }
-            if parentKind == .list, childKind == .listItem {
-                guard cursorByteOffsetIsOnListItemMarker(
-                    cursorByteOffset,
-                    candidate: candidate
-                ) else { return nil }
-                return candidate.parent.withCursor { list in
-                    list.withChildNode(atRawIndex: candidate.anchorChildIndex) { item in
-                        nestedListItemTarget(for: item.makeHandle())
-                    } ?? nil
-                }
-            }
-            current = candidate.parentForest()
+        let parentKind = forest.parent.withCursor { $0.kind }
+        let childKind = forest.parent.withCursor {
+            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
         }
-        return nil
+        guard parentKind == .list, childKind == .listItem else { return nil }
+
+        return forest.parent.withCursor { list in
+            list.withChildNode(atRawIndex: forest.anchorChildIndex) { item in
+                nestedListItemTarget(for: item.makeHandle())
+            } ?? nil
+        }
     }
 
     private static func nestedListItemTarget(
@@ -967,12 +958,6 @@ enum StructuralCSTPastePlanner {
         let hasRightSibling: Bool
     }
 
-    private enum ExplicitListTargetSearchResult {
-        case found(ListInsertionTarget)
-        case rejected
-        case noCandidate
-    }
-
     private static func explicitListInsertionTarget(
         in tree: SharedSyntaxTree<LiminalLanguage>,
         cursorByteOffset: TextSize,
@@ -984,43 +969,7 @@ enum StructuralCSTPastePlanner {
         ) else {
             return nil
         }
-        switch explicitListInsertionTarget(
-            from: forest,
-            cursorByteOffset: cursorByteOffset,
-            after: after
-        ) {
-        case .found(let target):
-            return target
-        case .rejected, .noCandidate:
-            return nil
-        }
-    }
-
-    private static func explicitListInsertionTarget(
-        from forest: LiminalForest,
-        cursorByteOffset: TextSize,
-        after: Bool
-    ) -> ExplicitListTargetSearchResult {
-        var current: LiminalForest? = forest
-        while let candidate = current {
-            let parentKind = candidate.parent.withCursor { $0.kind }
-            let childKind = candidate.parent.withCursor {
-                $0.green { green in green.child(at: candidate.anchorChildIndex) }.kind
-            }
-            if parentKind == .list, childKind == .listItem {
-                guard cursorByteOffsetIsOnListItemMarker(
-                    cursorByteOffset,
-                    candidate: candidate
-                ) else { return .rejected }
-                guard let target = listInsertionTarget(
-                    forListItem: candidate,
-                    after: after
-                ) else { return .rejected }
-                return .found(target)
-            }
-            current = candidate.parentForest()
-        }
-        return .noCandidate
+        return listInsertionTarget(forListItem: forest, after: after)
     }
 
     private static func listInsertionTarget(
@@ -1055,41 +1004,6 @@ enum StructuralCSTPastePlanner {
                 hasRightSibling: childIndex < count
             )
         }
-    }
-
-    private static func cursorByteOffsetIsOnListItemMarker(
-        _ cursorByteOffset: TextSize,
-        candidate: LiminalForest
-    ) -> Bool {
-        candidate.parent.withCursor { list in
-            list.withChildNode(atRawIndex: candidate.anchorChildIndex) { item in
-                guard let markerRange = listItemMarkerByteRange(in: item) else {
-                    return false
-                }
-                return cursorByteOffset.rawValue >= markerRange.start.rawValue
-                    && cursorByteOffset.rawValue <= markerRange.end.rawValue
-            } ?? false
-        }
-    }
-
-    private static func listItemMarkerByteRange(
-        in item: borrowing SyntaxNodeCursor<LiminalLanguage>
-    ) -> CambiumCore.TextRange? {
-        var markerRange: CambiumCore.TextRange?
-        item.forEachChildOrToken { element in
-            guard markerRange == nil else { return }
-            switch element {
-            case .token(let token):
-                let kind = LiminalLanguage.kind(for: token.rawKind)
-                guard kind == .listMarker || kind == .orderedListMarker else {
-                    return
-                }
-                markerRange = token.textRange
-            case .node:
-                return
-            }
-        }
-        return markerRange
     }
 
     // MARK: - Builder helpers

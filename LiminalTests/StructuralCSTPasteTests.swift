@@ -475,8 +475,8 @@ struct StructuralCSTPasteTests {
         #expect(newSource == "\n- foo\n- bar\n- baz\n- qux\n")
     }
 
-    @Test("explicit list item paste accepts marker trailing boundary")
-    func explicitListItemPasteAcceptsMarkerTrailingBoundary() throws {
+    @Test("explicit list item paste accepts list item prefix whitespace")
+    func explicitListItemPasteAcceptsListItemPrefixWhitespace() throws {
         let source = "- bar\n- baz\n"
         let parsedSource = try LiminalParser().parse(source)
         let forest = try #require(
@@ -572,6 +572,29 @@ struct StructuralCSTPasteTests {
             to: target
         )
         #expect(newSource == "- foo\n  - bar\n  - baz\n")
+    }
+
+    @Test("nested list paste accepts list item prefix whitespace")
+    func nestedListPasteAcceptsListItemPrefixWhitespace() throws {
+        let capture = try childListCapture(
+            from: "- source\n  - bar\n"
+        )
+        let target = "- foo\n"
+        let parsedTarget = try LiminalParser().parse(target)
+        let cursorOffset = try byteOffset(of: " foo", in: target)
+
+        let plan = try StructuralCSTPastePlanner.planNest(
+            payload: capture.clipboardPayload,
+            in: parsedTarget.tree,
+            cursorByteOffset: TextSize(UInt32(cursorOffset)),
+            after: true
+        )
+
+        let newSource = try LiminalEditorSession.applyingEdits(
+            [plan.edit],
+            to: target
+        )
+        #expect(newSource == "- foo\n  - bar\n")
     }
 
     @Test("nested list paste refuses cursor inside item content")
