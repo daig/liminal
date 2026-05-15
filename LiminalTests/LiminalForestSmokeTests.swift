@@ -13,7 +13,11 @@ struct LiminalForestSmokeTests {
         let tree = parsed.tree
 
         // The first navigable thing under root is a paragraph or heading.
-        let f = try #require(LiminalForest.containing(.zero, in: tree))
+        let f = try #require(LiminalForest.containing(
+            .zero,
+            in: tree,
+            affinity: .downstream
+        ))
         #expect(f.parent.identity == tree.rootHandle().identity)
         let kindAtAnchor = tree.withRoot { root in
             root.green { $0.child(at: f.anchorChildIndex) }.kind
@@ -33,7 +37,11 @@ struct LiminalForestSmokeTests {
         """)
         let tree = parsed.tree
 
-        let f = try #require(LiminalForest.containing(.zero, in: tree))
+        let f = try #require(LiminalForest.containing(
+            .zero,
+            in: tree,
+            affinity: .downstream
+        ))
         // Walk forward until we run out, collecting kinds.
         var current: LiminalForest = f
         var visitedKinds: [LiminalKind] = []
@@ -71,7 +79,11 @@ struct LiminalForestSmokeTests {
         let tree = parsed.tree
 
         // Find the fenced code block as a singleton forest.
-        let f = try #require(LiminalForest.containing(.zero, in: tree))
+        let f = try #require(LiminalForest.containing(
+            .zero,
+            in: tree,
+            affinity: .downstream
+        ))
         let kind = tree.withRoot { root in
             root.green { $0.child(at: f.anchorChildIndex) }.kind
         }
@@ -86,7 +98,11 @@ struct LiminalForestSmokeTests {
         let parsed = try parser.parse("First paragraph.\n\nSecond paragraph.\n")
         let tree = parsed.tree
 
-        let f = try #require(LiminalForest.containing(.zero, in: tree))
+        let f = try #require(LiminalForest.containing(
+            .zero,
+            in: tree,
+            affinity: .downstream
+        ))
         let anchor = LiminalForestAnchor.from(f)
         let resolution = anchor.resolve(in: tree)
         guard case .strong(let restored) = resolution else {
@@ -103,11 +119,15 @@ struct LiminalForestSmokeTests {
         let parsed1 = try parser.parse("First paragraph.\n")
         let firstTree = parsed1.tree
 
-        // containing(.zero, in:) descends to the smallest navigable node
+        // Downstream point containment descends to the smallest navigable node
         // covering offset 0 — for a markdown paragraph that's the inline
         // text token inside the paragraph's inlineContent. Capture an
         // anchor at that depth.
-        let f = try #require(LiminalForest.containing(.zero, in: firstTree))
+        let f = try #require(LiminalForest.containing(
+            .zero,
+            in: firstTree,
+            affinity: .downstream
+        ))
         let originalParentKind = f.parent.withCursor { $0.kind }
         let anchor = LiminalForestAnchor.from(f)
 

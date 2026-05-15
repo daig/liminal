@@ -196,6 +196,23 @@ struct LiminalCSTPolicyTests {
         #expect(forest.byteRange.start == offset)
     }
 
+    @Test("cstVisualEntry at first list item content character targets paragraph content")
+    func cstVisualEntryAtFirstListItemContentCharacterTargetsParagraph() throws {
+        let source = "- foo\n  - bar\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let offset = TextSize(UInt32(byteOffset(of: "foo", in: source)))
+        let forest = try #require(
+            LiminalForest.cstVisualEntry(at: offset, in: tree)
+        )
+
+        let childKind = forest.parent.withCursor {
+            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
+        }
+        #expect(childKind == .paragraph)
+        #expect(forest.byteRange.start == offset)
+    }
+
     @Test("cstVisualEntry returns nil for an empty document")
     func cstVisualEntryEmptyDocument() throws {
         let parsed = try LiminalParser().parse("")

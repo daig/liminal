@@ -54,6 +54,18 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(sel.length >= "- item\n".utf16.count)
     }
 
+    @Test("entering visualCST at first list item content character selects paragraph content")
+    func entryAtFirstListItemContentCharacterSelectsParagraph() throws {
+        let source = "- foo\n  - bar\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "foo", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+
+        #expect(fixture.textView.cstSelectionRanges == [
+            NSRange(location: 2, length: 3)
+        ])
+    }
+
     @Test("entering visualCST in an empty document forces back to normal mode")
     func entryInEmptyDocumentBailsToNormal() throws {
         let fixture = try makeFixture("")
@@ -184,7 +196,7 @@ struct LiminalCSTVisualIntegrationTests {
     func listItemParagraphOverlayUsesProjectedRanges() throws {
         let source = "- foo\n  bar\n"
         let fixture = try makeFixture(source)
-        fixture.placeCursor(atUTF16: try utf16Offset(of: "foo", in: source))
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "- foo", in: source))
         fixture.coordinator.enterCSTVisualMode()
         fixture.coordinator.cstNavigate(.firstChild, count: 1)
 

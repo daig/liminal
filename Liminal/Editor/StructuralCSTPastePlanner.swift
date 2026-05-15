@@ -650,7 +650,11 @@ enum StructuralCSTPastePlanner {
                 root.textRange.end.rawValue - 1
             ))
         }
-        guard let forest = LiminalForest.containing(searchOffset, in: tree) else {
+        guard let forest = LiminalForest.containing(
+            searchOffset,
+            in: tree,
+            affinity: .downstream
+        ) else {
             return nil
         }
 
@@ -962,7 +966,11 @@ enum StructuralCSTPastePlanner {
                 root.textRange.end.rawValue - 1
             ))
         }
-        guard let forest = LiminalForest.containing(searchOffset, in: tree) else {
+        guard let forest = LiminalForest.containing(
+            searchOffset,
+            in: tree,
+            affinity: .downstream
+        ) else {
             return nil
         }
 
