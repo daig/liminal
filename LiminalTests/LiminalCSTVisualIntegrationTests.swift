@@ -183,7 +183,7 @@ struct LiminalCSTVisualIntegrationTests {
           - qux
         """
         let fixture = try makeFixture(source)
-        fixture.placeCursor(atUTF16: try utf16Offset(of: "bar", in: source))
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "- bar", in: source))
         fixture.coordinator.enterCSTVisualMode()
 
         #expect(fixture.textView.cstSelectionRanges == [

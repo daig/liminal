@@ -1434,6 +1434,21 @@ struct LiminalTextView: NSViewRepresentable {
             let cursor = textView.selectedRange().location
             guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
             let oldSource = textView.string
+            let cursorByteOffset = TextSize(UInt32(cursorByte))
+            let targetScope: StructuralCSTPasteTargetScope = switch mode {
+            case .block:
+                .rootProjectedFromCursor
+            case .splice, .nest:
+                .exactCursor
+            }
+            guard let pasteSite = StructuralCSTPasteSiteResolver.resolve(
+                scope: targetScope,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            ) else {
+                NSSound.beep()
+                return
+            }
             let structuralPlan: StructuralCSTPastePlan
             do {
                 let plan: StructuralCSTPastePlan
@@ -1441,22 +1456,19 @@ struct LiminalTextView: NSViewRepresentable {
                 case .block:
                     plan = try StructuralCSTPastePlanner.planBlock(
                         payload: payload,
-                        in: tree,
-                        cursorByteOffset: TextSize(UInt32(cursorByte)),
+                        at: pasteSite,
                         after: after
                     )
                 case .splice:
                     plan = try StructuralCSTPastePlanner.planSplice(
                         payload: payload,
-                        in: tree,
-                        cursorByteOffset: TextSize(UInt32(cursorByte)),
+                        at: pasteSite,
                         after: after
                     )
                 case .nest:
                     plan = try StructuralCSTPastePlanner.planNest(
                         payload: payload,
-                        in: tree,
-                        cursorByteOffset: TextSize(UInt32(cursorByte)),
+                        at: pasteSite,
                         after: after
                     )
                 }

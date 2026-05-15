@@ -49,8 +49,7 @@ enum StructuralCSTPastePlanner {
 
     static func planBlock(
         payload: StructuralCSTClipboardPayload,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan {
         let fragment = payload.fragment
@@ -64,29 +63,25 @@ enum StructuralCSTPastePlanner {
         case .root:
             plan = try planRootFragment(
                 fragment,
-                in: tree,
-                cursorByteOffset: cursorByteOffset,
+                at: site,
                 after: after
             )
         case .list:
             plan = try planListBlockFragment(
                 fragment,
-                in: tree,
-                cursorByteOffset: cursorByteOffset,
+                at: site,
                 after: after
             )
         case .listItem where payload.projection.kind == .listItemContent:
             plan = try planProjectedRootPayload(
                 payload.logicalText,
-                in: tree,
-                cursorByteOffset: cursorByteOffset,
+                at: site,
                 after: after
             )
         case .blockQuote where payload.projection.kind == .blockQuoteContent:
             plan = try planProjectedRootPayload(
                 payload.logicalText,
-                in: tree,
-                cursorByteOffset: cursorByteOffset,
+                at: site,
                 after: after
             )
         default:
@@ -99,8 +94,7 @@ enum StructuralCSTPastePlanner {
 
     static func planSplice(
         payload: StructuralCSTClipboardPayload,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan {
         guard !payload.fragment.snapshot.root.containsSentinels else {
@@ -110,8 +104,7 @@ enum StructuralCSTPastePlanner {
               let source = listPayloadSource(for: fragment)
         else { throw StructuralCSTPasteRejection.unsupportedSource }
         guard let target = explicitListInsertionTarget(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
+            from: site,
             after: after
         ) else {
             throw StructuralCSTPasteRejection.invalidTarget
@@ -127,17 +120,14 @@ enum StructuralCSTPastePlanner {
 
     static func planNest(
         payload: StructuralCSTClipboardPayload,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan {
         guard !payload.fragment.snapshot.root.containsSentinels else {
             throw StructuralCSTPasteRejection.sentinelPayload
         }
-        guard let target = explicitNestedListItemTarget(
-            in: tree,
-            cursorByteOffset: cursorByteOffset
-        ) else { throw StructuralCSTPasteRejection.invalidTarget }
+        guard let target = explicitNestedListItemTarget(from: site)
+        else { throw StructuralCSTPasteRejection.invalidTarget }
 
         let placement = nestedInsertionPlacement(in: target, after: after)
         var payloadText = try nestedListItemPayloadText(
@@ -179,8 +169,7 @@ enum StructuralCSTPastePlanner {
 
     static func planBlock(
         fragment: StructuralCSTFragment,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan {
         try planBlock(
@@ -188,8 +177,7 @@ enum StructuralCSTPastePlanner {
                 fragment: fragment,
                 projection: StructuralCSTSourceProjection(fragment: fragment)
             ),
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
+            at: site,
             after: after
         )
     }
@@ -198,8 +186,7 @@ enum StructuralCSTPastePlanner {
 
     private static func planRootFragment(
         _ fragment: StructuralCSTFragment,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan? {
         guard !fragment.hasTokenChildren,
@@ -214,8 +201,7 @@ enum StructuralCSTPastePlanner {
         else { return nil }
 
         return try planRootInsertion(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
+            at: site,
             after: after,
             payloadText: payloadText,
             firstPayloadKind: firstPayloadKind,
@@ -234,8 +220,7 @@ enum StructuralCSTPastePlanner {
     }
 
     private static func planRootInsertion(
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool,
         payloadText: String,
         firstPayloadKind: LiminalKind,
@@ -243,11 +228,7 @@ enum StructuralCSTPastePlanner {
         appendPayload: (inout GreenTreeBuilder<LiminalLanguage>) throws -> Void,
         appendPayloadWithTrailingNewline: ((inout GreenTreeBuilder<LiminalLanguage>) throws -> Void)? = nil
     ) throws -> StructuralCSTPastePlan? {
-        let target = rootInsertionTarget(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
-            after: after
-        )
+        let target = try rootInsertionTarget(from: site, after: after)
 
         let prefixNewlineCount = rootBoundaryNewlineCount(
             left: target.leftKind,
@@ -286,7 +267,7 @@ enum StructuralCSTPastePlanner {
 
         var builder = GreenTreeBuilder<LiminalLanguage>(policy: .documentLocal)
         builder.startNode(.root)
-        try tree.withRoot { root in
+        try target.parent.withCursor { root in
             for oldIndex in 0..<target.childIndex {
                 if oldIndex == target.childIndex - 1,
                    let terminatedLeft
@@ -335,8 +316,7 @@ enum StructuralCSTPastePlanner {
 
     private static func planListBlockFragment(
         _ fragment: StructuralCSTFragment,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan? {
         guard let source = listPayloadSource(for: fragment)
@@ -353,8 +333,7 @@ enum StructuralCSTPastePlanner {
         guard !payloadText.isEmpty else { return nil }
 
         return try planRootInsertion(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
+            at: site,
             after: after,
             payloadText: payloadText,
             firstPayloadKind: .list,
@@ -670,15 +649,9 @@ enum StructuralCSTPastePlanner {
     }
 
     private static func explicitNestedListItemTarget(
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize
+        from site: ResolvedStructuralCSTPasteSite
     ) -> NestedListItemTarget? {
-        guard let forest = exactCursorChildTarget(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
-            parentKind: .list,
-            childKind: .listItem
-        ) else { return nil }
+        guard let forest = exactListItemForest(from: site) else { return nil }
 
         return forest.parent.withCursor { list in
             list.withChildNode(atRawIndex: forest.anchorChildIndex) { item in
@@ -826,8 +799,7 @@ enum StructuralCSTPastePlanner {
 
     private static func planProjectedRootPayload(
         _ liftedText: String,
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        at site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) throws -> StructuralCSTPastePlan? {
         guard !liftedText.isEmpty else { return nil }
@@ -838,8 +810,7 @@ enum StructuralCSTPastePlanner {
         else { return nil }
 
         return try planRootInsertion(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
+            at: site,
             after: after,
             payloadText: liftedText,
             firstPayloadKind: firstPayloadKind,
@@ -879,33 +850,6 @@ enum StructuralCSTPastePlanner {
 
     // MARK: - Targets
 
-    /// The single entry point for explicit target-intent paste modes.
-    /// These modes accept only the exact CST child under the cursor; they
-    /// do not climb to an enclosing compatible node.
-    private static func exactCursorChildTarget(
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
-        parentKind: LiminalKind,
-        childKind: LiminalKind
-    ) -> LiminalForest? {
-        guard let forest = LiminalForest.cursorTarget(
-            at: cursorByteOffset,
-            in: tree
-        ) else {
-            return nil
-        }
-
-        let actualParentKind = forest.parent.withCursor { $0.kind }
-        let actualChildKind = forest.parent.withCursor {
-            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
-        }
-        guard actualParentKind == parentKind,
-              actualChildKind == childKind
-        else { return nil }
-
-        return forest
-    }
-
     private struct RootInsertionTarget {
         let parent: SyntaxNodeHandle<LiminalLanguage>
         let childIndex: Int
@@ -918,17 +862,23 @@ enum StructuralCSTPastePlanner {
     }
 
     private static func rootInsertionTarget(
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        from site: ResolvedStructuralCSTPasteSite,
         after: Bool
-    ) -> RootInsertionTarget {
-        // Block/toplevel paste targets the root document-item sequence:
-        // the cursor position chooses the current root child, and the
-        // paste is inserted as its sibling. This is a different target
-        // domain from exact target-intent adapters such as splice/nest.
-        tree.withRoot { root in
+    ) throws -> RootInsertionTarget {
+        guard case .projectedContainer(let projected) = site.site.target,
+              projected.containerKind == .root
+        else { throw StructuralCSTPasteRejection.invalidTarget }
+
+        return try site.containerHandle.withCursor { root in
+            guard root.kind == .root else {
+                throw StructuralCSTPasteRejection.invalidTarget
+            }
+
             let count = root.childOrTokenCount
             guard count > 0 else {
+                guard projected.referenceChildIndex == nil else {
+                    throw StructuralCSTPasteRejection.invalidTarget
+                }
                 return RootInsertionTarget(
                     parent: root.makeHandle(),
                     childIndex: 0,
@@ -941,14 +891,14 @@ enum StructuralCSTPastePlanner {
                 )
             }
 
-            let cursor = min(cursorByteOffset.rawValue, root.textRange.end.rawValue)
-            var containingIndex = count - 1
-            for index in 0..<count {
-                let range = root.childTextRange(at: index)
-                if cursor <= range.start.rawValue || cursor < range.end.rawValue {
-                    containingIndex = index
-                    break
-                }
+            guard let referenceChildIndex = projected.referenceChildIndex
+            else {
+                throw StructuralCSTPasteRejection.invalidTarget
+            }
+
+            let containingIndex = Int(referenceChildIndex)
+            guard containingIndex < count else {
+                throw StructuralCSTPasteRejection.invalidTarget
             }
 
             let childIndex = after ? containingIndex + 1 : containingIndex
@@ -984,18 +934,32 @@ enum StructuralCSTPastePlanner {
     }
 
     private static func explicitListInsertionTarget(
-        in tree: SharedSyntaxTree<LiminalLanguage>,
-        cursorByteOffset: TextSize,
+        from site: ResolvedStructuralCSTPasteSite,
         after: Bool
     ) -> ListInsertionTarget? {
-        guard let forest = exactCursorChildTarget(
-            in: tree,
-            cursorByteOffset: cursorByteOffset,
-            parentKind: .list,
-            childKind: .listItem
-        ) else { return nil }
+        guard let forest = exactListItemForest(from: site) else { return nil }
 
         return listInsertionTarget(forListItem: forest, after: after)
+    }
+
+    private static func exactListItemForest(
+        from site: ResolvedStructuralCSTPasteSite
+    ) -> LiminalForest? {
+        guard case .exact(let focus) = site.site.target,
+              focus.parentKind == .list,
+              focus.childKind == .listItem,
+              let forest = site.exactTargetForest
+        else { return nil }
+
+        let parentKind = forest.parent.withCursor { $0.kind }
+        let childKind = forest.parent.withCursor {
+            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
+        }
+        guard parentKind == .list,
+              childKind == .listItem
+        else { return nil }
+
+        return forest
     }
 
     private static func listInsertionTarget(

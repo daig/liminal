@@ -57,7 +57,7 @@ struct StructuralCSTPasteTests {
         )
         let fragment = try StructuralCSTFragment.capture(forest)
 
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsed.tree,
             cursorByteOffset: .zero,
@@ -77,7 +77,7 @@ struct StructuralCSTPasteTests {
         let fragment = try nestedBarFragment()
         let target = "- zot\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -101,7 +101,7 @@ struct StructuralCSTPasteTests {
         """
         let parsedTarget = try LiminalParser().parse(target)
         let offset = try byteOffset(of: "qux", in: target)
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(offset)),
@@ -128,7 +128,7 @@ struct StructuralCSTPasteTests {
 
         let target = "- zot\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -151,7 +151,7 @@ struct StructuralCSTPasteTests {
         let target = "- one\n- two\n"
         let parsedTarget = try LiminalParser().parse(target)
         let targetOffset = try byteOffset(of: "two", in: target)
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(targetOffset)),
@@ -177,7 +177,7 @@ struct StructuralCSTPasteTests {
 
         let target = "Two.\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -202,7 +202,7 @@ struct StructuralCSTPasteTests {
             projection: StructuralCSTSourceProjection(fragment: fragment)
         )
         #expect(throws: StructuralCSTPasteRejection.incompatibleMarkers) {
-            _ = try StructuralCSTPastePlanner.planSplice(
+            _ = try planSplice(
                 payload: payload,
                 in: parsedTarget.tree,
                 cursorByteOffset: .zero,
@@ -227,7 +227,7 @@ struct StructuralCSTPasteTests {
 
         let target = "after\n"
         let parsedTarget = try LiminalParser().parse(target)
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -259,7 +259,7 @@ struct StructuralCSTPasteTests {
         #expect(fragment.sourceText == "foo\n> - item\n")
 
         let parsedTarget = try LiminalParser().parse("")
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -288,7 +288,7 @@ struct StructuralCSTPasteTests {
         #expect(fragment.sourceText == "> nested\n")
 
         let parsedTarget = try LiminalParser().parse("")
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -312,7 +312,7 @@ struct StructuralCSTPasteTests {
         let target = "after\n"
         let parsedTarget = try LiminalParser().parse(target)
 
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -335,7 +335,7 @@ struct StructuralCSTPasteTests {
         )
         let parsedTarget = try LiminalParser().parse("")
 
-        let plan = try StructuralCSTPastePlanner.planBlock(
+        let plan = try planBlock(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: .zero,
@@ -354,7 +354,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planSplice(
+        let plan = try planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -377,7 +377,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planSplice(
+        let plan = try planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -400,7 +400,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- one", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planSplice(
+        let plan = try planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -432,7 +432,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planSplice(
+        let plan = try planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -461,7 +461,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planSplice(
+        let plan = try planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -491,7 +491,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: " foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planSplice(
+        let plan = try planSplice(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -515,7 +515,7 @@ struct StructuralCSTPasteTests {
         let cursorOffset = try byteOffset(of: "one", in: target)
 
         #expect(throws: StructuralCSTPasteRejection.invalidTarget) {
-            _ = try StructuralCSTPastePlanner.planSplice(
+            _ = try planSplice(
                 payload: capture.clipboardPayload,
                 in: parsedTarget.tree,
                 cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -542,7 +542,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
 
         #expect(throws: StructuralCSTPasteRejection.unsupportedSource) {
-            _ = try StructuralCSTPastePlanner.planSplice(
+            _ = try planSplice(
                 payload: capture.clipboardPayload,
                 in: parsedTarget.tree,
                 cursorByteOffset: .zero,
@@ -560,7 +560,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -583,7 +583,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: " foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -607,7 +607,7 @@ struct StructuralCSTPasteTests {
         let cursorOffset = try byteOffset(of: "foo", in: target)
 
         #expect(throws: StructuralCSTPasteRejection.invalidTarget) {
-            _ = try StructuralCSTPastePlanner.planNest(
+            _ = try planNest(
                 payload: capture.clipboardPayload,
                 in: parsedTarget.tree,
                 cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -631,7 +631,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -654,7 +654,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- baz", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -677,7 +677,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -700,7 +700,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- quoz", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -729,7 +729,7 @@ struct StructuralCSTPasteTests {
         let parsedTarget = try LiminalParser().parse(target)
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
-        let plan = try StructuralCSTPastePlanner.planNest(
+        let plan = try planNest(
             payload: capture.clipboardPayload,
             in: parsedTarget.tree,
             cursorByteOffset: TextSize(UInt32(cursorOffset)),
@@ -896,6 +896,88 @@ struct StructuralCSTPasteTests {
             }
             return nil
         }
+    }
+
+    private func planBlock(
+        fragment: StructuralCSTFragment,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize = .zero,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan {
+        try StructuralCSTPastePlanner.planBlock(
+            fragment: fragment,
+            at: pasteSite(
+                scope: .rootProjectedFromCursor,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            ),
+            after: after
+        )
+    }
+
+    private func planBlock(
+        payload: StructuralCSTClipboardPayload,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize = .zero,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan {
+        try StructuralCSTPastePlanner.planBlock(
+            payload: payload,
+            at: pasteSite(
+                scope: .rootProjectedFromCursor,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            ),
+            after: after
+        )
+    }
+
+    private func planSplice(
+        payload: StructuralCSTClipboardPayload,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan {
+        try StructuralCSTPastePlanner.planSplice(
+            payload: payload,
+            at: pasteSite(
+                scope: .exactCursor,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            ),
+            after: after
+        )
+    }
+
+    private func planNest(
+        payload: StructuralCSTClipboardPayload,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize,
+        after: Bool
+    ) throws -> StructuralCSTPastePlan {
+        try StructuralCSTPastePlanner.planNest(
+            payload: payload,
+            at: pasteSite(
+                scope: .exactCursor,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            ),
+            after: after
+        )
+    }
+
+    private func pasteSite(
+        scope: StructuralCSTPasteTargetScope,
+        in tree: SharedSyntaxTree<LiminalLanguage>,
+        cursorByteOffset: TextSize
+    ) throws -> ResolvedStructuralCSTPasteSite {
+        try #require(
+            StructuralCSTPasteSiteResolver.resolve(
+                scope: scope,
+                in: tree,
+                cursorByteOffset: cursorByteOffset
+            )
+        )
     }
 
     private func byteOffset(of needle: String, in source: String) throws -> Int {
