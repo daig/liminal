@@ -48,13 +48,35 @@ final class VimTextView: NSTextView {
     ///
     /// Independent of `selectedRange`: the CST overlay is painted in
     /// `draw(_:)` regardless of system selection state, and the system
-    /// caret is parked at the overlay's start so its blinking doesn't
-    /// land inside the tinted region.
+    /// caret is parked at the head edge of the forest so users can see
+    /// which end will move when they press `J`/`K` or apply an
+    /// extending motion.
     var cstSelectionRanges: [NSRange] = [] {
         didSet {
             guard oldValue != cstSelectionRanges else { return }
             needsDisplay = true
         }
+    }
+
+    /// Marker for which end of `cstSelectionRanges` is the head — the
+    /// moving end under `J` / `K` / extending motions, swapped by `o`.
+    /// `nil` when the selection is a singleton (no meaningful end
+    /// distinction) or when not in `.visualCST`.
+    var cstHeadEdge: CSTHeadEdge? {
+        didSet {
+            guard oldValue != cstHeadEdge else { return }
+            needsDisplay = true
+        }
+    }
+
+    /// Where to paint the head accent. `headRange` is the UTF-16 range
+    /// of the head's child specifically (not the whole forest); `edge`
+    /// picks which side of that range to draw the bar on.
+    struct CSTHeadEdge: Equatable {
+        let headRange: NSRange
+        let edge: Edge
+
+        enum Edge: Equatable { case leading, trailing }
     }
 
     struct MarkIndicator: Equatable {
@@ -65,6 +87,7 @@ final class VimTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawCSTSelectionOverlay(in: dirtyRect)
+        drawCSTHeadAccent(in: dirtyRect)
         drawMarkIndicators(in: dirtyRect)
     }
 
@@ -103,6 +126,55 @@ final class VimTextView: NSTextView {
                 NSBezierPath(roundedRect: drawRect, xRadius: 3, yRadius: 3).fill()
             }
         }
+    }
+
+    /// Paint a solid teal vertical bar at the head edge of the forest.
+    /// The bar runs the full line-fragment height of the head's edge
+    /// line (first line for `.leading`, last line for `.trailing`) so
+    /// it visually bookends the highlight on the head's side.
+    private func drawCSTHeadAccent(in dirtyRect: NSRect) {
+        guard let head = cstHeadEdge,
+              head.headRange.length > 0,
+              let layoutManager,
+              let textContainer
+        else { return }
+
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: head.headRange,
+            actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else { return }
+
+        var rects: [NSRect] = []
+        layoutManager.enumerateEnclosingRects(
+            forGlyphRange: glyphRange,
+            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+            in: textContainer
+        ) { rect, _ in
+            rects.append(rect)
+        }
+        guard let edgeRect = (head.edge == .leading ? rects.first : rects.last)
+        else { return }
+
+        let origin = textContainerOrigin
+        let barWidth: CGFloat = 3
+        let x: CGFloat
+        switch head.edge {
+        case .leading:
+            x = edgeRect.minX + origin.x
+        case .trailing:
+            x = edgeRect.maxX + origin.x - barWidth
+        }
+        let barRect = NSRect(
+            x: x,
+            y: edgeRect.minY + origin.y,
+            width: barWidth,
+            height: edgeRect.height
+        )
+        guard barRect.intersects(dirtyRect) else { return }
+
+        NSColor.systemTeal.setFill()
+        barRect.fill()
     }
 
     private func drawMarkIndicators(in dirtyRect: NSRect) {

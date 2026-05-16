@@ -213,6 +213,7 @@ struct LiminalTextView: NSViewRepresentable {
                         self.visualHeadUTF16 = nil
                         self.cstForest = nil
                         self.textView?.cstSelectionRanges = []
+                        self.textView?.cstHeadEdge = nil
                     }
                     self.refreshCursorStyle()
                 }
@@ -1981,8 +1982,9 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         /// Push the active forest's projected byte ranges to
-        /// `VimTextView`'s dedicated overlay property and park the
-        /// system caret at the selection's start.
+        /// `VimTextView`'s dedicated overlay property, push the head
+        /// edge for the accent bar, and park the system caret at the
+        /// head's edge.
         ///
         /// We deliberately do *not* mirror the forest into
         /// `textView.setSelectedRange(_:)`: AppKit's native selection
@@ -1993,6 +1995,11 @@ struct LiminalTextView: NSViewRepresentable {
         /// Operators in `.visualCST` read directly from `cstForest`
         /// instead of `textView.selectedRange` (see
         /// `snapshotVisualSelection`).
+        ///
+        /// The caret is parked at the head's edge (start of head's
+        /// child range when `head ≤ anchor`, end otherwise) — both
+        /// reinforcing the head accent and matching vim's text-visual
+        /// convention where the cursor sits on the moving end.
         private func mirrorCSTSelection() {
             guard let textView, let forest = cstForest else { return }
             let map = OffsetMap(source: textView.string)
@@ -2017,12 +2024,50 @@ struct LiminalTextView: NSViewRepresentable {
                 )
             }
             textView.cstSelectionRanges = nsRanges
-            // Park the system caret at the overlay's start so AppKit's
-            // blinking insertion point sits at one edge of the
-            // structural selection rather than blinking inside it.
-            if let firstRange = nsRanges.first {
-                textView.setSelectedRange(NSRange(location: firstRange.location, length: 0))
+
+            let headEdge = computeCSTHeadEdge(forest: forest, map: map)
+            textView.cstHeadEdge = headEdge
+
+            // Park caret at the head edge so the blinking insertion
+            // point sits on the moving end (or at the selection start
+            // for singletons, which have no meaningful head/anchor
+            // distinction).
+            let caretLocation: Int?
+            if let headEdge {
+                switch headEdge.edge {
+                case .leading:
+                    caretLocation = headEdge.headRange.location
+                case .trailing:
+                    caretLocation = headEdge.headRange.location + headEdge.headRange.length
+                }
+            } else {
+                caretLocation = nsRanges.first?.location
             }
+            if let caretLocation {
+                textView.setSelectedRange(NSRange(location: caretLocation, length: 0))
+            }
+        }
+
+        /// Compute where to paint the head accent: nil for singleton
+        /// forests (head == anchor — no distinct end to mark), else the
+        /// head's child UTF-16 range plus which side to draw on.
+        private func computeCSTHeadEdge(
+            forest: LiminalForest,
+            map: OffsetMap
+        ) -> VimTextView.CSTHeadEdge? {
+            guard !forest.isSingleton else { return nil }
+            let headChildRange = forest.parent.withCursor { cursor in
+                cursor.childTextRange(at: forest.headChildIndex)
+            }
+            guard let nsHeadRange = map.nsRange(
+                forByteStart: headChildRange.start.rawValue,
+                length: headChildRange.length.rawValue
+            ) else { return nil }
+            let edge: VimTextView.CSTHeadEdge.Edge =
+                forest.headChildIndex < forest.anchorChildIndex
+                    ? .leading
+                    : .trailing
+            return VimTextView.CSTHeadEdge(headRange: nsHeadRange, edge: edge)
         }
 
         /// Convert a UTF-16 cursor location to a UTF-8 byte offset by
