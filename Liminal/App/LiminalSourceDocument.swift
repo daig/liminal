@@ -59,10 +59,55 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// save. Updates on Save As.
     @Published private(set) var fileURL: URL?
 
+    /// True while an iCloud download is in progress for the backing
+    /// file. Observed by `StatusBar` to render the "Downloading from
+    /// iCloud…" indicator.
+    @Published private(set) var ubiquityDownloadInProgress: Bool = false
+
+    /// NSFilePresenter helper. Receives external-change notifications
+    /// from the iCloud daemon (and any other coordinated writers);
+    /// callbacks hop to MainActor and invoke `handleExternalChange`.
+    private let filePresenter: DocumentFilePresenter
+
+    /// True while `filePresenter` is currently registered with
+    /// `NSFileCoordinator`. Tracked so URL transitions know whether
+    /// to remove-then-add vs add-fresh, and `deinit` knows whether
+    /// to issue a defensive remove.
+    private var isFilePresenterRegistered: Bool = false
+
+    /// Mtime of the file the last time we wrote (or read) it. Used to
+    /// distinguish our own coordinated atomic writes — which fire
+    /// `presentedItemDidChange` on the presenter as a delete-then-create
+    /// — from genuine external changes. When `presentedItemDidChange`
+    /// arrives, we stat and compare: if the mtime hasn't advanced past
+    /// `lastSeenDiskMtime`, suppress the prompt.
+    private var lastSeenDiskMtime: Date?
+
+    /// `true` when the document was opened against an evicted iCloud
+    /// placeholder (empty bytes). The eventual download completion
+    /// should auto-reload from disk WITHOUT prompting — the user
+    /// hasn't typed anything yet, so there's nothing to lose.
+    private var pendingInitialDownload: Bool = false
+
+    /// Per-document NSMetadataQuery that observes download progress
+    /// for the ubiquitous file currently backing the document. Lives
+    /// only while a download is in progress; nil otherwise.
+    private var ubiquityMetadataQuery: NSMetadataQuery?
+    private var ubiquityMetadataObservers: [NSObjectProtocol] = []
+
+    /// Posted when an external (non-self) change to the backing file
+    /// is detected and the user should be prompted to reload. The
+    /// Coordinator observes this and presents an `NSAlert` sheet.
+    static let externalChangeNotification = Notification.Name(
+        "liminal.sourceDocument.externalChange"
+    )
+
     /// Push the current file URL down from the view layer. Idempotent
     /// — no-op when unchanged. On a transition (nil → URL, URL → URL',
     /// URL → nil) updates the `VaultRegistry`: drops us from the old
-    /// vault entry and indexes the current document into the new one.
+    /// vault entry and indexes the current document into the new one,
+    /// then re-registers the `NSFilePresenter` and kicks off an
+    /// ubiquity-status check for the new URL.
     @MainActor
     func setFileURL(_ url: URL?) {
         guard fileURL != url else { return }
@@ -72,6 +117,31 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             VaultRegistry.shared.entry(for: oldURL).remove(oldURL)
         }
         indexInVault()
+
+        // NSFilePresenter lifecycle: remove for the old URL (if any),
+        // update the presenter's URL, re-add for the new URL (if any).
+        // Apple's coordinator holds presenters weakly, but explicit
+        // unregistration ensures no stale dispatches into our queue
+        // after the document moves between URLs.
+        if isFilePresenterRegistered {
+            NSFileCoordinator.removeFilePresenter(filePresenter)
+            isFilePresenterRegistered = false
+        }
+        filePresenter.updatePresentedURL(url)
+        if url != nil {
+            NSFileCoordinator.addFilePresenter(filePresenter)
+            isFilePresenterRegistered = true
+        }
+
+        // Initialize lastSeenDiskMtime from the file's current mtime
+        // so the first presenter callback that might fire from our own
+        // post-load activity has the right baseline.
+        lastSeenDiskMtime = currentDiskMtime(for: url)
+
+        // Kick the ubiquity check for the new URL. No-op for local
+        // files; for evicted iCloud files it starts a download and
+        // surfaces the status-bar indicator.
+        beginUbiquityCheckIfNeeded(for: url)
     }
 
     /// Re-index the open document into its vault entry. No-op when
@@ -99,6 +169,16 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     }
 
     deinit {
+        // Defensive presenter unregister. Apple holds presenters
+        // weakly, but explicit unregistration prevents any stale
+        // dispatches into the presenter's queue after deinit.
+        if isFilePresenterRegistered {
+            NSFileCoordinator.removeFilePresenter(filePresenter)
+        }
+        // Tear down any active NSMetadataQuery so it doesn't keep us
+        // alive past deinit (the query keeps a strong ref to its
+        // observers).
+        stopUbiquityMetadataQuery()
         // When the last reference to this document drops (tab closed and
         // not retained), clear its open-document registration so the
         // vault watcher resumes treating the file as a closed note.
@@ -113,16 +193,22 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
         self.writesThroughToFile = false
+        self.filePresenter = DocumentFilePresenter(owner: nil)
         // undoHistory is lazy — first access happens
         // on the MainActor in the Coordinator's makeNSView. Don't
         // touch it here.
         syncFromSession()
+        // Self isn't fully constructed until all stored props are set;
+        // wire the presenter's weak back-ref now that init is complete.
+        filePresenter.owner = self
     }
 
     @MainActor
     convenience init(standaloneFileURL url: URL) throws {
-        guard let data = try? Data(contentsOf: url),
-              let source = String(data: data, encoding: .utf8)
+        let data = try CoordinatedFileIO.read(at: url, presenter: nil) {
+            try Data(contentsOf: $0)
+        }
+        guard let source = String(data: data, encoding: .utf8)
         else { throw CocoaError(.fileReadCorruptFile) }
         try self.init(standaloneSource: source, fileURL: url)
     }
@@ -132,8 +218,10 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
         self.writesThroughToFile = true
+        self.filePresenter = DocumentFilePresenter(owner: nil)
         try session.replaceSource(source)
         syncFromSession()
+        filePresenter.owner = self
         // This init is reached from the @MainActor convenience init
         // below, so this assumeIsolated is correct. setFileURL needs
         // to fire here for vault registration; the undo snapshot seed
@@ -151,9 +239,16 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
         self.writesThroughToFile = false
+        self.filePresenter = DocumentFilePresenter(owner: nil)
         try session.replaceSource(source)
         syncFromSession()
+        filePresenter.owner = self
         // Seeding deferred to Coordinator.makeNSView.
+        // If the empty-byte path fired (evicted iCloud file), mark
+        // pendingInitialDownload — the ubiquity machinery in
+        // setFileURL (called shortly from the view layer) will see
+        // it and trigger an auto-reload when bytes arrive.
+        if data.isEmpty { pendingInitialDownload = true }
     }
 
     func snapshot(contentType: UTType) throws -> String {
@@ -327,7 +422,16 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     func writeToBackingFileIfPossible() -> Bool {
         guard writesThroughToFile, let fileURL else { return false }
         do {
-            try Data(session.source.utf8).write(to: fileURL, options: .atomic)
+            try CoordinatedFileIO.write(
+                Data(session.source.utf8),
+                to: fileURL,
+                presenter: filePresenter
+            )
+            // Snap the self-write coalescing mtime forward BEFORE the
+            // vault-fingerprint update — `presentedItemDidChange` may
+            // already be dispatched on the presenter queue and the
+            // race window is short.
+            lastSeenDiskMtime = currentDiskMtime(for: fileURL)
             // The file on disk now matches the buffer — snap this note's
             // vault fingerprint forward so the watcher doesn't mistake
             // our own save for an external edit, then opportunistically
@@ -462,5 +566,187 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             diagnosticsCount = parsed.diagnostics.count
         }
         reuseSummary = session.lastReuseSummary
+    }
+
+    // MARK: - File-presenter hooks (called from DocumentFilePresenter on MainActor)
+
+    /// Triggered when the file presenter reports an external change.
+    /// First applies the self-write coalescing check (our own atomic
+    /// `write(to:options:.atomic)` looks like delete-then-create to
+    /// the presenter), then either auto-reloads (pending initial
+    /// download) or posts a notification the Coordinator turns into
+    /// a sheet prompt.
+    @MainActor
+    func handleExternalChange() {
+        guard let url = fileURL else { return }
+        let nowMtime = currentDiskMtime(for: url)
+        if let last = lastSeenDiskMtime, let now = nowMtime, last == now {
+            // Self-write echo — coordinator saw our own atomic temp-rename.
+            return
+        }
+        // Real external change.
+        if pendingInitialDownload {
+            // Auto-reload without prompting: the buffer is empty,
+            // there's nothing to lose.
+            pendingInitialDownload = false
+            reloadFromDisk()
+            return
+        }
+        NotificationCenter.default.post(
+            name: Self.externalChangeNotification,
+            object: self
+        )
+    }
+
+    /// Triggered when the presenter reports that the backing file
+    /// was deleted by another agent. v1: log + keep buffer. The next
+    /// `:Write` recreates the file at the same path.
+    @MainActor
+    func handlePresentedItemDeletion() {
+        guard let url = fileURL else { return }
+        NSLog("LiminalSourceDocument: backing file deleted externally: \(url.path)")
+    }
+
+    /// Re-read the backing file via the coordinator, replace the
+    /// session source, reset undo / insert / visual state, and
+    /// re-index in the vault. Called both by the external-change
+    /// prompt's `Reload` button and by `:Reload`.
+    @MainActor
+    func reloadFromDisk() {
+        guard let url = fileURL else { return }
+        do {
+            let data = try CoordinatedFileIO.read(at: url, presenter: filePresenter) {
+                try Data(contentsOf: $0)
+            }
+            guard let source = String(data: data, encoding: .utf8) else {
+                NSLog("LiminalSourceDocument: reload skipped — file at \(url.path) isn't UTF-8")
+                return
+            }
+            try session.replaceSource(source)
+            syncFromSession()
+            treeVersion &+= 1
+            // Reset undo history to a fresh post-reload baseline so
+            // an accidental Cmd-Z doesn't return us to the stale
+            // pre-reload buffer. seedInitialUndoSnapshot reuses the
+            // makeUndoSnapshot(cursor:) machinery to capture the new
+            // tree + zeroed cursor as a fresh root snapshot.
+            if let snap = makeUndoSnapshot(cursor: 0) {
+                undoHistory.reset(initial: snap)
+            }
+            // Force normal mode so any pending insert/visual session
+            // is discarded along with its (now-stale) buffer.
+            vimController.forceNormalMode()
+            // Re-index so the vault link index reflects the new content.
+            indexInVault()
+            lastSeenDiskMtime = currentDiskMtime(for: url)
+        } catch {
+            NSLog("LiminalSourceDocument: reload failed for \(url.path): \(error)")
+        }
+    }
+
+    // MARK: - Ubiquity (iCloud Drive) status
+
+    /// Check whether `url` is an ubiquitous (iCloud) file and, if so,
+    /// trigger a download when it's evicted / not current. Surfaces
+    /// the download via `@Published ubiquityDownloadInProgress` for
+    /// the status bar; observes completion via `NSMetadataQuery`.
+    @MainActor
+    private func beginUbiquityCheckIfNeeded(for url: URL?) {
+        stopUbiquityMetadataQuery()
+        ubiquityDownloadInProgress = false
+        guard let url else { return }
+        let keys: [URLResourceKey] = [
+            .isUbiquitousItemKey,
+            .ubiquitousItemDownloadingStatusKey,
+        ]
+        guard let values = try? url.resourceValues(forKeys: Set(keys)),
+              values.isUbiquitousItem == true
+        else { return }
+        let status = values.ubiquitousItemDownloadingStatus
+        if status == .current { return }
+
+        // Evicted (placeholder, .notDownloaded) or stale (.downloaded
+        // but a newer version exists in iCloud). Trigger a download
+        // and observe via NSMetadataQuery.
+        do {
+            try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        } catch {
+            NSLog("LiminalSourceDocument: startDownloadingUbiquitousItem failed for \(url.path): \(error)")
+            return
+        }
+        ubiquityDownloadInProgress = true
+        startUbiquityMetadataQuery(for: url)
+    }
+
+    @MainActor
+    private func startUbiquityMetadataQuery(for url: URL) {
+        let query = NSMetadataQuery()
+        query.searchScopes = [
+            NSMetadataQueryUbiquitousDocumentsScope,
+            NSMetadataQueryUbiquitousDataScope,
+        ]
+        query.predicate = NSPredicate(
+            format: "%K == %@",
+            NSMetadataItemURLKey,
+            url as NSURL
+        )
+        let handler: (Notification) -> Void = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.evaluateUbiquityProgress()
+            }
+        }
+        let didUpdate = NotificationCenter.default.addObserver(
+            forName: .NSMetadataQueryDidUpdate,
+            object: query,
+            queue: .main,
+            using: handler
+        )
+        let didFinish = NotificationCenter.default.addObserver(
+            forName: .NSMetadataQueryDidFinishGathering,
+            object: query,
+            queue: .main,
+            using: handler
+        )
+        ubiquityMetadataObservers = [didUpdate, didFinish]
+        ubiquityMetadataQuery = query
+        query.start()
+    }
+
+    /// Nonisolated so `deinit` can call it without an actor hop.
+    /// Touches only document-level (non-actor-isolated) properties +
+    /// thread-safe Apple APIs (NotificationCenter.removeObserver and
+    /// NSMetadataQuery.stop are both safe to invoke off-main).
+    private func stopUbiquityMetadataQuery() {
+        ubiquityMetadataQuery?.stop()
+        for observer in ubiquityMetadataObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        ubiquityMetadataObservers = []
+        ubiquityMetadataQuery = nil
+    }
+
+    @MainActor
+    private func evaluateUbiquityProgress() {
+        guard let url = fileURL,
+              let values = try? url.resourceValues(
+                forKeys: [.ubiquitousItemDownloadingStatusKey]
+              ),
+              values.ubiquitousItemDownloadingStatus == .current
+        else { return }
+        stopUbiquityMetadataQuery()
+        ubiquityDownloadInProgress = false
+        // The bytes are now on disk. The presenter's
+        // presentedItemDidChange will fire (or already has); when it
+        // does, handleExternalChange auto-reloads if the buffer was
+        // the empty initial-download placeholder, or prompts the
+        // user if they've already typed something. Either way we're
+        // done with the metadata query.
+    }
+
+    /// Stat the backing file and return its modification date. Used
+    /// for self-write coalescing.
+    private func currentDiskMtime(for url: URL?) -> Date? {
+        guard let url else { return nil }
+        return try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
     }
 }

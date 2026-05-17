@@ -96,6 +96,8 @@ struct CommandRegistryTests {
             "CSTExpand", "CSTNarrow",
             // Slice E — ex / file commands
             "Write", "Quit", "Edit",
+            // Slice G — iCloud Tier 2 (manual reload entry point)
+            "Reload",
         ]
         let actual = Set(registry.commandNames())
         #expect(expected.isSubset(of: actual),
@@ -379,11 +381,12 @@ struct CommandRegistryTests {
         )
     }
 
-    @Test("Write / Quit dispatch the ex-file VimCommands without args")
+    @Test("Write / Quit / Reload dispatch the ex-file VimCommands without args")
     func exFileNoArgCommandsDispatch() {
         let registry = VimController.defaultCommands()
         #expect(registry.resolve(name: "Write", args: [], count: nil) == .writeCurrentFile)
         #expect(registry.resolve(name: "Quit", args: [], count: nil) == .quitCurrent)
+        #expect(registry.resolve(name: "Reload", args: [], count: nil) == .reloadCurrentFile)
     }
 
     @Test("Edit dispatches editPath with the typed path arg")

@@ -83,8 +83,20 @@ enum VaultIndexer {
             // Cache miss or changed file: parse fresh. Source is threaded
             // into `DocumentIndex.build` so each `DocumentReference`
             // carries its pre-computed backlink snippet.
-            guard let content = try? String(contentsOf: url, encoding: .utf8)
-            else { continue }
+            //
+            // Coordinated read so we don't race with the iCloud daemon
+            // (or any other registered presenter). `presenter: nil` —
+            // the scanner is background and doesn't own a presenter
+            // for the file. Apple still coordinates with all other
+            // registered presenters.
+            let content: String
+            do {
+                content = try CoordinatedFileIO.read(at: url, presenter: nil) { url in
+                    try String(contentsOf: url, encoding: .utf8)
+                }
+            } catch {
+                continue
+            }
             do {
                 let parsed = try parser.parse(content)
                 let index = DocumentIndex.build(root: parsed.rootSyntax, source: content)

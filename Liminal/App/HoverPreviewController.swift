@@ -316,7 +316,15 @@ final class HoverPreviewController {
         // *different* note than the one the user is editing). The
         // `lastParse` cache below avoids re-parsing when the same
         // target is hovered repeatedly without disk churn.
-        guard let content = try? String(contentsOf: canonical, encoding: .utf8) else {
+        // Coordinated read so we don't race with iCloud/other writers
+        // while peeking at a closed note. Presenter is nil — the hover
+        // target is, by construction, NOT the open document.
+        let content: String
+        do {
+            content = try CoordinatedFileIO.read(at: canonical, presenter: nil) { url in
+                try String(contentsOf: url, encoding: .utf8)
+            }
+        } catch {
             return HoverPreviewSnapshot.unavailable(target: target, theme: theme)
         }
 

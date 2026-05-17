@@ -160,6 +160,13 @@ public enum VimCommand: Sendable, Equatable {
     /// `:Edit <path>` (vim's `:e`).
     case editPath(path: String)
 
+    /// Re-read the current document from disk and discard the
+    /// in-memory buffer. Prompts when the buffer has unsaved changes;
+    /// silent no-op when buffer == disk. Backs `:Reload` (vim's
+    /// `:e!`). Also the user's escape hatch when they picked "Keep My
+    /// Version" on the external-change prompt.
+    case reloadCurrentFile
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into

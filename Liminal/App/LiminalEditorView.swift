@@ -350,6 +350,10 @@ private struct StatusBar: View {
                 )
                 .foregroundColor(.secondary)
                 Spacer()
+                if document.ubiquityDownloadInProgress {
+                    Label("Downloading from iCloud…", systemImage: "icloud.and.arrow.down")
+                        .foregroundColor(.blue)
+                }
                 if let detail = controller.statusPresentation.detailText {
                     Text("(\(detail))")
                         .foregroundColor(.secondary)

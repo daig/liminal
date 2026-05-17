@@ -846,6 +846,8 @@ public final class VimController: ObservableObject {
             delegate?.quitCurrent()
         case .editPath(let path):
             delegate?.editPath(path)
+        case .reloadCurrentFile:
+            delegate?.reloadCurrentFile()
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1786,6 +1788,13 @@ public final class VimController: ObservableObject {
             return .editPath(path: path)
         })
 
+        registry.register(.init(
+            name: "Reload",
+            description: "Re-read the current document from disk (vim's :e!)"
+        ) { _, _ in
+            .reloadCurrentFile
+        })
+
         return registry
     }
 
@@ -2058,6 +2067,10 @@ public protocol VimControllerDelegate: AnyObject {
     /// Open `path` via `PathResolver`; create if missing. Backs
     /// `:Edit <path>`.
     func editPath(_ path: String)
+    /// Re-read the current document from disk; prompt on dirty buffer.
+    /// Backs `:Reload` and the "Reload" button of the external-change
+    /// sheet.
+    func reloadCurrentFile()
 }
 
 extension VimControllerDelegate {
@@ -2107,4 +2120,5 @@ extension VimControllerDelegate {
     public func writeCurrentFile() {}
     public func quitCurrent() {}
     public func editPath(_ path: String) {}
+    public func reloadCurrentFile() {}
 }

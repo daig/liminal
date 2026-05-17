@@ -149,6 +149,7 @@ struct LiminalTextView: NSViewRepresentable {
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
         private var forestMarksObservation: AnyCancellable?
+        private var externalChangeObservation: AnyCancellable?
 
         /// Stack of `headChildIndex` values, pushed during `:CSTExpand`
         /// and popped during `:CSTNarrow`. Cleared by any other
@@ -265,6 +266,19 @@ struct LiminalTextView: NSViewRepresentable {
             forestMarksObservation = controller.$forestMarks.sink { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.refreshForestMarkIndicators()
+                }
+            }
+            // External-change notifications from this document's
+            // NSFilePresenter — show the reload-or-keep sheet.
+            externalChangeObservation = NotificationCenter.default.publisher(
+                for: LiminalSourceDocument.externalChangeNotification
+            ).sink { [weak self] notification in
+                guard let self,
+                      let object = notification.object as? LiminalSourceDocument,
+                      object === self.document
+                else { return }
+                Task { @MainActor [weak self] in
+                    self?.promptExternalChange()
                 }
             }
             // Re-apply (or clear) highlights when the user toggles the
@@ -2379,6 +2393,62 @@ struct LiminalTextView: NSViewRepresentable {
             textView?.window?.performClose(nil)
         }
 
+        /// `:Reload` — re-read the current document from disk via
+        /// the coordinator. Prompts (same sheet as the external-change
+        /// path) when the disk content differs from the in-memory
+        /// buffer; silent no-op when they match.
+        func reloadCurrentFile() {
+            guard let url = document.fileURL else { return }
+            let data: Data
+            do {
+                data = try CoordinatedFileIO.read(at: url, presenter: nil) {
+                    try Data(contentsOf: $0)
+                }
+            } catch {
+                NSLog("LiminalTextView: :Reload read failed for \(url.path): \(error)")
+                return
+            }
+            guard let diskSource = String(data: data, encoding: .utf8) else { return }
+            if diskSource == document.session.source {
+                return  // nothing to reload
+            }
+            // Same prompt as the auto-detected external-change path —
+            // consistent UX.
+            promptReload(message: "Reload “\(url.lastPathComponent)” from disk?")
+        }
+
+        /// Triggered by the LiminalSourceDocument.externalChangeNotification
+        /// observer. Shows the same NSAlert sheet `:Reload` does, but
+        /// pre-fills the copy with the "another app changed this" framing.
+        func promptExternalChange() {
+            promptReload(
+                message: "This file was changed by another app. Reload from disk and discard unsaved changes in this buffer?"
+            )
+        }
+
+        /// Render the reload-or-keep sheet on the document's window.
+        /// Confirmation routes through `document.reloadFromDisk()`.
+        private func promptReload(message: String) {
+            guard let window = textView?.window else {
+                // No window context — proceed silently (e.g. mid-tab
+                // transition). User can re-run :Reload when they're
+                // back in focus.
+                return
+            }
+            let alert = NSAlert()
+            alert.messageText = "Reload from disk?"
+            alert.informativeText = message
+            alert.addButton(withTitle: "Reload")
+            alert.addButton(withTitle: "Keep My Version")
+            let doc = document
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                Task { @MainActor in
+                    doc.reloadFromDisk()
+                }
+            }
+        }
+
         /// `:Edit <path>` — resolve via `PathResolver` against the
         /// current document's vault root, create the file if it
         /// doesn't exist (matching the `[[NewLinkName]]` flow), and
@@ -2406,11 +2476,7 @@ struct LiminalTextView: NSViewRepresentable {
             // it doesn't already exist. New files start empty — the
             // user's first :Write persists them.
             if !FileManager.default.fileExists(atPath: url.path) {
-                try? FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try? Data().write(to: url, options: .atomic)
+                try? CoordinatedFileIO.writeNew(Data(), to: url, presenter: nil)
             }
 
             NavigationRouter.shared.navigate(
@@ -2464,11 +2530,7 @@ struct LiminalTextView: NSViewRepresentable {
             // Create the file if it doesn't exist yet (same as the
             // happy path), then open.
             if !FileManager.default.fileExists(atPath: url.path) {
-                try? FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try? Data().write(to: url, options: .atomic)
+                try? CoordinatedFileIO.writeNew(Data(), to: url, presenter: nil)
             }
             NavigationRouter.shared.navigate(
                 to: url,
