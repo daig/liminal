@@ -215,6 +215,85 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(after2 == before, "extend on .firstChild should leave the forest unchanged")
     }
 
+    // MARK: - Typed descent (f / F)
+
+    @Test("cstFindKind forward lands on the first matching kind in subtree")
+    func findKindForwardLandsOnFirstWikilinkInSubtree() throws {
+        let source = "Hello [[first]] and [[second]] end.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+
+        fixture.coordinator.cstFindKind(direction: .forward, kind: .wikilink, count: 1)
+
+        let result = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(result) == .wikilink)
+        let firstOffset = try utf16Offset(of: "[[first", in: source)
+        #expect(
+            Int(result.byteRange.start.rawValue) == firstOffset,
+            "forward should land on the FIRST wikilink at byte \(firstOffset); saw \(result.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test("cstFindKind backward lands on the last matching kind in subtree")
+    func findKindBackwardLandsOnLastWikilinkInSubtree() throws {
+        let source = "Hello [[first]] and [[second]] end.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+
+        fixture.coordinator.cstFindKind(direction: .backward, kind: .wikilink, count: 1)
+
+        let result = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(result) == .wikilink)
+        let secondOffset = try utf16Offset(of: "[[second", in: source)
+        #expect(
+            Int(result.byteRange.start.rawValue) == secondOffset,
+            "backward should land on the LAST wikilink at byte \(secondOffset); saw \(result.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test("cstFindKind with no match in subtree leaves the forest unchanged")
+    func findKindForwardWithNoMatchIsNoOp() throws {
+        let fixture = try makeFixture("Just plain text.\n")
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        let before = try #require(fixture.coordinator.cstForest)
+
+        fixture.coordinator.cstFindKind(direction: .forward, kind: .heading, count: 1)
+
+        let after = try #require(fixture.coordinator.cstForest)
+        #expect(after == before, "no heading in subtree → forest unchanged")
+    }
+
+    @Test("pending find argument is canceled by Esc; next key dispatches normally")
+    func findKindCancelByEscape() throws {
+        let fixture = try makeFixture("Hello world.\n")
+        fixture.placeCursor(atUTF16: 0)
+        // Enter via the binding tree so the controller's mode flips too
+        // (the f / F bindings are mode-scoped to .visualCST).
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        #expect(fixture.controller.mode == .visualCST)
+        let beforeForest = try #require(fixture.coordinator.cstForest)
+
+        // Arm pending find via key sequence.
+        _ = fixture.controller.handle(.char("f"))
+        #expect(fixture.controller.pendingCharArgument == .findKindForward)
+
+        // Esc cancels — silent, doesn't dispatch.
+        _ = fixture.controller.handle(.special(.escape))
+        #expect(fixture.controller.pendingCharArgument == nil)
+        let afterEscForest = try #require(fixture.coordinator.cstForest)
+        #expect(afterEscForest == beforeForest, "Esc should not have moved the forest")
+
+        // Next keypress should dispatch through the binding tree, not as a typed-descent letter.
+        // Press j — single-paragraph doc has no next sibling, so j is a no-op (forest unchanged).
+        _ = fixture.controller.handle(.char("j"))
+        let afterJForest = try #require(fixture.coordinator.cstForest)
+        #expect(afterJForest == beforeForest, "j with no next sibling is a no-op")
+    }
+
     @Test("swapEnds doesn't change the byte range")
     func swapEndsPreservesByteRange() throws {
         let fixture = try makeFixture("First.\n\nSecond.\n")

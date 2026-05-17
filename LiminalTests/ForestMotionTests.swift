@@ -386,6 +386,100 @@ struct ForestMotionTests {
         #expect(result.headChildIndex != start.headChildIndex)
     }
 
+    // MARK: - Subtree-bounded preorder
+
+    @Test("subtreePreorder forward finds the first predicate match in the subtree")
+    func subtreePreorderForwardFindsFirstMatchInSubtree() throws {
+        let parsed = try LiminalParser().parse("Hello **bold** and *italic* world.\n")
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        let result = try #require(
+            start.moved(by: .subtreePreorderForward(.containingAny(.emphasis)), extending: false)
+        )
+        // `**bold**` parses to .strong, the first emphasis-family kind.
+        #expect(
+            Self.headKind(result) == .strong,
+            "expected first .emphasis match to be the .strong (**bold**); saw \(Self.headKind(result))"
+        )
+    }
+
+    @Test("subtreePreorder forward walks past non-matching nodes to find the first match")
+    func subtreePreorderForwardSkipsToFirstMatch() throws {
+        // Subtree contains inlineContent + leading inlineText + wikilink + trailing inlineText.
+        // .containingAny(.reference) skips inlineContent and inlineText and lands on wikilink.
+        let parsed = try LiminalParser().parse("Some text and [[wiki]] more.\n")
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        let result = try #require(
+            start.moved(by: .subtreePreorderForward(.containingAny(.reference)), extending: false)
+        )
+        #expect(Self.headKind(result) == .wikilink)
+    }
+
+    @Test("subtreePreorder forward respects the subtree boundary and does not leak into siblings")
+    func subtreePreorderForwardStopsAtSubtreeBoundary() throws {
+        let parsed = try LiminalParser().parse("First paragraph.\n\n# Heading\n")
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        #expect(Self.headKind(start) == .paragraph)
+        // No heading inside this paragraph; the search must NOT cross into
+        // the next root sibling (the actual heading).
+        let result = start.moved(
+            by: .subtreePreorderForward(.containingAny(.heading)),
+            extending: false
+        )
+        #expect(result == nil, "subtree-bounded search must not leak past the starting head's text range")
+    }
+
+    @Test("subtreePreorder backward returns the LAST predicate match in the subtree")
+    func subtreePreorderBackwardFindsLastMatchInSubtree() throws {
+        let source = "Hello **first** and **second** end.\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        let result = try #require(
+            start.moved(by: .subtreePreorderBackward(.containingAny(.emphasis)), extending: false)
+        )
+        #expect(Self.headKind(result) == .strong)
+        let secondStrongStart = Self.byteOffset(of: "**second**", in: source)
+        #expect(
+            Int(result.byteRange.start.rawValue) == secondStrongStart,
+            "backward should land on the SECOND **strong** at byte \(secondStrongStart); saw \(result.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test("subtreePreorder on a leaf forest returns nil for both directions")
+    func subtreePreorderOnEmptySubtreeReturnsNil() throws {
+        let parsed = try LiminalParser().parse("Hello.\n")
+        let tree = parsed.tree
+        // The deepest navigable position — an inlineText leaf with no children.
+        let leaf = try #require(
+            LiminalForest.containing(.zero, in: tree, affinity: .downstream)
+        )
+        #expect(Self.headKind(leaf) == .inlineText)
+        #expect(leaf.moved(by: .subtreePreorderForward(), extending: false) == nil)
+        #expect(leaf.moved(by: .subtreePreorderBackward(), extending: false) == nil)
+    }
+
+    @Test("subtreePreorder with extending: true returns nil for both directions")
+    func subtreePreorderExtendingReturnsNil() throws {
+        let parsed = try LiminalParser().parse("Hello **bold** world.\n")
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        #expect(
+            start.moved(
+                by: .subtreePreorderForward(.containingAny(.emphasis)),
+                extending: true
+            ) == nil
+        )
+        #expect(
+            start.moved(
+                by: .subtreePreorderBackward(.containingAny(.emphasis)),
+                extending: true
+            ) == nil
+        )
+    }
+
     // MARK: - Helpers
 
     private static func headKind(_ forest: LiminalForest) -> LiminalKind {

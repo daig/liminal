@@ -389,6 +389,10 @@ public final class VimController: ObservableObject {
             delegate?.extendCSTSelection(motion, count: count)
         case .swapCSTEnds:
             delegate?.swapCSTEnds()
+        case .awaitFindKind(let direction):
+            pendingCharArgument = (direction == .forward) ? .findKindForward : .findKindBackward
+        case .cstFindKind(let direction, let kind, let count):
+            delegate?.cstFindKind(direction: direction, kind: kind, count: count)
         }
     }
 
@@ -789,6 +793,19 @@ public final class VimController: ObservableObject {
         t.bind(.visualCST, [.char("o")],
                description: "Swap ends") { _ in .swapCSTEnds }
 
+        // Typed descent within the current subtree. `f<letter>` finds
+        // the first match in source order; `F<letter>` finds the last.
+        // The letter argument is consumed via `pendingCharArgument` —
+        // see `TypedDescentKind(letter:)` for the mapping.
+        t.bind(.visualCST, [.char("f")],
+               description: "Find kind in subtree") { _ in
+            .awaitFindKind(direction: .forward)
+        }
+        t.bind(.visualCST, [.char("F")],
+               description: "Find last kind in subtree") { _ in
+            .awaitFindKind(direction: .backward)
+        }
+
         return t
     }
 
@@ -853,13 +870,19 @@ public struct PendingOperator: Sendable, Equatable, Hashable {
 public enum PendingCharArgument: Sendable, Equatable {
     case setMark
     case jumpToMark
+    /// `.visualCST` `f<letter>` — typed descent forward in subtree.
+    case findKindForward
+    /// `.visualCST` `F<letter>` — typed descent backward in subtree.
+    case findKindBackward
 
     /// Human-readable prefix label shown in the status bar (e.g. "m"
     /// when waiting for the mark name after `m`).
     public var statusLabel: String {
         switch self {
-        case .setMark: return "m"
-        case .jumpToMark: return "`"
+        case .setMark:          return "m"
+        case .jumpToMark:       return "`"
+        case .findKindForward:  return "f"
+        case .findKindBackward: return "F"
         }
     }
 
@@ -869,12 +892,21 @@ public enum PendingCharArgument: Sendable, Equatable {
     /// rather than dispatching nonsense.
     func resolve(_ key: VimKey) -> VimCommand? {
         guard case .character(let ch) = key.payload,
-              key.modifiers.isEmpty,
-              MarkRegistry.isValidMarkName(ch)
+              key.modifiers.isEmpty
         else { return nil }
         switch self {
-        case .setMark:    return .setMark(ch)
-        case .jumpToMark: return .jumpToMark(ch)
+        case .setMark:
+            return MarkRegistry.isValidMarkName(ch) ? .setMark(ch) : nil
+        case .jumpToMark:
+            return MarkRegistry.isValidMarkName(ch) ? .jumpToMark(ch) : nil
+        case .findKindForward:
+            return TypedDescentKind(letter: ch).map { kind in
+                .cstFindKind(direction: .forward, kind: kind, count: 1)
+            }
+        case .findKindBackward:
+            return TypedDescentKind(letter: ch).map { kind in
+                .cstFindKind(direction: .backward, kind: kind, count: 1)
+            }
         }
     }
 }
@@ -963,6 +995,10 @@ public protocol VimControllerDelegate: AnyObject {
     func extendCSTSelection(_ motion: CSTMotion, count: Int)
     /// Swap the forest's anchor and head endpoints (vim's `o`).
     func swapCSTEnds()
+    /// Search the current forest's subtree for a forest matching
+    /// `kind`. Forward returns the first match in preorder; backward
+    /// returns the last. Backs `f<letter>` / `F<letter>`.
+    func cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int)
 }
 
 extension VimControllerDelegate {
@@ -986,4 +1022,9 @@ extension VimControllerDelegate {
     public func cstNavigate(_ motion: CSTMotion, count: Int) {}
     public func extendCSTSelection(_ motion: CSTMotion, count: Int) {}
     public func swapCSTEnds() {}
+    public func cstFindKind(
+        direction: FindDirection,
+        kind: TypedDescentKind,
+        count: Int
+    ) {}
 }

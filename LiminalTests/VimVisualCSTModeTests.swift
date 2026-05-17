@@ -144,6 +144,68 @@ struct VimVisualCSTModeTests {
         #expect(c.mode == .visualCST)
     }
 
+    // MARK: - Typed descent (f / F)
+
+    @Test("f arms pending findKindForward")
+    func fArmsPendingFindForward() {
+        let c = VimController()
+        let spy = CSTSpy()
+        c.delegate = spy
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("C"))
+
+        _ = c.handle(.char("f"))
+
+        #expect(c.pendingCharArgument == .findKindForward)
+    }
+
+    @Test("F arms pending findKindBackward")
+    func FArmsPendingFindBackward() {
+        let c = VimController()
+        let spy = CSTSpy()
+        c.delegate = spy
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("C"))
+
+        _ = c.handle(.char("F"))
+
+        #expect(c.pendingCharArgument == .findKindBackward)
+    }
+
+    @Test("f then valid letter dispatches cstFindKind to the delegate")
+    func fThenLetterDispatchesCSTFindKind() {
+        let c = VimController()
+        let spy = CSTSpy()
+        c.delegate = spy
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("C"))
+        spy.findKindCalls.removeAll()
+
+        _ = c.handle(.char("f"))
+        _ = c.handle(.char("h"))
+
+        #expect(spy.findKindCalls == [
+            .init(direction: .forward, kind: .heading, count: 1)
+        ])
+        #expect(c.pendingCharArgument == nil, "pending cleared after dispatch")
+    }
+
+    @Test("pending find drops an unmapped letter without dispatching")
+    func pendingFindIgnoresInvalidLetter() {
+        let c = VimController()
+        let spy = CSTSpy()
+        c.delegate = spy
+        _ = c.handle(.char("g"))
+        _ = c.handle(.char("C"))
+        spy.findKindCalls.removeAll()
+
+        _ = c.handle(.char("f"))
+        _ = c.handle(.char("q"))  // q is not in the letter mnemonic table
+
+        #expect(spy.findKindCalls.isEmpty)
+        #expect(c.pendingCharArgument == nil, "pending cleared even on invalid letter")
+    }
+
     // MARK: - Mode classification
 
     @Test("isVisual includes .visualCST")
@@ -161,12 +223,19 @@ private final class CSTSpy: VimControllerDelegate {
         let count: Int
     }
 
+    struct FindKindCall: Equatable {
+        let direction: FindDirection
+        let kind: TypedDescentKind
+        let count: Int
+    }
+
     var enterCSTVisualModeCallCount = 0
     var cstNavigateCalls: [CSTNavigateCall] = []
     var extendCalls: [CSTNavigateCall] = []
     var swapCSTEndsCallCount = 0
     var yankSelectionCallCount = 0
     var deleteSelectionCallCount = 0
+    var findKindCalls: [FindKindCall] = []
 
     // Visual-CST methods the tests care about.
     func enterCSTVisualMode() { enterCSTVisualModeCallCount += 1 }
@@ -177,6 +246,9 @@ private final class CSTSpy: VimControllerDelegate {
         extendCalls.append(.init(motion: motion, count: count))
     }
     func swapCSTEnds() { swapCSTEndsCallCount += 1 }
+    func cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int) {
+        findKindCalls.append(.init(direction: direction, kind: kind, count: count))
+    }
 
     // Required protocol methods we don't care about.
     func moveCursor(motion: CursorMotion, count: Int) {}

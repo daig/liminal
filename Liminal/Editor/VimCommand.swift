@@ -89,6 +89,76 @@ public enum VimCommand: Sendable, Equatable {
     /// Swap the forest's anchor and head endpoints. Vim's `o` in
     /// visual mode.
     case swapCSTEnds
+
+    /// `f` / `F` in `.visualCST`: arm the pending char-argument state
+    /// awaiting a letter that identifies a kind to search for inside
+    /// the current forest's subtree.
+    case awaitFindKind(direction: FindDirection)
+
+    /// Resolved find chord after the letter argument: search the
+    /// current forest's subtree for a forest matching `kind`. Forward
+    /// returns the first match in preorder; backward returns the last.
+    case cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int)
+}
+
+/// Direction parameter for typed-descent chords (`f` vs `F`).
+public enum FindDirection: Sendable, Equatable, Hashable {
+    case forward
+    case backward
+
+    public var statusLabel: String {
+        switch self {
+        case .forward:  return "f"
+        case .backward: return "F"
+        }
+    }
+}
+
+/// Kinds the `f` / `F` chord letter argument resolves to. Each maps to
+/// a ``LiminalStructuralCategory`` predicate that the kernel applies
+/// while walking the current subtree in preorder.
+public enum TypedDescentKind: Sendable, Equatable, Hashable {
+    case heading       // h
+    case code          // c
+    case math          // m
+    case reference     // r — any reference (link, embed, wikilink, ...)
+    case markdownLink  // l — mdLink + autolink
+    case wikilink      // w
+    case embed         // e
+    case typedBlock    // k
+    case blockAnchor   // b
+
+    /// The category predicate the kernel will match against.
+    public var category: LiminalStructuralCategory {
+        switch self {
+        case .heading:      return .heading
+        case .code:         return .code
+        case .math:         return .math
+        case .reference:    return .reference
+        case .markdownLink: return .link
+        case .wikilink:     return .wikilinkRef
+        case .embed:        return .embed
+        case .typedBlock:   return .typed
+        case .blockAnchor:  return .blockAnchor
+        }
+    }
+
+    /// Resolve a single character to a typed-descent kind, or nil if
+    /// the character isn't bound in the table.
+    public init?(letter: Character) {
+        switch letter {
+        case "h": self = .heading
+        case "c": self = .code
+        case "m": self = .math
+        case "r": self = .reference
+        case "l": self = .markdownLink
+        case "w": self = .wikilink
+        case "e": self = .embed
+        case "k": self = .typedBlock
+        case "b": self = .blockAnchor
+        default:  return nil
+        }
+    }
 }
 
 /// Structural motions specific to ``VimMode/visualCST``. Distinct from

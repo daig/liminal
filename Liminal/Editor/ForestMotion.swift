@@ -29,6 +29,11 @@ public struct ForestMotion: Sendable {
         case descendant
         /// Walk the whole document in source order (descend-first preorder).
         case preorder
+        /// Walk preorder forward but bounded by the starting forest's
+        /// subtree (the node pointed at by the head). `.forward` returns
+        /// the first predicate match; `.backward` returns the last.
+        /// Backs vim-style `f` / `F` typed descent.
+        case subtreePreorder
     }
 
     /// Walk direction along the axis. ``Axis/ancestor`` ignores direction
@@ -116,6 +121,19 @@ public extension ForestMotion {
 
     static func preorderBackward(_ predicate: Predicate = .any) -> ForestMotion {
         ForestMotion(axis: .preorder, direction: .backward, predicate: predicate)
+    }
+
+    /// `.subtreePreorder` forward — first predicate match inside the
+    /// starting forest's head subtree. Backs vim-style `f<kind>` typed descent.
+    static func subtreePreorderForward(_ predicate: Predicate = .any) -> ForestMotion {
+        ForestMotion(axis: .subtreePreorder, direction: .forward, predicate: predicate)
+    }
+
+    /// `.subtreePreorder` backward — last predicate match inside the
+    /// starting forest's head subtree (collected during the same forward
+    /// iteration as `.forward`). Backs vim-style `F<kind>`.
+    static func subtreePreorderBackward(_ predicate: Predicate = .any) -> ForestMotion {
+        ForestMotion(axis: .subtreePreorder, direction: .backward, predicate: predicate)
     }
 }
 
@@ -205,6 +223,14 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
                 current: current,
                 start: start
             )
+        case .subtreePreorder:
+            guard !extending else { return nil }
+            return subtreePreorderStep(
+                direction: motion.direction,
+                predicate: motion.predicate,
+                current: current,
+                start: start
+            )
         }
     }
 
@@ -288,6 +314,38 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
             cursor = next
         }
         return nil
+    }
+
+    /// Bounded preorder forward through the start head's subtree.
+    /// `.forward` returns the first predicate match; `.backward` returns
+    /// the LAST predicate match (collected during the same forward walk).
+    /// The bound is the byte position where the start head's pointed
+    /// child's text range ends; any candidate at or past that byte has
+    /// exited the subtree.
+    private static func subtreePreorderStep(
+        direction: ForestMotion.Direction,
+        predicate: ForestMotion.Predicate,
+        current: SyntaxForest<Policy>,
+        start: SyntaxForest<Policy>
+    ) -> SyntaxForest<Policy>? {
+        let subtreeEnd = start.parent.withCursor { cursor in
+            cursor.childTextRange(at: start.headChildIndex).end
+        }
+        var cursor = current
+        var lastMatch: SyntaxForest<Policy>? = nil
+        while let next = preorderNext(from: cursor, direction: .forward) {
+            if next.byteRange.start >= subtreeEnd { break }
+            if evaluate(predicate, candidate: next, start: start) {
+                switch direction {
+                case .forward:
+                    return next
+                case .backward:
+                    lastMatch = next
+                }
+            }
+            cursor = next
+        }
+        return lastMatch
     }
 
     /// One preorder hop in the requested direction. Returns the next

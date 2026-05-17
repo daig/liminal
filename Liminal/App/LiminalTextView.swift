@@ -1967,6 +1967,28 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
+        /// Typed descent: search the current forest's subtree for a
+        /// node matching `kind`. `.forward` lands on the first match in
+        /// preorder; `.backward` lands on the last. No-op (cstForest
+        /// preserved) when no match exists in the subtree.
+        func cstFindKind(
+            direction: FindDirection,
+            kind: TypedDescentKind,
+            count: Int
+        ) {
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            let predicate = ForestMotion.Predicate.containingAny(kind.category)
+            let motion: ForestMotion = (direction == .forward)
+                ? .subtreePreorderForward(predicate)
+                : .subtreePreorderBackward(predicate)
+            cstForest = forest.moved(
+                by: motion,
+                extending: false,
+                count: count
+            ) ?? forest
+            mirrorCSTSelection()
+        }
+
         // MARK: - Visual CST helpers
 
         /// Validate that the active forest still references the document's
