@@ -99,6 +99,19 @@ public enum VimCommand: Sendable, Equatable {
     /// current forest's subtree for a forest matching `kind`. Forward
     /// returns the first match in preorder; backward returns the last.
     case cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int)
+
+    // MARK: - Command-line mode
+
+    /// `:` from normal / visual / .visualCST: flip the controller into
+    /// `.commandLine` mode and start collecting a typed command. The
+    /// prior mode is captured for return on Enter / Esc.
+    case enterCommandLine
+
+    /// Dispatched after `:` Enter (or by a chord shortcut). Looks up
+    /// `name` in the `CommandRegistry`, passes `args` + `count`, and
+    /// dispatches the returned `VimCommand`. Silently drops if the
+    /// name is unregistered or the handler returns nil.
+    case executeNamedCommand(name: String, args: [String], count: Int?)
 }
 
 /// Direction parameter for typed-descent chords (`f` vs `F`).
@@ -157,6 +170,39 @@ public enum TypedDescentKind: Sendable, Equatable, Hashable {
         case "k": self = .typedBlock
         case "b": self = .blockAnchor
         default:  return nil
+        }
+    }
+
+    /// Lowercase string identifier used as the `:CSTFind <kind>` arg.
+    /// Round-trips through `init?(commandArgument:)`.
+    public var commandArgument: String {
+        switch self {
+        case .heading:      return "heading"
+        case .code:         return "code"
+        case .math:         return "math"
+        case .reference:    return "reference"
+        case .markdownLink: return "markdownlink"
+        case .wikilink:     return "wikilink"
+        case .embed:        return "embed"
+        case .typedBlock:   return "typedblock"
+        case .blockAnchor:  return "blockanchor"
+        }
+    }
+
+    /// Resolve a lowercase string identifier (the `:CSTFind` arg) to a
+    /// kind. Returns nil for unknown names.
+    public init?(commandArgument: String) {
+        switch commandArgument {
+        case "heading":      self = .heading
+        case "code":         self = .code
+        case "math":         self = .math
+        case "reference":    self = .reference
+        case "markdownlink": self = .markdownLink
+        case "wikilink":     self = .wikilink
+        case "embed":        self = .embed
+        case "typedblock":   self = .typedBlock
+        case "blockanchor":  self = .blockAnchor
+        default:             return nil
         }
     }
 }

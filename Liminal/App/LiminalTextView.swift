@@ -201,6 +201,15 @@ struct LiminalTextView: NSViewRepresentable {
             modeObservation = controller.$mode.sink { [weak self] newMode in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    // `.commandLine` is a transient interrupt — the
+                    // user will return to whatever they were in (the
+                    // controller's `commandLineReturnMode`). Skip
+                    // anchor cleanup so e.g. `.visualCST` → `:` → `<Esc>`
+                    // returns to the same forest selection.
+                    if newMode == .commandLine {
+                        self.refreshCursorStyle()
+                        return
+                    }
                     if !newMode.isVisual {
                         // Leaving any visual mode → drop anchors so
                         // the next motion in normal mode places the
@@ -355,10 +364,12 @@ struct LiminalTextView: NSViewRepresentable {
                 if current.length != 0 {
                     textView.setSelectedRange(NSRange(location: current.location, length: 0))
                 }
-            case .visual, .visualLine, .visualBlock, .visualCST:
+            case .visual, .visualLine, .visualBlock, .visualCST, .commandLine:
                 // Visual modes own their selection — leave it alone
                 // and let the per-motion extend logic (or the CST
-                // forest mirror, for .visualCST) manage it.
+                // forest mirror, for .visualCST) manage it. `.commandLine`
+                // is a transient interrupt — the underlying text-view
+                // selection stays put until the user returns.
                 break
             }
         }
@@ -1091,7 +1102,7 @@ struct LiminalTextView: NSViewRepresentable {
                     ranges: [r],
                     cursorAfter: r.location
                 )
-            case .normal, .insert:
+            case .normal, .insert, .commandLine:
                 return nil
             }
         }
@@ -1782,13 +1793,15 @@ struct LiminalTextView: NSViewRepresentable {
                 extendLinewiseSelection(toUTF16: clampedLocation)
             case .visualBlock:
                 extendBlockwiseSelection(toUTF16: clampedLocation)
-            case .visualCST:
+            case .visualCST, .commandLine:
                 // .visualCST owns the text-view selection via
                 // mirrorCSTSelection. Generic UTF-16 cursor placement
                 // doesn't apply here: text-cursor motions aren't bound
                 // in .visualCST, so this path shouldn't fire — but if it
                 // does (e.g. a future code path), preserve the forest's
-                // range rather than collapse it.
+                // range rather than collapse it. `.commandLine` is a
+                // transient interrupt — leave the underlying selection
+                // untouched until the user returns.
                 break
             }
         }

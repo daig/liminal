@@ -113,7 +113,11 @@ struct VimBindingTreeTests {
                 == .command(.enterNormalMode))
         #expect(t.resolve([.char("{")], mode: .normal, count: nil)
                 == .command(.structuralMotion(.previousSibling, count: 1)))
+        // <Space>t is now a shortcut to the `:ToggleTask` command —
+        // the canonical implementation lives in the command registry.
         #expect(t.resolve([.special(.space), .char("t")], mode: .normal, count: nil)
-                == .command(.toggleTaskAtCursor))
+                == .command(.executeNamedCommand(
+                    name: "ToggleTask", args: [], count: nil
+                )))
     }
 }

@@ -11,10 +11,19 @@
 public struct VimStatusPresentation: Sendable, Equatable {
     public let mode: VimMode
     public let detailText: String?
+    /// Non-nil when `mode == .commandLine` — the live `:` input buffer,
+    /// rendered by the status bar in place of the regular mode badge /
+    /// detail. `nil` in every other mode.
+    public let commandLineInput: String?
 
-    public init(mode: VimMode, detailText: String? = nil) {
+    public init(
+        mode: VimMode,
+        detailText: String? = nil,
+        commandLineInput: String? = nil
+    ) {
         self.mode = mode
         self.detailText = detailText
+        self.commandLineInput = commandLineInput
     }
 
     /// Builds a presentation from the controller's authoritative state.
@@ -25,8 +34,16 @@ public struct VimStatusPresentation: Sendable, Equatable {
         pendingKeys: [VimKey],
         pendingCount: Int?,
         pendingCharArgument: PendingCharArgument? = nil,
-        pendingOperator: PendingOperator? = nil
+        pendingOperator: PendingOperator? = nil,
+        commandLineInput: String = ""
     ) -> VimStatusPresentation {
+        if mode == .commandLine {
+            return VimStatusPresentation(
+                mode: .commandLine,
+                detailText: nil,
+                commandLineInput: commandLineInput
+            )
+        }
         var parts: [String] = []
         if let pendingOperator {
             // `3 d`, `3 d 2`, `d`. Pre-count of 1 is implicit and
@@ -44,6 +61,10 @@ public struct VimStatusPresentation: Sendable, Equatable {
             parts.append("\(pendingCharArgument.statusLabel) <a-z>")
         }
         let detail = parts.isEmpty ? nil : parts.joined(separator: " ")
-        return VimStatusPresentation(mode: mode, detailText: detail)
+        return VimStatusPresentation(
+            mode: mode,
+            detailText: detail,
+            commandLineInput: nil
+        )
     }
 }

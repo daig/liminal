@@ -55,23 +55,39 @@ public final class VimController: ObservableObject {
     /// automatically.
     @Published public private(set) var marks = MarkRegistry()
 
+    /// Live buffer accumulated during `.commandLine` mode. SwiftUI
+    /// status views observe this to render `:input` as the user types.
+    /// Cleared on Enter (after dispatch) or Esc.
+    @Published public private(set) var commandLineInput: String = ""
+
     public weak var delegate: VimControllerDelegate?
 
     private nonisolated(unsafe) let bindings: VimBindingTree
     private nonisolated let hintOnsetDelay: Duration
+    private nonisolated(unsafe) let commands: CommandRegistry
 
     private var hintShowTask: Task<Void, Never>?
 
+    /// Mode to restore when `.commandLine` exits (via Enter dispatch
+    /// or Esc cancel). Captured when entering, defaulted to .normal
+    /// for safety. Internal — UI doesn't need to observe it.
+    private var commandLineReturnMode: VimMode = .normal
+
     public nonisolated init(
         bindings: VimBindingTree,
+        commands: CommandRegistry = VimController.defaultCommands(),
         hintOnsetDelay: Duration = .milliseconds(200)
     ) {
         self.bindings = bindings
+        self.commands = commands
         self.hintOnsetDelay = hintOnsetDelay
     }
 
     public nonisolated convenience init() {
-        self.init(bindings: VimController.defaultBindings())
+        self.init(
+            bindings: VimController.defaultBindings(),
+            commands: VimController.defaultCommands()
+        )
     }
 
     // MARK: - Key handling
@@ -87,6 +103,13 @@ public final class VimController: ObservableObject {
         // no-op case). Recomputing derived state at the boundary covers
         // them all uniformly.
         defer { refreshDerived() }
+
+        // `.commandLine` mode consumes every key into the typed input
+        // buffer, regardless of pending operators or char args (those
+        // were cleared when entering .commandLine via setMode).
+        if mode == .commandLine {
+            return handleCommandLine(key)
+        }
 
         // Char-argument-pending state takes precedence: the next key is
         // consumed verbatim and dispatched as the synthesized command.
@@ -124,6 +147,76 @@ public final class VimController: ObservableObject {
             return handleNormal(key)
         case .insert:
             return handleInsert(key)
+        case .commandLine:
+            // Unreachable — handled in the early return above. Defensive.
+            return .consumed
+        }
+    }
+
+    /// Collects characters into ``commandLineInput`` while in
+    /// `.commandLine` mode. `<Esc>` cancels, `<Enter>` dispatches the
+    /// resolved command via the registry, `<BS>` deletes the last char
+    /// (or cancels if the buffer is empty — vim convention).
+    private func handleCommandLine(_ key: VimKey) -> KeyHandled {
+        switch key.payload {
+        case .special(.escape):
+            commandLineInput = ""
+            setMode(commandLineReturnMode)
+        case .special(.returnKey):
+            let input = commandLineInput
+            let returnMode = commandLineReturnMode
+            commandLineInput = ""
+            // Dispatch first (still in .commandLine mode), then return
+            // to the prior mode only if dispatch didn't already flip
+            // somewhere else. This avoids a double mode transition
+            // (.commandLine → returnMode → newMode) whose first leg
+            // schedules an async observer that nukes selection state
+            // built by the second leg's delegate call. Concretely:
+            // `:CSTEnter<CR>` from normal needs to land in .visualCST
+            // with cstForest set — the old "setMode(returnMode) then
+            // dispatch" order let the .normal-transition observer wipe
+            // the forest just after the .visualCST delegate built it.
+            dispatchNamedCommandInput(input)
+            if mode == .commandLine {
+                setMode(returnMode)
+            }
+        case .special(.backspace), .special(.delete):
+            if commandLineInput.isEmpty {
+                // Vim convention: backspace on empty input cancels.
+                setMode(commandLineReturnMode)
+            } else {
+                commandLineInput.removeLast()
+            }
+        case .special(.space):
+            commandLineInput.append(" ")
+        case .character(let ch):
+            // Reject control-modified chars (Ctrl-C etc.); accept any
+            // printable bare character.
+            guard !key.modifiers.contains(.control),
+                  !key.modifiers.contains(.command)
+            else { return .consumed }
+            commandLineInput.append(ch)
+        case .special(.tab), .special(.left), .special(.right),
+             .special(.up), .special(.down):
+            // Defer: tab completion + arrow-key cursor editing are v2.
+            break
+        }
+        return .consumed
+    }
+
+    /// Parse a typed `:` line and dispatch the resolved command. Silent
+    /// no-op for empty input or unknown command names — error surfacing
+    /// is a planned follow-up.
+    private func dispatchNamedCommandInput(_ input: String) {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        let parts = trimmed
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .map(String.init)
+        guard let name = parts.first else { return }
+        let args = Array(parts.dropFirst())
+        if let cmd = commands.resolve(name: name, args: args, count: nil) {
+            dispatch(cmd)
         }
     }
 
@@ -198,7 +291,8 @@ public final class VimController: ObservableObject {
             pendingKeys: pendingKeys,
             pendingCount: pendingCount,
             pendingCharArgument: pendingCharArgument,
-            pendingOperator: pendingOperator
+            pendingOperator: pendingOperator,
+            commandLineInput: commandLineInput
         )
         refreshHintSnapshot()
     }
@@ -393,6 +487,15 @@ public final class VimController: ObservableObject {
             pendingCharArgument = (direction == .forward) ? .findKindForward : .findKindBackward
         case .cstFindKind(let direction, let kind, let count):
             delegate?.cstFindKind(direction: direction, kind: kind, count: count)
+        case .enterCommandLine:
+            commandLineReturnMode = mode
+            setMode(.commandLine)
+            commandLineInput = ""
+        case .executeNamedCommand(let name, let args, let count):
+            if let resolved = commands.resolve(name: name, args: args, count: count) {
+                dispatch(resolved)
+            }
+            // Unknown name or handler nil → silently drop in v1.
         }
     }
 
@@ -720,18 +823,20 @@ public final class VimController: ObservableObject {
             .awaitMarkName(.jump)
         }
 
-        // Leader chord
+        // Leader chord — CST-aware commands route through the registry.
+        // The chord is a shortcut to a `:`-mode command name; the canonical
+        // implementation lives in `defaultCommands()`.
         t.bind(.normal, [.special(.space), .char("t")],
                description: "Toggle task checkbox") { _ in
-            .toggleTaskAtCursor
+            .executeNamedCommand(name: "ToggleTask", args: [], count: nil)
         }
         t.bind(.normal, [.special(.space), .char("p")],
                description: "Splice CST paste") { _ in
-            .pasteCSTSplice(after: true)
+            .executeNamedCommand(name: "CSTPasteSplice", args: [], count: nil)
         }
         t.bind(.normal, [.special(.space), .char("n")],
                description: "Nest CST paste") { _ in
-            .pasteCSTNest(after: true)
+            .executeNamedCommand(name: "CSTPasteNest", args: [], count: nil)
         }
 
         // CST-aware undo / redo. Routed to the delegate, which walks
@@ -748,10 +853,11 @@ public final class VimController: ObservableObject {
         // `motionAccepting` list so structural motions (h/l/j/k below)
         // can be rebound under `.visualCST` without colliding with the
         // text-cursor motions used in normal/visual/visualLine/
-        // visualBlock.
+        // visualBlock. The chord dispatches `:CSTEnter` through the
+        // command registry — same code path as typing `:CSTEnter<CR>`.
         t.bind(.normal, [.char("g"), .char("C")],
                description: "Visual CST") { _ in
-            .enterCSTVisualMode
+            .executeNamedCommand(name: "CSTEnter", args: [], count: nil)
         }
 
         // Esc and operators in visualCST reuse the same dispatch as
@@ -769,29 +875,37 @@ public final class VimController: ObservableObject {
 
         // CST navigation. Each chord is bound *only* under .visualCST so
         // it doesn't shadow normal-mode motions. Slides collapse the
-        // selection to a singleton; extends move only the head.
+        // selection to a singleton; extends move only the head. The
+        // chord-to-command-name layer routes through the registry —
+        // canonical implementations live in `defaultCommands()`.
         t.bind(.visualCST, [.char("h")],
-               description: "Parent") { _ in .cstNavigate(.parent, count: 1) }
+               description: "Parent") { _ in
+            .executeNamedCommand(name: "CSTParent", args: [], count: nil)
+        }
         t.bind(.visualCST, [.char("l")],
-               description: "First child") { _ in .cstNavigate(.firstChild, count: 1) }
+               description: "First child") { _ in
+            .executeNamedCommand(name: "CSTFirstChild", args: [], count: nil)
+        }
         t.bind(.visualCST, [.char("j")],
                description: "Next sibling") {
-            .cstNavigate(.nextSibling, count: $0 ?? 1)
+            .executeNamedCommand(name: "CSTNextSibling", args: [], count: $0)
         }
         t.bind(.visualCST, [.char("k")],
                description: "Previous sibling") {
-            .cstNavigate(.previousSibling, count: $0 ?? 1)
+            .executeNamedCommand(name: "CSTPreviousSibling", args: [], count: $0)
         }
         t.bind(.visualCST, [.char("J")],
                description: "Extend forward") {
-            .extendCSTSelection(.nextSibling, count: $0 ?? 1)
+            .executeNamedCommand(name: "CSTExtendForward", args: [], count: $0)
         }
         t.bind(.visualCST, [.char("K")],
                description: "Extend backward") {
-            .extendCSTSelection(.previousSibling, count: $0 ?? 1)
+            .executeNamedCommand(name: "CSTExtendBackward", args: [], count: $0)
         }
         t.bind(.visualCST, [.char("o")],
-               description: "Swap ends") { _ in .swapCSTEnds }
+               description: "Swap ends") { _ in
+            .executeNamedCommand(name: "CSTSwapEnds", args: [], count: nil)
+        }
 
         // Typed descent within the current subtree. `f<letter>` finds
         // the first match in source order; `F<letter>` finds the last.
@@ -806,7 +920,104 @@ public final class VimController: ObservableObject {
             .awaitFindKind(direction: .backward)
         }
 
+        // `:` enters command-line mode from every "normal-like" mode
+        // (including visual variants so the user can dispatch a `:`
+        // command without losing the current selection).
+        let commandLineEntryModes: [VimMode] = [
+            .normal, .visual, .visualLine, .visualBlock, .visualCST,
+        ]
+        for entryMode in commandLineEntryModes {
+            t.bind(entryMode, [.char(":")],
+                   description: "Command line") { _ in .enterCommandLine }
+        }
+
         return t
+    }
+
+    // MARK: - Default commands
+
+    /// Registers every CST-aware command behind the chord shortcuts.
+    /// Adding a new `:` command means adding a `register(...)` block
+    /// here — chord wiring is optional and orthogonal.
+    public nonisolated static func defaultCommands() -> CommandRegistry {
+        let registry = CommandRegistry()
+
+        registry.register(.init(
+            name: "CSTEnter",
+            description: "Enter visual CST mode at cursor"
+        ) { _, _ in .enterCSTVisualMode })
+
+        registry.register(.init(
+            name: "CSTParent",
+            description: "Ascend to parent forest (glue-skipped)"
+        ) { _, count in .cstNavigate(.parent, count: count ?? 1) })
+
+        registry.register(.init(
+            name: "CSTFirstChild",
+            description: "Descend to first navigable child (glue-skipped)"
+        ) { _, count in .cstNavigate(.firstChild, count: count ?? 1) })
+
+        registry.register(.init(
+            name: "CSTNextSibling",
+            description: "Slide forest to next sibling"
+        ) { _, count in .cstNavigate(.nextSibling, count: count ?? 1) })
+
+        registry.register(.init(
+            name: "CSTPreviousSibling",
+            description: "Slide forest to previous sibling"
+        ) { _, count in .cstNavigate(.previousSibling, count: count ?? 1) })
+
+        registry.register(.init(
+            name: "CSTExtendForward",
+            description: "Extend forest head to next sibling"
+        ) { _, count in .extendCSTSelection(.nextSibling, count: count ?? 1) })
+
+        registry.register(.init(
+            name: "CSTExtendBackward",
+            description: "Extend forest head to previous sibling"
+        ) { _, count in .extendCSTSelection(.previousSibling, count: count ?? 1) })
+
+        registry.register(.init(
+            name: "CSTSwapEnds",
+            description: "Swap forest anchor and head endpoints"
+        ) { _, _ in .swapCSTEnds })
+
+        registry.register(.init(
+            name: "CSTFind",
+            description: "Find first node of given kind in current subtree"
+        ) { args, count in
+            guard let arg = args.first,
+                  let kind = TypedDescentKind(commandArgument: arg)
+            else { return nil }
+            return .cstFindKind(direction: .forward, kind: kind, count: count ?? 1)
+        })
+
+        registry.register(.init(
+            name: "CSTFindLast",
+            description: "Find last node of given kind in current subtree"
+        ) { args, count in
+            guard let arg = args.first,
+                  let kind = TypedDescentKind(commandArgument: arg)
+            else { return nil }
+            return .cstFindKind(direction: .backward, kind: kind, count: count ?? 1)
+        })
+
+        registry.register(.init(
+            name: "CSTPasteSplice",
+            description: "Splice CST clipboard payload after cursor"
+        ) { _, _ in .pasteCSTSplice(after: true) })
+
+        registry.register(.init(
+            name: "CSTPasteNest",
+            description: "Nest CST clipboard payload after cursor"
+        ) { _, _ in .pasteCSTNest(after: true) })
+
+        registry.register(.init(
+            name: "ToggleTask",
+            description: "Toggle the task checkbox at the cursor"
+        ) { _, _ in .toggleTaskAtCursor })
+
+        return registry
     }
 
     // MARK: - Mark registry plumbing
@@ -901,11 +1112,19 @@ public enum PendingCharArgument: Sendable, Equatable {
             return MarkRegistry.isValidMarkName(ch) ? .jumpToMark(ch) : nil
         case .findKindForward:
             return TypedDescentKind(letter: ch).map { kind in
-                .cstFindKind(direction: .forward, kind: kind, count: 1)
+                .executeNamedCommand(
+                    name: "CSTFind",
+                    args: [kind.commandArgument],
+                    count: nil
+                )
             }
         case .findKindBackward:
             return TypedDescentKind(letter: ch).map { kind in
-                .cstFindKind(direction: .backward, kind: kind, count: 1)
+                .executeNamedCommand(
+                    name: "CSTFindLast",
+                    args: [kind.commandArgument],
+                    count: nil
+                )
             }
         }
     }

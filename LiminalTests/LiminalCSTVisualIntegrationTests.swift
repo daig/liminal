@@ -266,6 +266,66 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(after == before, "no heading in subtree → forest unchanged")
     }
 
+    @Test(":CSTEnter from normal mode lands in .visualCST with cstForest set")
+    func enterCSTViaCommandLineFromNormal() throws {
+        let fixture = try makeFixture("Hello world.\n")
+        fixture.placeCursor(atUTF16: 0)
+        #expect(fixture.controller.mode == .normal)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTEnter" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        #expect(fixture.controller.mode == .visualCST)
+        #expect(
+            fixture.coordinator.cstForest != nil,
+            "cstForest must be set after :CSTEnter — the async mode observer for the intermediate .normal transition must not nuke the forest the .visualCST delegate just built"
+        )
+    }
+
+    @Test("entering : from .visualCST and pressing Esc preserves the cstForest")
+    func commandLineRoundTripPreservesVisualCSTForest() throws {
+        let fixture = try makeFixture("Hello world.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let beforeForest = try #require(fixture.coordinator.cstForest)
+
+        _ = fixture.controller.handle(.char(":"))
+        #expect(fixture.controller.mode == .commandLine)
+
+        _ = fixture.controller.handle(.special(.escape))
+        #expect(fixture.controller.mode == .visualCST)
+
+        let afterForest = try #require(fixture.coordinator.cstForest)
+        #expect(
+            afterForest == beforeForest,
+            "cstForest must survive the : round-trip — the Coordinator's mode observer special-cases .commandLine"
+        )
+    }
+
+    @Test(": CSTSwapEnds from .visualCST dispatches and returns to .visualCST")
+    func commandLineCSTSwapEndsRoundTrip() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        // Extend so swap-ends has a visible effect.
+        _ = fixture.controller.handle(.char("J"))
+        let beforeForest = try #require(fixture.coordinator.cstForest)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTSwapEnds" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        #expect(fixture.controller.mode == .visualCST)
+        let afterForest = try #require(fixture.coordinator.cstForest)
+        #expect(
+            afterForest == beforeForest.withEndsSwapped(),
+            "anchor and head should be swapped"
+        )
+    }
+
     @Test("pending find argument is canceled by Esc; next key dispatches normally")
     func findKindCancelByEscape() throws {
         let fixture = try makeFixture("Hello world.\n")

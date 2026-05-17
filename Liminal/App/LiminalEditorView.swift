@@ -290,17 +290,26 @@ private struct StatusBar: View {
     var body: some View {
         HStack(spacing: 16) {
             ModeBadge(mode: controller.statusPresentation.mode)
-            Label("\(document.diagnosticsCount)", systemImage: "exclamationmark.triangle")
-                .foregroundColor(document.diagnosticsCount == 0 ? .secondary : .orange)
-            Label(
-                "\(document.reuseSummary.acceptedReuses)/\(document.reuseSummary.queries) reused",
-                systemImage: "arrow.triangle.2.circlepath"
-            )
-            .foregroundColor(.secondary)
-            Spacer()
-            if let detail = controller.statusPresentation.detailText {
-                Text("(\(detail))")
-                    .foregroundColor(.secondary)
+            if let commandLine = controller.statusPresentation.commandLineInput {
+                // `:` mode — replace diagnostics / reuse summary with
+                // the live typed command. Underscore acts as a static
+                // caret cue without the complexity of a blinking one.
+                Text(":\(commandLine)_")
+                    .foregroundColor(.primary)
+                Spacer()
+            } else {
+                Label("\(document.diagnosticsCount)", systemImage: "exclamationmark.triangle")
+                    .foregroundColor(document.diagnosticsCount == 0 ? .secondary : .orange)
+                Label(
+                    "\(document.reuseSummary.acceptedReuses)/\(document.reuseSummary.queries) reused",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+                .foregroundColor(.secondary)
+                Spacer()
+                if let detail = controller.statusPresentation.detailText {
+                    Text("(\(detail))")
+                        .foregroundColor(.secondary)
+                }
             }
         }
         .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -329,6 +338,7 @@ private struct ModeBadge: View {
         case .visualLine:  return "V-LINE"
         case .visualBlock: return "V-BLOCK"
         case .visualCST:   return "V-CST"
+        case .commandLine: return "COMMAND"
         }
     }
 
@@ -340,6 +350,7 @@ private struct ModeBadge: View {
         case .visualLine:  return .pink
         case .visualBlock: return .orange
         case .visualCST:   return .teal
+        case .commandLine: return .yellow
         }
     }
 }
