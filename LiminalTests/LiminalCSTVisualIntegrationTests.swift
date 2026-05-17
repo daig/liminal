@@ -1,5 +1,6 @@
 import AppKit
 import CambiumCore
+import CambiumIncremental
 import CambiumSelection
 import Testing
 @testable import Liminal
@@ -841,6 +842,56 @@ struct LiminalCSTVisualIntegrationTests {
                 "overlay NSRange should equal the marked subtree's byte range; expected \(expectedNS), saw \(overlay.range)")
         #expect(overlay.strength == .strong,
                 "fresh mark must resolve as .strong")
+    }
+
+    @Test("Forest mark overlay shrinks after deleting a character inside the marked subtree")
+    func forestMarkOverlayTracksTreeMutation() async throws {
+        // Regression for a bug where the overlay stayed at the
+        // pre-edit size when no byte/text marks were set, because the
+        // refresh was piggybacked on $marks and MarkRegistry.reanchor
+        // short-circuits on an empty registry. The fix routes the
+        // refresh through document.$treeVersion which always fires.
+        let source = "Hello marked world.\n"
+        let fixture = try makeFixture(source)
+        // Enter visualCST on the paragraph and mark it.
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let initialRange = try #require(fixture.coordinator.cstForest).byteRange
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let initialOverlay = try #require(fixture.textView.forestMarkOverlays.first)
+        #expect(initialOverlay.range.length == Int(initialRange.length.rawValue),
+                "pre-edit overlay should cover the whole paragraph")
+
+        // Sanity: byte-mark registry is empty so the buggy $marks
+        // piggyback would silently skip its publish step.
+        #expect(fixture.controller.marks.marks.isEmpty)
+
+        // The CSTFixture wires the delegate but not the observers; we
+        // need the $treeVersion observer for this scenario.
+        fixture.coordinator.installModeObservers(on: fixture.controller)
+
+        // Apply a 1-byte deletion inside the marked subtree directly
+        // through the document path (the test fixture doesn't wire the
+        // textStorage delegate, so we'd otherwise bypass applyTextEdits).
+        let deleteAt = try utf16Offset(of: "marked", in: source)
+        let edit = TextEdit(
+            range: TextRange(
+                start: TextSize(UInt32(deleteAt)),
+                length: TextSize(1)
+            ),
+            replacement: ""
+        )
+        _ = fixture.document.applyTextEdits([edit])
+        // Let the document.$treeVersion observer fan out via Task.
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let updatedOverlay = try #require(fixture.textView.forestMarkOverlays.first)
+        #expect(updatedOverlay.range.length == initialOverlay.range.length - 1,
+                "post-edit overlay should be one byte shorter; saw length \(updatedOverlay.range.length) vs initial \(initialOverlay.range.length)")
     }
 
     @Test(":CSTUnmark drops the slot from the registry")

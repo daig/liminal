@@ -43,6 +43,15 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     @Published private(set) var diagnosticsCount: Int = 0
     @Published private(set) var reuseSummary: ReuseSummary = .empty
 
+    /// Monotonic counter bumped after every tree-mutating action
+    /// (textual edits, structural toggles, structural replacements).
+    /// Unlike `vimController.$marks` — which silently skips its
+    /// publish step when the byte-mark registry is empty — this fires
+    /// unconditionally, so view-layer observers that need to refresh
+    /// per-tree state (forest mark outlines, future invariants) can
+    /// rely on it.
+    @Published private(set) var treeVersion: Int = 0
+
     /// File URL for the document on disk, if any. Populated from the
     /// view layer (`ReferenceFileDocumentConfiguration.fileURL`) — the
     /// document layer itself doesn't natively know its URL in SwiftUI's
@@ -187,6 +196,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                     root: newRoot,
                     source: session.source
                 )
+                treeVersion &+= 1
             }
             indexInVault()
             writeThroughIfNeeded()
@@ -272,6 +282,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 root: newRoot,
                 source: session.source
             )
+            treeVersion &+= 1
         }
         indexInVault()
         writeThroughIfNeeded()
@@ -304,6 +315,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 root: newRoot,
                 source: session.source
             )
+            treeVersion &+= 1
         }
         indexInVault()
         writeThroughIfNeeded()

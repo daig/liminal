@@ -149,6 +149,7 @@ struct LiminalTextView: NSViewRepresentable {
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
         private var forestMarksObservation: AnyCancellable?
+        private var treeVersionObservation: AnyCancellable?
         private var preferencesObservation: AnyCancellable?
         private var fileURLObservation: AnyCancellable?
 
@@ -233,12 +234,17 @@ struct LiminalTextView: NSViewRepresentable {
             marksObservation = controller.$marks.sink { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.refreshMarkIndicators()
-                    // Forest marks resolve lazily and don't get
-                    // reanchored on edit; their byte positions can
-                    // shift even when the registry hasn't changed. Any
-                    // mark-publisher tick (which fires after every
-                    // tree-mutating edit via reanchorMarks) is a free
-                    // proxy for "tree advanced — refresh overlays."
+                }
+            }
+            // Forest marks resolve lazily — their on-screen byte ranges
+            // can shift even when the registry hasn't changed. The
+            // document bumps `treeVersion` after every tree-mutating
+            // action (textual edit, structural toggle, structural
+            // replace), so we refresh overlays there. Piggybacking on
+            // `$marks` won't work because MarkRegistry.reanchor
+            // short-circuits when the byte-mark registry is empty.
+            treeVersionObservation = document.$treeVersion.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
                     self?.refreshForestMarkIndicators()
                 }
             }
