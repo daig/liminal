@@ -2023,6 +2023,47 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
+        /// Document endpoint: jump to the same granularity `gC` would
+        /// produce at byte 0 (for `.start`) or at the last navigable byte
+        /// of the document (for `.end`). Re-uses `LiminalForest.cstVisualEntry`
+        /// so the result matches what the user would get by clicking at
+        /// the edge of the document and pressing `gC`. Backs
+        /// `:CSTDocumentStart` / `:CSTDocumentEnd`.
+        ///
+        /// Extending isn't supported here yet (matches `cstBlockPeer`'s
+        /// pattern) — a "select to end of doc" gesture would need LCA
+        /// reconstruction between the anchor and the new head across
+        /// arbitrary subtree boundaries. Left for a later slice.
+        func cstDocumentEndpoint(end: DocumentEndpoint, extending: Bool) {
+            guard !extending else { return }
+            guard ensureForestIsLive(),
+                  let tree = document.session.currentTree,
+                  let textView
+            else { return }
+            let source = textView.string
+            let byte: Int
+            switch end {
+            case .start:
+                byte = 0
+            case .end:
+                // Walk back from the last UTF-8 byte past trailing newlines /
+                // spaces / tabs so we land on a structurally meaningful byte
+                // rather than the document's terminating blank.
+                let utf8 = Array(source.utf8)
+                var last = utf8.count - 1
+                while last > 0, utf8[last] == 0x0a || utf8[last] == 0x20 || utf8[last] == 0x09 {
+                    last -= 1
+                }
+                byte = max(0, last)
+            }
+            guard let forest = LiminalForest.cstVisualEntry(
+                at: TextSize(UInt32(byte)),
+                in: tree
+            ) else { return }
+            cstForest = forest
+            mirrorCSTSelection()
+        }
+
         /// Generic forest-motion dispatch — used by every CST command
         /// that doesn't fit the four-case `CSTMotion` enum or the
         /// subtree-bounded find. Builds a `ForestMotion` from the

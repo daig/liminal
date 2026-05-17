@@ -324,6 +324,56 @@ struct LiminalCSTVisualIntegrationTests {
         )
     }
 
+    @Test(":CSTDocumentStart from mid-document jumps to the first block")
+    func documentStartFromMidDocumentLandsOnFirstBlock() throws {
+        // Three paragraphs. Place the cursor inside the second one and
+        // confirm :CSTDocumentStart jumps to the first paragraph at the
+        // same granularity gC at byte 0 would produce.
+        let source = "First paragraph here.\n\nSecond paragraph.\n\nLast paragraph here.\n"
+        let fixture = try makeFixture(source)
+        let midSecond = try utf16Offset(of: "Second", in: source) + 3
+        fixture.placeCursor(atUTF16: midSecond)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTDocumentStart" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let first = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(first) == .paragraph,
+                "document start should land on the first block (paragraph)")
+        #expect(
+            Int(first.byteRange.start.rawValue) == 0,
+            "expected first paragraph starting at byte 0; saw \(first.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test(":CSTDocumentEnd from start of document jumps to the last block")
+    func documentEndFromStartLandsOnLastBlock() throws {
+        // Confirm :CSTDocumentEnd from byte 0 lands on the last paragraph
+        // at the same granularity gC at the document's last content byte
+        // would produce, skipping trailing newlines.
+        let source = "First paragraph.\n\nMiddle.\n\nLast paragraph here.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTDocumentEnd" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let last = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(last) == .paragraph,
+                "document end should land on the last block (paragraph)")
+        let lastParagraphOffset = try utf16Offset(of: "Last paragraph here.", in: source)
+        #expect(
+            Int(last.byteRange.start.rawValue) == lastParagraphOffset,
+            "expected last paragraph at \(lastParagraphOffset); saw \(last.byteRange.start.rawValue)"
+        )
+    }
+
     @Test(":CSTNextBlock hops to the next block-level sibling, ascending from inline depth")
     func nextBlockHopsBetweenParagraphs() throws {
         let source = "First paragraph.\n\nSecond paragraph.\n"

@@ -88,6 +88,8 @@ struct CommandRegistryTests {
             "CSTNextShallowerHeading", "CSTPreviousShallowerHeading",
             "CSTNextBlock", "CSTPreviousBlock",
             "CSTLastChild",
+            // Document endpoints — finishing the A/B slice
+            "CSTDocumentStart", "CSTDocumentEnd",
         ]
         let actual = Set(registry.commandNames())
         #expect(expected.isSubset(of: actual),
@@ -263,6 +265,19 @@ struct CommandRegistryTests {
         #expect(
             registry.resolve(name: "CSTPreviousBlock", args: [], count: nil)
             == .cstBlockPeer(direction: .backward, extending: false)
+        )
+    }
+
+    @Test("CSTDocumentStart / CSTDocumentEnd dispatch cstDocumentEndpoint")
+    func documentEndpointCommands() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "CSTDocumentStart", args: [], count: nil)
+            == .cstDocumentEndpoint(end: .start, extending: false)
+        )
+        #expect(
+            registry.resolve(name: "CSTDocumentEnd", args: [], count: nil)
+            == .cstDocumentEndpoint(end: .end, extending: false)
         )
     }
 

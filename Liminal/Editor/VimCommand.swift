@@ -113,6 +113,12 @@ public enum VimCommand: Sendable, Equatable {
     /// `}` / `{` family in the old proposal).
     case cstBlockPeer(direction: ForestMotion.Direction, extending: Bool)
 
+    /// Document endpoint. Ascends to the root, then descends to the
+    /// deepest first (`.start`) or last (`.end`) navigable leaf,
+    /// peeling glue wrappers at each level. Backs `:CSTDocumentStart` /
+    /// `:CSTDocumentEnd` (vim's `gg` / `G` for the CST plane).
+    case cstDocumentEndpoint(end: DocumentEndpoint, extending: Bool)
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into
@@ -125,6 +131,15 @@ public enum VimCommand: Sendable, Equatable {
     /// dispatches the returned `VimCommand`. Silently drops if the
     /// name is unregistered or the handler returns nil.
     case executeNamedCommand(name: String, args: [String], count: Int?)
+}
+
+/// Which end of the document `:CSTDocumentStart` / `:CSTDocumentEnd`
+/// target. Carried by ``VimCommand/cstDocumentEndpoint`` so the
+/// Coordinator can pick descent direction without depending on the
+/// kernel's `ForestMotion.Direction` at the command-shape level.
+public enum DocumentEndpoint: Sendable, Equatable, Hashable {
+    case start
+    case end
 }
 
 /// Direction parameter for typed-descent chords (`f` vs `F`).

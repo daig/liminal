@@ -740,6 +740,8 @@ public final class VimController: ObservableObject {
             delegate?.cstMove(descriptor: descriptor, extending: extending)
         case .cstBlockPeer(let direction, let extending):
             delegate?.cstBlockPeer(direction: direction, extending: extending)
+        case .cstDocumentEndpoint(let end, let extending):
+            delegate?.cstDocumentEndpoint(end: end, extending: extending)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1561,6 +1563,26 @@ public final class VimController: ObservableObject {
             )
         })
 
+        // MARK: Document endpoints — vim's gg / G for the CST plane.
+        // Coordinator ascends to root then descends to the deepest first
+        // (start) or last (end) navigable leaf, peeling glue at each
+        // level. Not a single .cstMove because dispatch is two-step
+        // (ascend + descend); same composition pattern as cstBlockPeer.
+
+        registry.register(.init(
+            name: "CSTDocumentStart",
+            description: "Jump to the first navigable leaf of the document"
+        ) { _, _ in
+            .cstDocumentEndpoint(end: .start, extending: false)
+        })
+
+        registry.register(.init(
+            name: "CSTDocumentEnd",
+            description: "Jump to the last navigable leaf of the document"
+        ) { _, _ in
+            .cstDocumentEndpoint(end: .end, extending: false)
+        })
+
         return registry
     }
 
@@ -1772,6 +1794,10 @@ public protocol VimControllerDelegate: AnyObject {
     /// the next / previous `.blockItem` sibling. Backs `:CSTNextBlock`
     /// / `:CSTPreviousBlock`.
     func cstBlockPeer(direction: ForestMotion.Direction, extending: Bool)
+    /// Document endpoint: ascend to root, then descend to the deepest
+    /// first / last leaf, peeling glue wrappers at each level. Backs
+    /// `:CSTDocumentStart` / `:CSTDocumentEnd`.
+    func cstDocumentEndpoint(end: DocumentEndpoint, extending: Bool)
 }
 
 extension VimControllerDelegate {
@@ -1806,6 +1832,10 @@ extension VimControllerDelegate {
     ) {}
     public func cstBlockPeer(
         direction: ForestMotion.Direction,
+        extending: Bool
+    ) {}
+    public func cstDocumentEndpoint(
+        end: DocumentEndpoint,
         extending: Bool
     ) {}
 }
