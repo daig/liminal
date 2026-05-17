@@ -133,6 +133,9 @@ private struct WorkspaceDetail: View {
             .overlay(alignment: .bottom) {
                 CommandLinePopupHost(controller: tab.document.vimController)
             }
+            .overlay(alignment: .bottomTrailing) {
+                NarrowChainOverlayHost(controller: tab.document.vimController)
+            }
             Divider()
             StatusBar(document: tab.document, controller: tab.document.vimController)
                 .padding(.horizontal, 12)
@@ -163,6 +166,21 @@ private struct CommandLinePopupHost: View {
         )
         .animation(.easeOut(duration: 0.11),
                    value: controller.commandLineCompletions)
+    }
+}
+
+/// Observer wrapper around `VimController` for the narrow-chain
+/// visualizer. Same pattern as `CommandLinePopupHost` — SwiftUI needs
+/// the `@ObservedObject` declared on the consuming view so the
+/// controller's `@Published narrowChainPreview` actually drives
+/// re-renders.
+private struct NarrowChainOverlayHost: View {
+    @ObservedObject var controller: VimController
+
+    var body: some View {
+        NarrowChainOverlayView(entries: controller.narrowChainPreview)
+            .animation(.easeOut(duration: 0.11),
+                       value: controller.narrowChainPreview)
     }
 }
 

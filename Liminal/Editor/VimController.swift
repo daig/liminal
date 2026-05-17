@@ -62,6 +62,14 @@ public final class VimController: ObservableObject {
     /// hook is needed — `LiminalForestResolution` grades the result.
     @Published public private(set) var forestMarks = ForestMarkRegistry()
 
+    /// Snapshot of the `:CSTNarrow` descent chain — one entry per
+    /// pending Narrow press, with the kind+index the press will land
+    /// on. Empty when the descent stack is empty (no Expand history)
+    /// or when not in `.visualCST`. Drives the in-editor narrow-chain
+    /// visualizer. Updated by the Coordinator after every
+    /// stack-mutating CST command.
+    @Published public private(set) var narrowChainPreview: [NarrowChainEntry] = []
+
     /// Live buffer accumulated during `.commandLine` mode. SwiftUI
     /// status views observe this to render `:input` as the user types.
     /// Cleared on Enter (after dispatch) or Esc.
@@ -1786,6 +1794,19 @@ public final class VimController: ObservableObject {
     /// Drop a forest-mark slot. Mirrors `MarkRegistry.unset`.
     public func unsetForestMark(_ letter: Character) {
         forestMarks.unset(letter)
+    }
+
+    // MARK: - Narrow chain preview
+
+    /// Push a fresh `:CSTNarrow` chain snapshot to the controller's
+    /// observable surface. The Coordinator computes the entries (it
+    /// owns `cstForest` + `cstDescentStack`); the controller exposes
+    /// the result via `narrowChainPreview` for the in-editor
+    /// visualizer. Skips the assignment when the new value is equal
+    /// to the current one to avoid spurious SwiftUI re-renders.
+    public func updateNarrowChainPreview(_ entries: [NarrowChainEntry]) {
+        guard narrowChainPreview != entries else { return }
+        narrowChainPreview = entries
     }
 
     /// Force normal mode without dispatching `.enterNormalMode`

@@ -1044,6 +1044,38 @@ struct LiminalCSTVisualIntegrationTests {
                 "3:Expand then 3:Narrow should restore; expected \(startRange); saw \(restored.byteRange)")
     }
 
+    @Test("Narrow chain preview tracks the descent stack")
+    func narrowChainPreviewTracksStack() throws {
+        let source = "Hello **bold** world.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "bold", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+        // Empty stack → empty preview.
+        #expect(fixture.controller.narrowChainPreview.isEmpty)
+
+        // Drill down two levels, then expand twice.
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        fixture.coordinator.cstExpand(count: 2)
+
+        let preview = fixture.controller.narrowChainPreview
+        #expect(preview.count == 2,
+                "expected 2 chain entries; saw \(preview.count)")
+        #expect(preview[0].ordinal == 1, "first entry must be next-to-pop")
+        #expect(preview[1].ordinal == 2)
+        // Kind display strings are non-empty (don't pin specific kinds —
+        // the structural shape of "Hello **bold** world." is policy-dependent).
+        for entry in preview {
+            #expect(!entry.kindDisplay.isEmpty,
+                    "entry \(entry.ordinal) missing kind display name")
+        }
+
+        // Lateral motion clears the preview.
+        fixture.coordinator.cstNavigate(.nextSibling, count: 1)
+        #expect(fixture.controller.narrowChainPreview.isEmpty,
+                "lateral motion should clear the chain preview")
+    }
+
     @Test("Exiting .visualCST clears the descent stack")
     func exitingVisualCSTClearsDescentStack() throws {
         let source = "Hello world.\n"
