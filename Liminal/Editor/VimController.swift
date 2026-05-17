@@ -1,5 +1,6 @@
 import CambiumCore
 import CambiumIncremental
+import CambiumSelection
 import Combine
 import Foundation
 
@@ -54,6 +55,12 @@ public final class VimController: ObservableObject {
     /// SwiftUI views observing the controller pick up mark changes
     /// automatically.
     @Published public private(set) var marks = MarkRegistry()
+
+    /// Per-document CST forest mark store (`:CSTMark` / `:CSTJumpToMark`
+    /// / `:CSTUnmark`). Independent namespace from `marks` (byte/text
+    /// marks). Forest anchors resolve lazily so no edit-time reanchor
+    /// hook is needed — `LiminalForestResolution` grades the result.
+    @Published public private(set) var forestMarks = ForestMarkRegistry()
 
     /// Live buffer accumulated during `.commandLine` mode. SwiftUI
     /// status views observe this to render `:input` as the user types.
@@ -315,9 +322,18 @@ public final class VimController: ObservableObject {
                 .split(separator: " ", omittingEmptySubsequences: true)
                 .first
                 .map(String.init) ?? ""
-            if let cmd = commands.command(named: commandName),
-               case .single(_, let options) = cmd.argSpec {
-                entries = buildArgCompletions(query: query, options: options)
+            if let cmd = commands.command(named: commandName) {
+                switch cmd.argSpec {
+                case .single(_, let options):
+                    entries = buildArgCompletions(query: query, options: options)
+                case .dynamicSingle:
+                    entries = buildDynamicArgCompletions(
+                        query: query,
+                        commandName: commandName
+                    )
+                case .none:
+                    entries = []
+                }
             } else {
                 entries = []
             }
@@ -341,9 +357,15 @@ public final class VimController: ObservableObject {
         if let spaceIdx = input.firstIndex(of: " ") {
             let commandPart = String(input[..<spaceIdx])
             let argPart = String(input[input.index(after: spaceIdx)...])
-            if let cmd = commands.command(named: commandPart),
-               case .single(let label, _) = cmd.argSpec {
-                return (.arg(label: label), argPart)
+            if let cmd = commands.command(named: commandPart) {
+                switch cmd.argSpec {
+                case .single(let label, _):
+                    return (.arg(label: label), argPart)
+                case .dynamicSingle(let label):
+                    return (.arg(label: label), argPart)
+                case .none:
+                    break
+                }
             }
             // Either the leading token isn't a command, or it takes no
             // args — fall back to commandName stage (popup will show
@@ -375,8 +397,9 @@ public final class VimController: ObservableObject {
             let displayIndices = match.matchedIndices.map { $0 + 1 }
             let isExec: Bool
             switch cmd.argSpec {
-            case .none:        isExec = true
-            case .single:      isExec = false
+            case .none:           isExec = true
+            case .single:         isExec = false
+            case .dynamicSingle:  isExec = false
             }
             return CompletionEntry(
                 display: ":\(cmd.name)",
@@ -401,6 +424,13 @@ public final class VimController: ObservableObject {
         }
         results.sort { a, b in
             if a.1.score != b.1.score { return a.1.score > b.1.score }
+            // Exact case-sensitive match against the query wins ties.
+            // Avoids surprising substitutions: typing "a" with both "a"
+            // and "A" in the option list (`:CSTMark`) must highlight
+            // "a", not whichever sorts first alphabetically.
+            let aExact = a.0.value == query
+            let bExact = b.0.value == query
+            if aExact != bExact { return aExact }
             if a.0.value.count != b.0.value.count {
                 return a.0.value.count < b.0.value.count
             }
@@ -415,6 +445,56 @@ public final class VimController: ObservableObject {
                 matchedIndices: match.matchedIndices,
                 isExecutable: true
             )
+        }
+    }
+
+    /// Build completions for an `ArgSpec.dynamicSingle` command. The
+    /// options are computed from controller state via the delegate (so
+    /// e.g. `:CSTJumpToMark` shows only currently-set marks with
+    /// per-slot preview text + strength badge). `.lost` slots are
+    /// filtered out — they correspond to marks whose anchor no longer
+    /// resolves in the current tree.
+    private func buildDynamicArgCompletions(
+        query: String,
+        commandName: String
+    ) -> [CompletionEntry] {
+        switch commandName {
+        case "CSTJumpToMark", "CSTUnmark":
+            var rows: [(value: String, preview: ForestMarkPreview, match: MatchResult)] = []
+            for letter in forestMarks.allLetters {
+                guard let preview = delegate?.forestMarkPreview(letter: letter) else {
+                    continue
+                }
+                let value = String(letter)
+                guard let match = FuzzyMatcher.match(query: query, against: value) else {
+                    continue
+                }
+                rows.append((value, preview, match))
+            }
+            rows.sort { a, b in
+                if a.match.score != b.match.score {
+                    return a.match.score > b.match.score
+                }
+                // Same exact-case-match tiebreaker as buildArgCompletions
+                // — typing a specific letter must select that exact slot.
+                let aExact = a.value == query
+                let bExact = b.value == query
+                if aExact != bExact { return aExact }
+                return a.value < b.value
+            }
+            return rows.map { row in
+                CompletionEntry(
+                    display: row.value,
+                    acceptValue: row.value,
+                    description: row.preview.text,
+                    chordHint: nil,
+                    matchedIndices: row.match.matchedIndices,
+                    isExecutable: true,
+                    strengthBadge: row.preview.strength
+                )
+            }
+        default:
+            return []
         }
     }
 
@@ -742,6 +822,12 @@ public final class VimController: ObservableObject {
             delegate?.cstBlockPeer(direction: direction, extending: extending)
         case .cstDocumentEndpoint(let end, let extending):
             delegate?.cstDocumentEndpoint(end: end, extending: extending)
+        case .setForestMark(let letter):
+            delegate?.setForestMark(letter: letter)
+        case .jumpToForestMark(let letter):
+            delegate?.jumpToForestMark(letter: letter)
+        case .unsetForestMark(let letter):
+            delegate?.unsetForestMark(letter: letter)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1583,6 +1669,56 @@ public final class VimController: ObservableObject {
             .cstDocumentEndpoint(end: .end, extending: false)
         })
 
+        // MARK: Forest marks — vim's m<letter> / `<letter> for the CST plane.
+        // Mark / jump are .visualCST-only (Coordinator gates on cstForest);
+        // unmark works from any mode. Jump and Unmark use .dynamicSingle so
+        // the popup options reflect only currently-set slots, with per-slot
+        // preview text + strength badges (.strong / .weak / .recovered).
+
+        // Static a-z + A-Z arg spec for CSTMark — any letter is bindable;
+        // popup just enumerates the alphabet, no per-slot state.
+        let lowercase = (0x61...0x7A).compactMap { UnicodeScalar($0).map(Character.init) }
+        let uppercase = (0x41...0x5A).compactMap { UnicodeScalar($0).map(Character.init) }
+        let allMarkLetters: [ArgOption] = (lowercase + uppercase).map { ch in
+            ArgOption(value: String(ch), description: "Save current selection to slot '\(ch)'")
+        }
+
+        registry.register(.init(
+            name: "CSTMark",
+            description: "Save the current CST selection to a mark slot (a-z, A-Z)",
+            argSpec: .single(label: "letter", options: allMarkLetters)
+        ) { args, _ in
+            guard let arg = args.first,
+                  let ch = arg.first, arg.count == 1,
+                  ForestMarkRegistry.isValidMarkName(ch)
+            else { return nil }
+            return .setForestMark(letter: ch)
+        })
+
+        registry.register(.init(
+            name: "CSTJumpToMark",
+            description: "Restore a saved CST selection by slot letter",
+            argSpec: .dynamicSingle(label: "mark")
+        ) { args, _ in
+            guard let arg = args.first,
+                  let ch = arg.first, arg.count == 1,
+                  ForestMarkRegistry.isValidMarkName(ch)
+            else { return nil }
+            return .jumpToForestMark(letter: ch)
+        })
+
+        registry.register(.init(
+            name: "CSTUnmark",
+            description: "Drop a saved CST selection by slot letter",
+            argSpec: .dynamicSingle(label: "mark")
+        ) { args, _ in
+            guard let arg = args.first,
+                  let ch = arg.first, arg.count == 1,
+                  ForestMarkRegistry.isValidMarkName(ch)
+            else { return nil }
+            return .unsetForestMark(letter: ch)
+        })
+
         return registry
     }
 
@@ -1611,6 +1747,21 @@ public final class VimController: ObservableObject {
     /// construction — no re-anchoring needed.
     public func restoreMarks(_ marks: MarkRegistry) {
         self.marks = marks
+    }
+
+    // MARK: - Forest mark registry plumbing
+
+    /// Register a forest-anchored mark. Called by the Coordinator after
+    /// the controller dispatches `.setForestMark(letter)` (the
+    /// Coordinator owns the live `cstForest` → `LiminalForestAnchor`
+    /// capture).
+    public func setForestMark(_ letter: Character, anchor: LiminalForestAnchor) {
+        forestMarks.set(letter, anchor: anchor)
+    }
+
+    /// Drop a forest-mark slot. Mirrors `MarkRegistry.unset`.
+    public func unsetForestMark(_ letter: Character) {
+        forestMarks.unset(letter)
     }
 
     /// Force normal mode without dispatching `.enterNormalMode`
@@ -1798,6 +1949,20 @@ public protocol VimControllerDelegate: AnyObject {
     /// first / last leaf, peeling glue wrappers at each level. Backs
     /// `:CSTDocumentStart` / `:CSTDocumentEnd`.
     func cstDocumentEndpoint(end: DocumentEndpoint, extending: Bool)
+    /// Capture `cstForest` to forest-mark slot `letter`. No-op when
+    /// not in `.visualCST` (no live `cstForest` to capture).
+    func setForestMark(letter: Character)
+    /// Restore `cstForest` from forest-mark slot `letter`. No-op when
+    /// not in `.visualCST`, when the slot is empty, or when the
+    /// anchor resolves to `.lost`.
+    func jumpToForestMark(letter: Character)
+    /// Drop forest-mark slot `letter` from the registry.
+    func unsetForestMark(letter: Character)
+    /// Render a one-line preview of forest-mark slot `letter` for the
+    /// completion popup (e.g. `"heading: 'Architecture'"`) along with
+    /// the slot's current resolution strength. Returns `nil` when the
+    /// slot is empty or its anchor resolves to `.lost`.
+    func forestMarkPreview(letter: Character) -> ForestMarkPreview?
 }
 
 extension VimControllerDelegate {
@@ -1838,4 +2003,8 @@ extension VimControllerDelegate {
         end: DocumentEndpoint,
         extending: Bool
     ) {}
+    public func setForestMark(letter: Character) {}
+    public func jumpToForestMark(letter: Character) {}
+    public func unsetForestMark(letter: Character) {}
+    public func forestMarkPreview(letter: Character) -> ForestMarkPreview? { nil }
 }

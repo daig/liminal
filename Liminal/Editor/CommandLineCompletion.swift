@@ -40,6 +40,10 @@ public struct CompletionEntry: Sendable, Equatable, Identifiable {
     /// accepting them advances the input to the argument stage instead.
     public let isExecutable: Bool
 
+    /// Strength tier shown as a trailing badge (only present for forest
+    /// mark options at the moment). `nil` for every other entry.
+    public let strengthBadge: ForestMarkStrength?
+
     public var id: String { display }
 
     public init(
@@ -48,7 +52,8 @@ public struct CompletionEntry: Sendable, Equatable, Identifiable {
         description: String,
         chordHint: String?,
         matchedIndices: [Int],
-        isExecutable: Bool
+        isExecutable: Bool,
+        strengthBadge: ForestMarkStrength? = nil
     ) {
         self.display = display
         self.acceptValue = acceptValue
@@ -56,6 +61,7 @@ public struct CompletionEntry: Sendable, Equatable, Identifiable {
         self.chordHint = chordHint
         self.matchedIndices = matchedIndices
         self.isExecutable = isExecutable
+        self.strengthBadge = strengthBadge
     }
 }
 

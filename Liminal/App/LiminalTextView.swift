@@ -2064,6 +2064,78 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
+        // MARK: - Forest marks
+
+        /// Capture the live `cstForest` to forest-mark slot `letter`.
+        /// Silent no-op when not in `.visualCST` (no forest to capture).
+        /// Multi-cell selections are preserved automatically because
+        /// `LiminalForestAnchor.from(forest)` records both endpoint
+        /// child indices and their fingerprints.
+        func setForestMark(letter: Character) {
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            let anchor = LiminalForestAnchor.from(forest)
+            document.vimController.setForestMark(letter, anchor: anchor)
+        }
+
+        /// Restore `cstForest` from forest-mark slot `letter`. Silent
+        /// no-op when not in `.visualCST` (we don't lift the user out
+        /// of normal mode for v1 — that's a future enhancement).
+        /// `.lost` resolutions drop the slot from the registry so it
+        /// stops appearing in the popup.
+        func jumpToForestMark(letter: Character) {
+            guard ensureForestIsLive(), cstForest != nil,
+                  let tree = document.session.currentTree,
+                  let anchor = document.vimController.forestMarks.anchor(named: letter)
+            else { return }
+            switch anchor.resolve(in: tree) {
+            case .strong(let forest), .weak(let forest), .recovered(let forest):
+                cstForest = forest
+                mirrorCSTSelection()
+            case .lost:
+                document.vimController.unsetForestMark(letter)
+            }
+        }
+
+        /// Drop forest-mark slot `letter`. Works from any mode; the
+        /// registry mutation doesn't depend on the live selection.
+        func unsetForestMark(letter: Character) {
+            document.vimController.unsetForestMark(letter)
+        }
+
+        /// One-line preview + strength tier for forest-mark slot
+        /// `letter`. Returns `nil` for empty slots and for slots whose
+        /// anchor resolves to `.lost` (so the popup filters them out).
+        func forestMarkPreview(letter: Character) -> ForestMarkPreview? {
+            guard let tree = document.session.currentTree,
+                  let anchor = document.vimController.forestMarks.anchor(named: letter)
+            else { return nil }
+            let (forest, strength): (LiminalForest, ForestMarkStrength)
+            switch anchor.resolve(in: tree) {
+            case .strong(let f):    (forest, strength) = (f, .strong)
+            case .weak(let f):      (forest, strength) = (f, .weak)
+            case .recovered(let f): (forest, strength) = (f, .recovered)
+            case .lost:             return nil
+            }
+            let headKind = forest.parent.withCursor { cursor in
+                cursor.green { $0.child(at: forest.headChildIndex) }.kind
+            }
+            let source = textView?.string ?? ""
+            let snippet = previewSnippet(for: forest, in: source)
+            let text = "\(headKind.displayName): \(snippet)"
+            return ForestMarkPreview(text: text, strength: strength)
+        }
+
+        private func previewSnippet(for forest: LiminalForest, in source: String) -> String {
+            let start = Int(forest.byteRange.start.rawValue)
+            let length = Int(forest.byteRange.length.rawValue)
+            let end = start + length
+            let utf8 = Array(source.utf8)
+            guard start >= 0, end <= utf8.count, start < end else { return "" }
+            let slice = Array(utf8[start..<end])
+            let raw = String(decoding: slice, as: UTF8.self)
+            return CSTPreview.format(raw, max: 40)
+        }
+
         /// Generic forest-motion dispatch — used by every CST command
         /// that doesn't fit the four-case `CSTMotion` enum or the
         /// subtree-bounded find. Builds a `ForestMotion` from the

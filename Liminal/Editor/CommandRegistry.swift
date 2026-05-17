@@ -54,6 +54,12 @@ public enum ArgSpec: Sendable, Equatable {
     /// `options`. `label` is the human-readable name shown in the
     /// popup header (e.g. `"kind"` for `:CSTFind kind`).
     case single(label: String, options: [ArgOption])
+    /// Marker case: like `.single` but options are computed at completion
+    /// time from controller state. The controller's
+    /// `dynamicArgOptions(forCommandNamed:)` switches on the command
+    /// name and emits a fresh option list (e.g. `:CSTJumpToMark`
+    /// emits only currently-set mark letters with previews).
+    case dynamicSingle(label: String)
 }
 
 /// One option in a `.single` argument spec.

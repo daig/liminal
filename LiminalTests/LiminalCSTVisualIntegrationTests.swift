@@ -730,6 +730,107 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(final == initial || final.isEmpty,
                 "stale-forest navigation should be safe (no crash, range either preserved or cleared)")
     }
+
+    // MARK: - Slice C: forest marks
+
+    @Test(":CSTMark + :CSTJumpToMark restores the saved forest after navigating away")
+    func forestMarkThenJumpRestoresForest() throws {
+        let source = "# First\n\nMiddle paragraph.\n\n# Last\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "Middle", in: source) + 2)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let savedHeadByte = try #require(fixture.coordinator.cstForest).byteRange.start.rawValue
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        // Mark must have landed in the controller's registry.
+        #expect(fixture.controller.forestMarks.anchor(named: "a") != nil)
+
+        // Navigate to a different block; cstForest should change.
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTDocumentEnd" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+        let postNavByte = try #require(fixture.coordinator.cstForest).byteRange.start.rawValue
+        #expect(postNavByte != savedHeadByte, "expected navigation to move cstForest")
+
+        // Jump back via the mark.
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTJumpToMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let restoredByte = try #require(fixture.coordinator.cstForest).byteRange.start.rawValue
+        #expect(restoredByte == savedHeadByte,
+                "expected jump to restore byte \(savedHeadByte); saw \(restoredByte)")
+    }
+
+    @Test(":CSTJumpToMark popup shows only currently-set marks with previews + strength badges")
+    func forestMarkDynamicArgCompletionsShowOnlySetMarks() throws {
+        let source = "# First\n\nMiddle.\n\n# Last\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTDocumentEnd" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark c" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        // Open the jump popup by typing ":CSTJumpToMark " (trailing space).
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTJumpToMark " { _ = fixture.controller.handle(.char(ch)) }
+
+        let entries = fixture.controller.commandLineCompletions
+        #expect(entries.count == 2, "expected exactly two mark slots in completions; saw \(entries.count)")
+        let acceptValues = Set(entries.map(\.acceptValue))
+        #expect(acceptValues == ["a", "c"])
+        // Strength badges populated for both (freshly set marks must be .strong).
+        for entry in entries {
+            #expect(entry.strengthBadge == .strong, "fresh mark slot should resolve as .strong")
+            #expect(!entry.description.isEmpty, "expected per-slot preview text")
+        }
+    }
+
+    @Test(":CSTMark from normal mode is a silent no-op")
+    func forestMarkFromNormalModeIsNoOp() throws {
+        let source = "# Heading\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        // Stay in .normal — do NOT press gC.
+        #expect(fixture.controller.mode == .normal)
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        #expect(fixture.controller.forestMarks.anchor(named: "a") == nil,
+                "mark must not be saved when no cstForest is live")
+    }
+
+    @Test(":CSTUnmark drops the slot from the registry")
+    func forestMarkUnmarkDropsSlot() throws {
+        let source = "# Heading\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark x" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+        #expect(fixture.controller.forestMarks.anchor(named: "x") != nil)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTUnmark x" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+        #expect(fixture.controller.forestMarks.anchor(named: "x") == nil)
+    }
 }
 
 // MARK: - Test fixture

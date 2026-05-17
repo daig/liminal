@@ -119,6 +119,19 @@ public enum VimCommand: Sendable, Equatable {
     /// `:CSTDocumentEnd` (vim's `gg` / `G` for the CST plane).
     case cstDocumentEndpoint(end: DocumentEndpoint, extending: Bool)
 
+    /// Save the current `cstForest` to a forest-mark slot. No-op when
+    /// not in `.visualCST`. Backs `:CSTMark <letter>`.
+    case setForestMark(letter: Character)
+
+    /// Restore `cstForest` from a forest-mark slot. No-op when not in
+    /// `.visualCST` or when the slot is empty / `.lost`. Backs
+    /// `:CSTJumpToMark <letter>`.
+    case jumpToForestMark(letter: Character)
+
+    /// Drop a forest-mark slot. Backs `:CSTUnmark <letter>`. Works from
+    /// any mode (it's a registry mutation, not a selection change).
+    case unsetForestMark(letter: Character)
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into

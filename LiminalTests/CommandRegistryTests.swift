@@ -90,6 +90,8 @@ struct CommandRegistryTests {
             "CSTLastChild",
             // Document endpoints — finishing the A/B slice
             "CSTDocumentStart", "CSTDocumentEnd",
+            // Slice C — forest marks
+            "CSTMark", "CSTJumpToMark", "CSTUnmark",
         ]
         let actual = Set(registry.commandNames())
         #expect(expected.isSubset(of: actual),
@@ -309,8 +311,68 @@ struct CommandRegistryTests {
                 #expect(options.count == 9, "expected the full 9-kind option list for \(name)")
             case .none:
                 Issue.record("\(name) should have .single argSpec, not .none")
+            case .dynamicSingle:
+                Issue.record("\(name) should have .single argSpec, not .dynamicSingle")
             }
         }
+    }
+
+    @Test("CSTMark argSpec lists all 52 letters (a-z + A-Z)")
+    func cstMarkArgSpecListsAllLetters() throws {
+        let registry = VimController.defaultCommands()
+        let cmd = try #require(registry.command(named: "CSTMark"))
+        switch cmd.argSpec {
+        case .single(let label, let options):
+            #expect(label == "letter")
+            #expect(options.count == 52, "expected 26 lowercase + 26 uppercase letter options")
+            #expect(options.contains(where: { $0.value == "a" }))
+            #expect(options.contains(where: { $0.value == "Z" }))
+        case .none, .dynamicSingle:
+            Issue.record("CSTMark should have .single argSpec with letter options")
+        }
+    }
+
+    @Test("CSTJumpToMark and CSTUnmark use .dynamicSingle for their options")
+    func jumpAndUnmarkUseDynamicSingle() throws {
+        let registry = VimController.defaultCommands()
+        for name in ["CSTJumpToMark", "CSTUnmark"] {
+            let cmd = try #require(registry.command(named: name))
+            switch cmd.argSpec {
+            case .dynamicSingle(let label):
+                #expect(label == "mark", "expected dynamic label 'mark' for \(name)")
+            case .single, .none:
+                Issue.record("\(name) should have .dynamicSingle argSpec")
+            }
+        }
+    }
+
+    @Test("CSTMark handler dispatches setForestMark with the letter")
+    func cstMarkHandlerDispatches() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "CSTMark", args: ["a"], count: nil)
+            == .setForestMark(letter: "a")
+        )
+        // Non-letter arg → handler returns nil → registry returns nil.
+        #expect(registry.resolve(name: "CSTMark", args: ["1"], count: nil) == nil)
+    }
+
+    @Test("CSTJumpToMark handler dispatches jumpToForestMark with the letter")
+    func cstJumpToMarkHandlerDispatches() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "CSTJumpToMark", args: ["B"], count: nil)
+            == .jumpToForestMark(letter: "B")
+        )
+    }
+
+    @Test("CSTUnmark handler dispatches unsetForestMark with the letter")
+    func cstUnmarkHandlerDispatches() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "CSTUnmark", args: ["m"], count: nil)
+            == .unsetForestMark(letter: "m")
+        )
     }
 
     @Test("CSTFind handler parses the kind arg into the right VimCommand")

@@ -64,7 +64,9 @@ private struct CommandLineRow: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let chord = entry.chordHint {
+            if let badge = entry.strengthBadge {
+                StrengthBadgeView(strength: badge)
+            } else if let chord = entry.chordHint {
                 Text(chord)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.primary)
@@ -99,6 +101,63 @@ private struct CommandLineRow: View {
             attributed[start..<end].foregroundColor = .accentColor
         }
         return attributed
+    }
+}
+
+/// Trailing pill rendered for forest-mark completion rows. Mirrors the
+/// chord-hint pill's shape but uses tier-specific styling so the user
+/// sees at a glance whether a jump will land cleanly (`.strong`), with
+/// intra-node clamping (`.weak`), or on a recovered ancestor
+/// (`.recovered`).
+private struct StrengthBadgeView: View {
+    let strength: ForestMarkStrength
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if let glyph {
+                Text(glyph)
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        }
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var label: String {
+        switch strength {
+        case .strong:    return "ok"
+        case .weak:      return "weak"
+        case .recovered: return "snapped"
+        }
+    }
+
+    private var glyph: String? {
+        switch strength {
+        case .strong:    return nil
+        case .weak:      return nil
+        case .recovered: return "↳"
+        }
+    }
+
+    private var foreground: Color {
+        switch strength {
+        case .strong:    return .accentColor
+        case .weak:      return .secondary
+        case .recovered: return .orange
+        }
+    }
+
+    private var background: Color {
+        switch strength {
+        case .strong:    return Color.accentColor.opacity(0.18)
+        case .weak:      return Color.secondary.opacity(0.14)
+        case .recovered: return Color.orange.opacity(0.18)
+        }
     }
 }
 
