@@ -83,13 +83,26 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// to issue a defensive remove.
     private var isFilePresenterRegistered: Bool = false
 
-    /// Mtime of the file the last time we wrote (or read) it. Used to
-    /// distinguish our own coordinated atomic writes — which fire
-    /// `presentedItemDidChange` on the presenter as a delete-then-create
-    /// — from genuine external changes. When `presentedItemDidChange`
-    /// arrives, we stat and compare: if the mtime hasn't advanced past
-    /// `lastSeenDiskMtime`, suppress the prompt.
-    private var lastSeenDiskMtime: Date?
+    /// Snapshot of disk content as of our last synchronization with
+    /// it — set after every successful read (initial load, reload)
+    /// AND after every successful write. Used to distinguish:
+    /// - our own coordinated atomic-write echoes
+    /// - peer-presenter round-trips that produce identical bytes
+    ///   (e.g. another editor opens the file and saves without
+    ///   changing anything)
+    /// - iCloud daemon round-trips
+    /// from genuine external content changes.
+    ///
+    /// **Why content, not mtime.** mtime-based coalescing was fragile:
+    /// macOS doesn't guarantee mtime advances reliably on atomic
+    /// temp-rename writes when multiple `NSFilePresenter`s are
+    /// registered for the same URL; sub-second FS time resolution can
+    /// alias rapid sequential saves; iCloud daemon writes can advance
+    /// mtime without changing bytes. Comparing actual content is the
+    /// definitive question — "is what's on disk the same bytes I last
+    /// synced with?" — and answers it correctly regardless of any of
+    /// those failure modes.
+    private var lastObservedDiskSource: String?
 
     /// `true` when the document was opened against an evicted iCloud
     /// placeholder (empty bytes). The eventual download completion
@@ -141,10 +154,14 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             isFilePresenterRegistered = true
         }
 
-        // Initialize lastSeenDiskMtime from the file's current mtime
-        // so the first presenter callback that might fire from our own
-        // post-load activity has the right baseline.
-        lastSeenDiskMtime = currentDiskMtime(for: url)
+        // Initialize the self-write baseline from the in-memory
+        // buffer. Both init paths populate `session.source` from disk
+        // bytes BEFORE calling setFileURL, so the buffer reflects what
+        // disk holds right now. (If we ever introduce a path that
+        // calls setFileURL with a buffer that's already diverged from
+        // disk, we'd want a coordinated re-read here — currently no
+        // such path exists.)
+        lastObservedDiskSource = url == nil ? nil : session.source
 
         // Kick the ubiquity check for the new URL. No-op for local
         // files; for evicted iCloud files it starts a download and
@@ -430,16 +447,20 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     func writeToBackingFileIfPossible() -> Bool {
         guard writesThroughToFile, let fileURL else { return false }
         do {
+            let writtenSource = session.source
             try CoordinatedFileIO.write(
-                Data(session.source.utf8),
+                Data(writtenSource.utf8),
                 to: fileURL,
                 presenter: filePresenter
             )
-            // Snap the self-write coalescing mtime forward BEFORE the
+            // Snap the self-write content baseline forward BEFORE the
             // vault-fingerprint update — `presentedItemDidChange` may
             // already be dispatched on the presenter queue and the
-            // race window is short.
-            lastSeenDiskMtime = currentDiskMtime(for: fileURL)
+            // race window is short. We record what we *wrote*, not
+            // what we'd re-read from disk: avoids a redundant read
+            // and is correct by construction (atomic write means disk
+            // == buffer the instant the write returns).
+            lastObservedDiskSource = writtenSource
             // The file on disk now matches the buffer — snap this note's
             // vault fingerprint forward so the watcher doesn't mistake
             // our own save for an external edit, then opportunistically
@@ -596,11 +617,17 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? []
         hasUnresolvedConflicts = !conflicts.isEmpty
 
-        let nowMtime = currentDiskMtime(for: url)
-        if let last = lastSeenDiskMtime, let now = nowMtime, last == now,
+        // Content-based self-write coalescing (replaces the prior
+        // mtime check). Read disk via the coordinator, compare bytes
+        // to our last-synced baseline. If they match, this is an
+        // echo of one of our own writes OR an unrelated write that
+        // produced identical bytes — either way, there's nothing
+        // for the user to decide. Coalesce.
+        let currentDiskSource = readCurrentDiskSource(url: url)
+        if let baseline = lastObservedDiskSource,
+           let current = currentDiskSource,
+           current == baseline,
            conflicts.isEmpty {
-            // Self-write echo — coordinator saw our own atomic temp-rename,
-            // AND no new conflict version arrived alongside.
             return
         }
         // Real external change OR new conflict version.
@@ -617,6 +644,23 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             name: Self.externalChangeNotification,
             object: self
         )
+    }
+
+    /// Coordinated read of the current disk content as a String, or
+    /// nil if the read fails or the bytes aren't valid UTF-8. Used
+    /// by `handleExternalChangeOrConflict` for self-write coalescing
+    /// — comparing actual content is the definitive answer to "is
+    /// what's on disk the same as what I last synced with?"
+    @MainActor
+    private func readCurrentDiskSource(url: URL) -> String? {
+        do {
+            let data = try CoordinatedFileIO.read(at: url, presenter: filePresenter) {
+                try Data(contentsOf: $0)
+            }
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return nil
+        }
     }
 
     /// Triggered when the presenter reports that the backing file
@@ -659,7 +703,12 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             vimController.forceNormalMode()
             // Re-index so the vault link index reflects the new content.
             indexInVault()
-            lastSeenDiskMtime = currentDiskMtime(for: url)
+            // After a reload, our buffer matches what we just read
+            // from disk; that's the new self-write baseline. Any
+            // subsequent presenter callback comparing disk content to
+            // this string will correctly suppress until a real
+            // external change lands.
+            lastObservedDiskSource = source
         } catch {
             NSLog("LiminalSourceDocument: reload failed for \(url.path): \(error)")
         }
@@ -816,10 +865,4 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         // done with the metadata query.
     }
 
-    /// Stat the backing file and return its modification date. Used
-    /// for self-write coalescing.
-    private func currentDiskMtime(for url: URL?) -> Date? {
-        guard let url else { return nil }
-        return try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
-    }
 }
