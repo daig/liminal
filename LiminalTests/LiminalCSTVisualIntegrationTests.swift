@@ -147,6 +147,74 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(after == before, "opaque-block descend should not move selection")
     }
 
+    // MARK: - Glue-skip semantics (step 3a)
+
+    @Test("firstChild glue-skips inlineContent and lands on the first inline child")
+    func firstChildSkipsInlineContentGlueInOneStep() throws {
+        let fixture = try makeFixture("Hello world.\n")
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        let entry = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(entry) == .paragraph, "entry should be the paragraph")
+
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        let descended = try #require(fixture.coordinator.cstForest)
+        #expect(
+            headKind(descended) == .inlineText,
+            "firstChild should glue-skip inlineContent and land on inlineText; saw \(headKind(descended))"
+        )
+    }
+
+    @Test("parent glue-skips inlineContent and lands on the enclosing paragraph in one step")
+    func parentSkipsInlineContentGlueInOneStep() throws {
+        let fixture = try makeFixture("Hello world.\n")
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        // Descend to inlineText so we have a glue ancestor (inlineContent) to skip.
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        #expect(headKind(try #require(fixture.coordinator.cstForest)) == .inlineText)
+
+        fixture.coordinator.cstNavigate(.parent, count: 1)
+        let ascended = try #require(fixture.coordinator.cstForest)
+        #expect(
+            headKind(ascended) == .paragraph,
+            "parent should glue-skip inlineContent and land on paragraph; saw \(headKind(ascended))"
+        )
+    }
+
+    @Test("h after l restores the entry kind — one logical hop each way through glue")
+    func parentReversesFirstChildInOneStep() throws {
+        let fixture = try makeFixture("Hello world.\n")
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        let entryKind = headKind(try #require(fixture.coordinator.cstForest))
+
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        fixture.coordinator.cstNavigate(.parent, count: 1)
+        let restoredKind = headKind(try #require(fixture.coordinator.cstForest))
+
+        #expect(
+            restoredKind == entryKind,
+            "h after l should compress back to the entry kind; entry=\(entryKind), restored=\(restoredKind)"
+        )
+    }
+
+    @Test("extendCSTSelection on .parent is a no-op (kernel returns nil, forest preserved)")
+    func extendOnParentIsNoOp() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        let before = try #require(fixture.coordinator.cstForest)
+
+        fixture.coordinator.extendCSTSelection(.parent, count: 1)
+        let after = try #require(fixture.coordinator.cstForest)
+        #expect(after == before, "extend on .parent should leave the forest unchanged")
+
+        fixture.coordinator.extendCSTSelection(.firstChild, count: 1)
+        let after2 = try #require(fixture.coordinator.cstForest)
+        #expect(after2 == before, "extend on .firstChild should leave the forest unchanged")
+    }
+
     @Test("swapEnds doesn't change the byte range")
     func swapEndsPreservesByteRange() throws {
         let fixture = try makeFixture("First.\n\nSecond.\n")
@@ -396,6 +464,12 @@ private func cstSelectionRange(_ textView: VimTextView) throws -> NSRange {
 private func utf16Offset(of needle: String, in source: String) throws -> Int {
     let range = try #require(source.range(of: needle))
     return source.utf16.distance(from: source.utf16.startIndex, to: range.lowerBound)
+}
+
+private func headKind(_ forest: LiminalForest) -> LiminalKind {
+    forest.parent.withCursor { cursor in
+        cursor.green { green in green.child(at: forest.headChildIndex) }.kind
+    }
 }
 
 private func firstChildListForestInFirstListItem(

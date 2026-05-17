@@ -180,8 +180,10 @@ struct LiminalTextView: NSViewRepresentable {
         /// delegate methods; cleared on visual-mode exit. Holds a
         /// `SyntaxNodeHandle` into the tree it was captured against;
         /// `ensureForestIsLive()` validates the tree hasn't been
-        /// replaced before every navigation call.
-        private var cstForest: LiminalForest?
+        /// replaced before every navigation call. Internal (not
+        /// private) so `@testable` integration tests can assert
+        /// structural identity after motion dispatch.
+        internal var cstForest: LiminalForest?
 
         init(document: LiminalSourceDocument) {
             self.document = document
@@ -1911,44 +1913,48 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         /// Slide the forest to a new singleton via `motion`, repeated
-        /// `count` times. Stops at the first step that has no successor
-        /// (rather than failing the whole call) so `9j` on a list of
-        /// five items lands on the last item instead of doing nothing.
+        /// `count` times. Saturates at the last successful position
+        /// when a step has no successor (so `9j` on a five-item list
+        /// lands on the last item rather than failing).
+        ///
+        /// `h` / `l` (parent / firstChild) now glue-skip: one logical
+        /// step walks past structural wrapper kinds (``inlineContent``,
+        /// ``fields``, etc.) to land on a meaningful structural unit.
         func cstNavigate(_ motion: CSTMotion, count: Int) {
-            guard ensureForestIsLive(), var forest = cstForest else { return }
-            for _ in 0..<max(1, count) {
-                let next: LiminalForest?
-                switch motion {
-                case .parent:           next = forest.parentForest()
-                case .firstChild:       next = forest.firstChildForest()
-                case .nextSibling:      next = forest.slidForward()
-                case .previousSibling:  next = forest.slidBackward()
-                }
-                guard let next else { break }
-                forest = next
-            }
-            cstForest = forest
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstForest = forest.moved(
+                by: Self.forestMotion(for: motion),
+                extending: false,
+                count: count
+            ) ?? forest
             mirrorCSTSelection()
         }
 
         /// Extend the forest's head endpoint `count` siblings in
-        /// `motion`'s direction. Anchor stays fixed. Parent/firstChild
-        /// don't extend (no meaning), so those cases are no-ops.
+        /// `motion`'s direction. Anchor stays fixed. `parent` /
+        /// `firstChild` aren't meaningful as extends — the kernel
+        /// returns nil for those, the forest stays put.
         func extendCSTSelection(_ motion: CSTMotion, count: Int) {
-            guard ensureForestIsLive(), var forest = cstForest else { return }
-            for _ in 0..<max(1, count) {
-                let next: LiminalForest?
-                switch motion {
-                case .nextSibling:      next = forest.extendedForward()
-                case .previousSibling:  next = forest.extendedBackward()
-                case .parent, .firstChild:
-                    return
-                }
-                guard let next else { break }
-                forest = next
-            }
-            cstForest = forest
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstForest = forest.moved(
+                by: Self.forestMotion(for: motion),
+                extending: true,
+                count: count
+            ) ?? forest
             mirrorCSTSelection()
+        }
+
+        /// Translate a user-facing ``CSTMotion`` chord into the kernel
+        /// motion that backs it. `.parent` / `.firstChild` carry the
+        /// `.excluding(.glueWrapper)` predicate so a single press
+        /// compresses through any chain of structural wrappers.
+        private static func forestMotion(for motion: CSTMotion) -> ForestMotion {
+            switch motion {
+            case .parent:           return .ancestor(.excluding(.glueWrapper))
+            case .firstChild:       return .descendant(.excluding(.glueWrapper))
+            case .nextSibling:      return .siblingForward()
+            case .previousSibling:  return .siblingBackward()
+            }
         }
 
         /// Swap anchor and head endpoints. The visible byte range is
