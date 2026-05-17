@@ -293,6 +293,37 @@ struct LiminalCSTVisualIntegrationTests {
         )
     }
 
+    @Test(":CSTLastChild on mixed-inline paragraph lands on last inlineText (regression)")
+    func lastChildPeelsThroughInlineContentGlue() throws {
+        // Regression for the user-reported asymmetry: CSTFirstChild from
+        // a paragraph peels through the inlineContent glue wrapper and
+        // lands on the FIRST inlineText run ("This is "); CSTLastChild
+        // was landing on the inlineContent wrapper itself instead of the
+        // LAST inlineText run (" text.").
+        //
+        // Fix routes both commands through the kernel via descendant axis
+        // with .excluding(.glueWrapper): forward + backward symmetric.
+        let source = "This is **bold** and *italic* text.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        #expect(headKind(try #require(fixture.coordinator.cstForest)) == .paragraph)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTLastChild" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let last = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(last) == .inlineText,
+                "expected to land on an inlineText leaf, not the inlineContent wrapper")
+        let trailingOffset = try utf16Offset(of: " text.", in: source)
+        #expect(
+            Int(last.byteRange.start.rawValue) == trailingOffset,
+            "expected last text run starting at \(trailingOffset); saw \(last.byteRange.start.rawValue)"
+        )
+    }
+
     @Test(":CSTNextBlock hops to the next block-level sibling, ascending from inline depth")
     func nextBlockHopsBetweenParagraphs() throws {
         let source = "First paragraph.\n\nSecond paragraph.\n"

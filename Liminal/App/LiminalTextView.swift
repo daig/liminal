@@ -2023,17 +2023,6 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
-        /// Descend to the head's last navigable child (mirrors
-        /// `cstNavigate(.firstChild, ...)` for the opposite end of
-        /// the children list). Backs `:CSTLastChild`.
-        func cstLastChild(extending: Bool) {
-            guard !extending else { return }
-            guard ensureForestIsLive(), let forest = cstForest else { return }
-            guard let last = forest.lastChildForest() else { return }
-            cstForest = last
-            mirrorCSTSelection()
-        }
-
         /// Generic forest-motion dispatch — used by every CST command
         /// that doesn't fit the four-case `CSTMotion` enum or the
         /// subtree-bounded find. Builds a `ForestMotion` from the

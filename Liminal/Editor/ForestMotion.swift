@@ -37,8 +37,12 @@ public struct ForestMotion: Sendable {
     }
 
     /// Walk direction along the axis. ``Axis/ancestor`` ignores direction
-    /// (only "up" exists); ``Axis/descendant`` ignores direction (only
-    /// "down" exists). The factory helpers fix `.forward` for those axes.
+    /// (only "up" exists). ``Axis/descendant`` uses direction to pick
+    /// which child-chain to walk at each level: `.forward` follows the
+    /// first-child chain (the kind of descent backing `:CSTFirstChild`);
+    /// `.backward` follows the last-child chain (the kind of descent
+    /// backing `:CSTLastChild`). Predicate is applied at each level the
+    /// same way regardless of direction.
     public enum Direction: Sendable, Equatable, Hashable {
         case forward, backward
     }
@@ -128,9 +132,18 @@ public extension ForestMotion {
         ForestMotion(axis: .ancestor, direction: .forward, predicate: predicate)
     }
 
-    /// Direction is irrelevant for the descendant axis.
+    /// Descend through the first-child chain at each level, stopping at
+    /// the first child where `predicate` matches. The kind of descent
+    /// backing `:CSTFirstChild`.
     static func descendant(_ predicate: Predicate = .any) -> ForestMotion {
         ForestMotion(axis: .descendant, direction: .forward, predicate: predicate)
+    }
+
+    /// Descend through the last-child chain at each level, stopping at
+    /// the first child where `predicate` matches. The kind of descent
+    /// backing `:CSTLastChild`.
+    static func descendantBackward(_ predicate: Predicate = .any) -> ForestMotion {
+        ForestMotion(axis: .descendant, direction: .backward, predicate: predicate)
     }
 
     static func preorderForward(_ predicate: Predicate = .any) -> ForestMotion {
@@ -158,13 +171,21 @@ public extension ForestMotion {
 // MARK: - Additional forest navigation primitives
 
 public extension SyntaxForest where Policy == LiminalCSTPolicy {
-    /// Descend to the LAST navigable child of the head's pointed node.
-    /// Mirrors Cambium's ``firstChildForest`` but lands on the last
-    /// sibling. Implemented as `firstChildForest()` + `slidForward()`
-    /// in a tight loop (Cambium doesn't expose a direct primitive).
+    /// Single-level descent to the LAST navigable child of the head's
+    /// pointed node. Mirrors Cambium's ``firstChildForest`` but lands on
+    /// the last sibling. Implemented as `firstChildForest()` +
+    /// `slidForward()` in a tight loop (Cambium doesn't expose a direct
+    /// primitive).
+    ///
     /// Returns `nil` for the same reasons as `firstChildForest()`:
     /// head pointing at a token, an opaque-policy parent, or a parent
     /// with no navigable children.
+    ///
+    /// This is a primitive — it does NOT recurse through glue wrappers.
+    /// Callers that want "the user-facing last child" should drive the
+    /// kernel via `ForestMotion.descendantBackward(.excluding(.glueWrapper))`
+    /// (which loops this primitive at each level, mirroring the way
+    /// `:CSTFirstChild` peels through glue via `descendant(.excluding(...))`).
     func lastChildForest() -> SyntaxForest<Policy>? {
         guard let first = firstChildForest() else { return nil }
         var current = first
@@ -308,6 +329,7 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
         case .descendant:
             guard !extending else { return nil }
             return descendantStep(
+                direction: motion.direction,
                 predicate: motion.predicate,
                 current: current,
                 start: start
@@ -383,18 +405,34 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
     }
 
     private static func descendantStep(
+        direction: ForestMotion.Direction,
         predicate: ForestMotion.Predicate,
         current: SyntaxForest<Policy>,
         start: SyntaxForest<Policy>
     ) -> SyntaxForest<Policy>? {
         var cursor = current
-        while let child = cursor.firstChildForest() {
+        while let child = childChainStep(from: cursor, direction: direction) {
             if evaluate(predicate, candidate: child, start: start) {
                 return child
             }
             cursor = child
         }
         return nil
+    }
+
+    /// One step down the child chain in the requested direction.
+    /// `.forward` is the Cambium primitive `firstChildForest()`;
+    /// `.backward` is its symmetric `lastChildForest()` (firstChild + slid
+    /// forward to the end). Both skip non-navigable glue siblings via the
+    /// underlying navigability policy.
+    private static func childChainStep(
+        from forest: SyntaxForest<Policy>,
+        direction: ForestMotion.Direction
+    ) -> SyntaxForest<Policy>? {
+        switch direction {
+        case .forward:  return forest.firstChildForest()
+        case .backward: return forest.lastChildForest()
+        }
     }
 
     private static func preorderStep(

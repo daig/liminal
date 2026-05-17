@@ -557,9 +557,9 @@ struct ForestMotionTests {
         #expect(Int(result.byteRange.start.rawValue) == h1Offset)
     }
 
-    // MARK: - lastChildForest
+    // MARK: - lastChildForest (single-level primitive)
 
-    @Test("lastChildForest lands on the LAST navigable child")
+    @Test("lastChildForest lands on the LAST navigable child (one level)")
     func lastChildForestLandsOnLastSibling() throws {
         let source = "- a\n- b\n- c\n"
         let parsed = try LiminalParser().parse(source)
@@ -588,6 +588,63 @@ struct ForestMotionTests {
         let leaf = try #require(LiminalForest.containing(.zero, in: tree, affinity: .downstream))
         #expect(Self.headKind(leaf) == .inlineText)
         #expect(leaf.lastChildForest() == nil)
+    }
+
+    // MARK: - descendant axis with .backward direction
+    //
+    // Symmetric with the forward case (firstChildForest chain). Loops
+    // the single-level lastChildForest primitive at each level, applying
+    // the predicate. The `:CSTLastChild` command dispatches this with
+    // `.excluding(.glueWrapper)`, so it peels through the same
+    // structural-glue wrappers (inlineContent, value, fields, ...) that
+    // `:CSTFirstChild` does — but lands on the LAST descendant chain.
+
+    @Test("descendantBackward(.excluding(.glueWrapper)) peels through inlineContent")
+    func descendantBackwardPeelsThroughInlineContent() throws {
+        // Paragraph wraps a single inlineContent (a glue wrapper) which
+        // wraps inline runs. `:CSTLastChild` semantics: stop at the
+        // first non-glue descendant via the last-child chain.
+        let source = "This is **bold** and *italic* text.\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let entry = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        #expect(Self.headKind(entry) == .paragraph)
+
+        let last = try #require(
+            entry.moved(
+                by: .descendantBackward(.excluding(.glueWrapper)),
+                extending: false
+            )
+        )
+        // Land on the LAST inlineText run, not the inlineContent wrapper.
+        #expect(Self.headKind(last) == .inlineText)
+        let trailingOffset = Self.byteOffset(of: " text.", in: source)
+        #expect(
+            Int(last.byteRange.start.rawValue) == trailingOffset,
+            "expected last inline run starting at \(trailingOffset); saw \(last.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test("descendant forward + backward are symmetric on glue-wrapped inline")
+    func descendantForwardBackwardSymmetric() throws {
+        let source = "alpha **beta** gamma\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let entry = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        #expect(Self.headKind(entry) == .paragraph)
+
+        let first = try #require(
+            entry.moved(by: .descendant(.excluding(.glueWrapper)), extending: false)
+        )
+        let last = try #require(
+            entry.moved(by: .descendantBackward(.excluding(.glueWrapper)), extending: false)
+        )
+        #expect(Self.headKind(first) == .inlineText)
+        #expect(Self.headKind(last) == .inlineText)
+        let alphaOffset = Self.byteOffset(of: "alpha", in: source)
+        let gammaOffset = Self.byteOffset(of: " gamma", in: source)
+        #expect(Int(first.byteRange.start.rawValue) == alphaOffset)
+        #expect(Int(last.byteRange.start.rawValue) == gammaOffset)
     }
 
     @Test("subtreePreorder with extending: true returns nil for both directions")

@@ -113,11 +113,6 @@ public enum VimCommand: Sendable, Equatable {
     /// `}` / `{` family in the old proposal).
     case cstBlockPeer(direction: ForestMotion.Direction, extending: Bool)
 
-    /// Descend to the LAST navigable child of the head. Mirrors
-    /// `.cstNavigate(.firstChild, ...)` but lands on the last sibling.
-    /// Backs `:CSTLastChild`.
-    case cstLastChild(extending: Bool)
-
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into

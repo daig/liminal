@@ -740,8 +740,6 @@ public final class VimController: ObservableObject {
             delegate?.cstMove(descriptor: descriptor, extending: extending)
         case .cstBlockPeer(let direction, let extending):
             delegate?.cstBlockPeer(direction: direction, extending: extending)
-        case .cstLastChild(let extending):
-            delegate?.cstLastChild(extending: extending)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1544,13 +1542,23 @@ public final class VimController: ObservableObject {
             .cstBlockPeer(direction: .backward, extending: false)
         })
 
-        // MARK: Last-child descent — opposite of l.
+        // MARK: Last-child descent — symmetric opposite of CSTFirstChild.
+        // Both peel through glue wrappers via the descendant axis with
+        // .excluding(.glueWrapper). Direction picks the chain.
 
         registry.register(.init(
             name: "CSTLastChild",
             description: "Descend to the last navigable child of the current head"
         ) { _, _ in
-            .cstLastChild(extending: false)
+            .cstMove(
+                descriptor: .init(
+                    axis: .descendant,
+                    direction: .backward,
+                    predicate: .excluding(.glueWrapper),
+                    count: 1
+                ),
+                extending: false
+            )
         })
 
         return registry
@@ -1764,8 +1772,6 @@ public protocol VimControllerDelegate: AnyObject {
     /// the next / previous `.blockItem` sibling. Backs `:CSTNextBlock`
     /// / `:CSTPreviousBlock`.
     func cstBlockPeer(direction: ForestMotion.Direction, extending: Bool)
-    /// Descend to the head's last navigable child. Backs `:CSTLastChild`.
-    func cstLastChild(extending: Bool)
 }
 
 extension VimControllerDelegate {
@@ -1802,5 +1808,4 @@ extension VimControllerDelegate {
         direction: ForestMotion.Direction,
         extending: Bool
     ) {}
-    public func cstLastChild(extending: Bool) {}
 }

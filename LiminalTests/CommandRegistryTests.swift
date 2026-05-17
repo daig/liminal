@@ -266,12 +266,20 @@ struct CommandRegistryTests {
         )
     }
 
-    @Test("CSTLastChild dispatches cstLastChild")
+    @Test("CSTLastChild dispatches descendant-backward + excluding glueWrapper")
     func lastChildCommand() {
         let registry = VimController.defaultCommands()
         #expect(
             registry.resolve(name: "CSTLastChild", args: [], count: nil)
-            == .cstLastChild(extending: false)
+            == .cstMove(
+                descriptor: .init(
+                    axis: .descendant,
+                    direction: .backward,
+                    predicate: .excluding(.glueWrapper),
+                    count: 1
+                ),
+                extending: false
+            )
         )
     }
 
