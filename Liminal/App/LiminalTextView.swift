@@ -148,6 +148,7 @@ struct LiminalTextView: NSViewRepresentable {
 
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
+        private var forestMarksObservation: AnyCancellable?
         private var preferencesObservation: AnyCancellable?
         private var fileURLObservation: AnyCancellable?
 
@@ -232,6 +233,18 @@ struct LiminalTextView: NSViewRepresentable {
             marksObservation = controller.$marks.sink { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.refreshMarkIndicators()
+                    // Forest marks resolve lazily and don't get
+                    // reanchored on edit; their byte positions can
+                    // shift even when the registry hasn't changed. Any
+                    // mark-publisher tick (which fires after every
+                    // tree-mutating edit via reanchorMarks) is a free
+                    // proxy for "tree advanced — refresh overlays."
+                    self?.refreshForestMarkIndicators()
+                }
+            }
+            forestMarksObservation = controller.$forestMarks.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshForestMarkIndicators()
                 }
             }
             // Re-apply (or clear) highlights when the user toggles the
@@ -341,6 +354,46 @@ struct LiminalTextView: NSViewRepresentable {
             // Glyph positions may have shifted even when the indicator
             // tuple is unchanged (e.g., text on a prior line moved); force
             // a redraw of the visible region to catch that case.
+            textView.needsDisplay = true
+        }
+
+        /// Resolve every forest mark against the current tree, build a
+        /// `(NSRange, letter, strength)` overlay per slot, and push to
+        /// the text view's outline-paint pass. `.lost` slots are
+        /// filtered (their on-screen geometry can't be reconstructed).
+        func refreshForestMarkIndicators() {
+            guard let textView else { return }
+            guard let tree = document.session.currentTree else {
+                textView.forestMarkOverlays = []
+                return
+            }
+            let source = textView.string
+            let overlays: [VimTextView.ForestMarkOverlay] = document
+                .vimController
+                .forestMarks
+                .marks
+                .compactMap { letter, anchor in
+                    let forest: LiminalForest
+                    let strength: ForestMarkStrength
+                    switch anchor.resolve(in: tree) {
+                    case .strong(let f):    forest = f; strength = .strong
+                    case .weak(let f):      forest = f; strength = .weak
+                    case .recovered(let f): forest = f; strength = .recovered
+                    case .lost:             return nil
+                    }
+                    guard let nsRange = LiminalTextView.byteRangeToNSRange(
+                        forest.byteRange,
+                        in: source
+                    ), nsRange.length > 0 else { return nil }
+                    return VimTextView.ForestMarkOverlay(
+                        range: nsRange,
+                        letter: letter,
+                        strength: strength
+                    )
+                }
+            textView.forestMarkOverlays = overlays
+            // Same redraw rationale as refreshMarkIndicators — line
+            // geometry can shift even when the overlay tuple is equal.
             textView.needsDisplay = true
         }
 
@@ -2075,6 +2128,7 @@ struct LiminalTextView: NSViewRepresentable {
             guard ensureForestIsLive(), let forest = cstForest else { return }
             let anchor = LiminalForestAnchor.from(forest)
             document.vimController.setForestMark(letter, anchor: anchor)
+            refreshForestMarkIndicators()
         }
 
         /// Restore `cstForest` from forest-mark slot `letter`. Silent
@@ -2093,6 +2147,7 @@ struct LiminalTextView: NSViewRepresentable {
                 mirrorCSTSelection()
             case .lost:
                 document.vimController.unsetForestMark(letter)
+                refreshForestMarkIndicators()
             }
         }
 
@@ -2100,6 +2155,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// registry mutation doesn't depend on the live selection.
         func unsetForestMark(letter: Character) {
             document.vimController.unsetForestMark(letter)
+            refreshForestMarkIndicators()
         }
 
         /// One-line preview + strength tier for forest-mark slot

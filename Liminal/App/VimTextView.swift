@@ -84,8 +84,29 @@ final class VimTextView: NSTextView {
         let letter: Character
     }
 
+    /// One in-editor forest-mark indicator: a UTF-16 range covering the
+    /// marked subtree plus the letter (drives color) and resolution
+    /// strength (drives alpha — `.recovered` paints dimmer than
+    /// `.strong`).
+    struct ForestMarkOverlay: Equatable {
+        let range: NSRange
+        let letter: Character
+        let strength: ForestMarkStrength
+    }
+
+    var forestMarkOverlays: [ForestMarkOverlay] = [] {
+        didSet {
+            guard oldValue != forestMarkOverlays else { return }
+            needsDisplay = true
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        // Forest mark outlines first — they're the most ambient layer.
+        // CST selection + head accent paint on top so the live selection
+        // is always the dominant visual.
+        drawForestMarkOverlays(in: dirtyRect)
         drawCSTSelectionOverlay(in: dirtyRect)
         drawCSTHeadAccent(in: dirtyRect)
         drawMarkIndicators(in: dirtyRect)
@@ -175,6 +196,51 @@ final class VimTextView: NSTextView {
 
         NSColor.systemTeal.setFill()
         barRect.fill()
+    }
+
+    /// Paint a thin rounded-rect outline over every line fragment
+    /// covered by each forest mark's byte range. Color is the
+    /// per-letter `VimMarkPalette` hue; alpha modulates with
+    /// resolution strength (`.strong` brightest, `.recovered`
+    /// dimmest). Drawn before `drawCSTSelectionOverlay` so a live CST
+    /// selection paints on top of any mark outline.
+    private func drawForestMarkOverlays(in dirtyRect: NSRect) {
+        guard !forestMarkOverlays.isEmpty,
+              let layoutManager,
+              let textContainer
+        else { return }
+
+        let origin = textContainerOrigin
+        for overlay in forestMarkOverlays where overlay.range.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: overlay.range,
+                actualCharacterRange: nil
+            )
+            guard glyphRange.length > 0 else { continue }
+
+            let baseColor = VimMarkPalette.color(for: overlay.letter)
+            let alpha: CGFloat
+            switch overlay.strength {
+            case .strong:    alpha = 0.55
+            case .weak:      alpha = 0.40
+            case .recovered: alpha = 0.28
+            }
+            let strokeColor = baseColor.withAlphaComponent(alpha)
+            strokeColor.setStroke()
+
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textContainer
+            ) { rect, _ in
+                let drawRect = rect.offsetBy(dx: origin.x, dy: origin.y)
+                    .insetBy(dx: 0.5, dy: 0.5)
+                guard drawRect.intersects(dirtyRect) else { return }
+                let path = NSBezierPath(roundedRect: drawRect, xRadius: 3, yRadius: 3)
+                path.lineWidth = 1.0
+                path.stroke()
+            }
+        }
     }
 
     private func drawMarkIndicators(in dirtyRect: NSRect) {

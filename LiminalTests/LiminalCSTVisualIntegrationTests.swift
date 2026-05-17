@@ -814,6 +814,35 @@ struct LiminalCSTVisualIntegrationTests {
                 "mark must not be saved when no cstForest is live")
     }
 
+    @Test("Setting a forest mark populates an in-editor overlay over the marked subtree")
+    func forestMarkOverlayPopulatedAfterSet() throws {
+        let source = "# First\n\nMiddle paragraph.\n\n# Last\n"
+        let fixture = try makeFixture(source)
+        // Enter visualCST inside the middle paragraph and mark it.
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "Middle", in: source) + 2)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let markedHead = try #require(fixture.coordinator.cstForest)
+        let expectedNS = try #require(
+            LiminalTextView.byteRangeToNSRange(markedHead.byteRange, in: source)
+        )
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        // The Coordinator refreshes the overlay synchronously inside
+        // setForestMark; no observer round-trip required.
+        let overlays = fixture.textView.forestMarkOverlays
+        #expect(overlays.count == 1, "expected one overlay; saw \(overlays.count)")
+        let overlay = try #require(overlays.first)
+        #expect(overlay.letter == "a")
+        #expect(overlay.range == expectedNS,
+                "overlay NSRange should equal the marked subtree's byte range; expected \(expectedNS), saw \(overlay.range)")
+        #expect(overlay.strength == .strong,
+                "fresh mark must resolve as .strong")
+    }
+
     @Test(":CSTUnmark drops the slot from the registry")
     func forestMarkUnmarkDropsSlot() throws {
         let source = "# Heading\n"
