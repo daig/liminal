@@ -116,9 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Show `NSOpenPanel` for an explicit user-driven "Open Vault…"
     /// action. Same machinery as the lazy prompt but with no
-    /// suggested root.
+    /// suggested root by default. `suggestedDirectory` pre-fills the
+    /// panel — used by `:OpenVault <path>` so the user can confirm a
+    /// specific folder with one click.
     @MainActor
-    static func runOpenVaultPanel() {
+    static func runOpenVaultPanel(suggestedDirectory: URL? = nil) {
         let panel = NSOpenPanel()
         panel.title = "Open Vault"
         panel.message = "Choose the folder that contains your Liminal notes."
@@ -126,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        if let suggestedDirectory {
+            panel.directoryURL = suggestedDirectory
+        }
         guard panel.runModal() == .OK, let chosen = panel.url else { return }
         registerVaultFolder(chosen)
     }

@@ -848,6 +848,10 @@ public final class VimController: ObservableObject {
             delegate?.editPath(path)
         case .reloadCurrentFile:
             delegate?.reloadCurrentFile()
+        case .writeAsPath(let path):
+            delegate?.writeAsPath(path)
+        case .openVaultPath(let path):
+            delegate?.openVaultPath(path)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1795,6 +1799,27 @@ public final class VimController: ObservableObject {
             .reloadCurrentFile
         })
 
+        registry.register(.init(
+            name: "WriteAs",
+            description: "Save the current buffer to a new path (vault-relative; .lim appended if missing)",
+            argSpec: .dynamicSingle(label: "path")
+        ) { args, _ in
+            guard let path = args.first, !path.isEmpty else { return nil }
+            return .writeAsPath(path: path)
+        })
+
+        registry.register(.init(
+            name: "OpenVault",
+            description: "Open a vault folder (NSOpenPanel pre-filled to the typed path)",
+            argSpec: .dynamicSingle(label: "path")
+        ) { args, _ in
+            // Accept empty-arg (`:OpenVault` with no path) — Coordinator
+            // will spawn an unfiltered open-panel, same as the
+            // File > Open Vault… menu command.
+            let path = args.first ?? ""
+            return .openVaultPath(path: path)
+        })
+
         return registry
     }
 
@@ -2071,6 +2096,12 @@ public protocol VimControllerDelegate: AnyObject {
     /// Backs `:Reload` and the "Reload" button of the external-change
     /// sheet.
     func reloadCurrentFile()
+    /// Write current buffer to `path` and retarget the document.
+    /// Backs `:WriteAs <path>`.
+    func writeAsPath(_ path: String)
+    /// Show `NSOpenPanel` pre-filled to `path` to acquire a vault
+    /// folder bookmark. Backs `:OpenVault <path>`.
+    func openVaultPath(_ path: String)
 }
 
 extension VimControllerDelegate {
@@ -2121,4 +2152,6 @@ extension VimControllerDelegate {
     public func quitCurrent() {}
     public func editPath(_ path: String) {}
     public func reloadCurrentFile() {}
+    public func writeAsPath(_ path: String) {}
+    public func openVaultPath(_ path: String) {}
 }

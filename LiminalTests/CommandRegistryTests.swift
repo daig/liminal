@@ -98,6 +98,8 @@ struct CommandRegistryTests {
             "Write", "Quit", "Edit",
             // Slice G — iCloud Tier 2 (manual reload entry point)
             "Reload",
+            // Slice H — remaining ex/file commands
+            "WriteAs", "OpenVault",
         ]
         let actual = Set(registry.commandNames())
         #expect(expected.isSubset(of: actual),
@@ -400,6 +402,44 @@ struct CommandRegistryTests {
         // dispatch an empty path.
         #expect(registry.resolve(name: "Edit", args: [""], count: nil) == nil)
         #expect(registry.resolve(name: "Edit", args: [], count: nil) == nil)
+    }
+
+    @Test("WriteAs dispatches writeAsPath with the typed path arg")
+    func writeAsCommandDispatchesPath() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "WriteAs", args: ["foo/bar"], count: nil)
+            == .writeAsPath(path: "foo/bar")
+        )
+        #expect(registry.resolve(name: "WriteAs", args: [""], count: nil) == nil)
+        #expect(registry.resolve(name: "WriteAs", args: [], count: nil) == nil)
+    }
+
+    @Test("OpenVault accepts an empty path (panel without pre-fill) and a typed path")
+    func openVaultCommandDispatchesPath() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "OpenVault", args: ["/Users/x/vault"], count: nil)
+            == .openVaultPath(path: "/Users/x/vault")
+        )
+        #expect(
+            registry.resolve(name: "OpenVault", args: [], count: nil)
+            == .openVaultPath(path: "")
+        )
+    }
+
+    @Test("WriteAs and OpenVault use .dynamicSingle argSpec for free-form path input")
+    func writeAsAndOpenVaultUseDynamicSingle() throws {
+        let registry = VimController.defaultCommands()
+        for name in ["WriteAs", "OpenVault"] {
+            let cmd = try #require(registry.command(named: name))
+            switch cmd.argSpec {
+            case .dynamicSingle(let label):
+                #expect(label == "path", "expected dynamic label 'path' for \(name)")
+            case .single, .none:
+                Issue.record("\(name) should have .dynamicSingle argSpec")
+            }
+        }
     }
 
     @Test("Edit uses .dynamicSingle so the popup arg stage shows no static options")

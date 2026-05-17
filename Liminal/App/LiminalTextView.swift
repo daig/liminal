@@ -2393,6 +2393,121 @@ struct LiminalTextView: NSViewRepresentable {
             textView?.window?.performClose(nil)
         }
 
+        /// `:WriteAs <path>` — save the current buffer to a new path
+        /// and retarget the document. In-vault paths write directly
+        /// (refuse if file exists — safer default than silent
+        /// overwrite); out-of-vault paths spawn `NSSavePanel`
+        /// pre-filled to the typed path so the user grants Powerbox
+        /// access AND gets a system-standard "exists" prompt for free.
+        func writeAsPath(_ path: String) {
+            let vaultRoot = document.fileURL.map {
+                VaultRegistry.shared.entry(for: $0).rootURL
+            }
+            let resolver = PathResolver(vaultRoot: vaultRoot)
+            guard let url = resolver.resolve(path) else { return }
+
+            if Coordinator.isInsideAnyBookmarkedVault(url) {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    NSLog("LiminalTextView: :WriteAs refused — \(url.path) already exists")
+                    return
+                }
+                Coordinator.writeBufferAndRetarget(
+                    source: document.session.source,
+                    to: url,
+                    document: document
+                )
+                return
+            }
+            // Outside any bookmarked scope — NSSavePanel handles the
+            // Powerbox grant AND the file-exists confirmation.
+            Coordinator.promptSavePanelAndWriteAs(
+                buffer: document.session.source,
+                suggested: url,
+                document: document
+            )
+        }
+
+        /// `:OpenVault <path>` — spawn `NSOpenPanel` pre-filled to the
+        /// typed path (after `~` expansion). With no path, identical
+        /// to the File > Open Vault… menu command. The user always
+        /// confirms via the panel — Powerbox requires it for the
+        /// bookmark grant.
+        func openVaultPath(_ path: String) {
+            let suggested = Coordinator.expandedFolderURL(from: path)
+            AppDelegate.runOpenVaultPanel(suggestedDirectory: suggested)
+        }
+
+        /// Expand `~` in a folder path string and return a URL when
+        /// the input looks like an absolute path. Returns nil for
+        /// empty / non-absolute strings — the panel opens without a
+        /// pre-fill in those cases.
+        private static func expandedFolderURL(from input: String) -> URL? {
+            let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let expanded: String
+            if trimmed == "~" {
+                expanded = NSHomeDirectory()
+            } else if trimmed.hasPrefix("~/") {
+                expanded = NSHomeDirectory() + "/" + String(trimmed.dropFirst(2))
+            } else if trimmed.hasPrefix("/") {
+                expanded = trimmed
+            } else {
+                return nil
+            }
+            return URL(fileURLWithPath: expanded, isDirectory: true)
+        }
+
+        /// Write the buffer to `url` via the coordinator and update
+        /// the document's URL so the presenter re-registers and the
+        /// vault index picks up the new location.
+        private static func writeBufferAndRetarget(
+            source: String,
+            to url: URL,
+            document: LiminalSourceDocument
+        ) {
+            do {
+                try CoordinatedFileIO.writeNew(
+                    Data(source.utf8),
+                    to: url,
+                    presenter: nil
+                )
+            } catch {
+                NSLog("LiminalTextView: :WriteAs failed for \(url.path): \(error)")
+                return
+            }
+            document.setFileURL(url)
+        }
+
+        /// Out-of-scope `:WriteAs` path: `NSSavePanel` pre-filled to
+        /// the typed URL. On user confirm, capture a folder bookmark
+        /// for the parent (so future opens of siblings don't
+        /// re-prompt), then write + retarget.
+        private static func promptSavePanelAndWriteAs(
+            buffer: String,
+            suggested url: URL,
+            document: LiminalSourceDocument
+        ) {
+            let panel = NSSavePanel()
+            panel.title = "Write Buffer As"
+            panel.message = "Choose where to save the current buffer."
+            panel.directoryURL = url.deletingLastPathComponent()
+            panel.nameFieldStringValue = url.lastPathComponent
+            guard panel.runModal() == .OK, let chosen = panel.url else { return }
+
+            // Bookmark the parent folder so the new file's siblings
+            // are reachable without further prompts.
+            let parent = chosen.deletingLastPathComponent()
+            if let data = try? parent.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            ) {
+                let canonical = parent.resolvingSymlinksInPath().standardizedFileURL
+                VaultRegistry.shared.registerBookmark(data, forVaultRoot: canonical)
+            }
+            writeBufferAndRetarget(source: buffer, to: chosen, document: document)
+        }
+
         /// `:Reload` — re-read the current document from disk via
         /// the coordinator. Prompts (same sheet as the external-change
         /// path) when the disk content differs from the in-memory

@@ -167,6 +167,19 @@ public enum VimCommand: Sendable, Equatable {
     /// Version" on the external-change prompt.
     case reloadCurrentFile
 
+    /// Write the current buffer to `path` and retarget the document
+    /// at it. In-vault paths write directly (refuse if exists);
+    /// out-of-vault paths spawn `NSSavePanel` pre-filled to that
+    /// path so the user grants Powerbox access. Backs `:WriteAs <path>`
+    /// (vim's `:saveas`).
+    case writeAsPath(path: String)
+
+    /// Open a vault folder. Spawns `NSOpenPanel` (sandbox-required
+    /// for the bookmark capture) pre-filled to `path`. Backs
+    /// `:OpenVault <path>`. The path arg is a pre-fill hint, not a
+    /// strict requirement — the user always confirms via the panel.
+    case openVaultPath(path: String)
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into
