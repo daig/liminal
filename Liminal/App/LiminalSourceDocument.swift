@@ -448,6 +448,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 root: root,
                 source: session.source
             )
+            treeVersion &+= 1
         }
         indexInVault()
         writeThroughIfNeeded()

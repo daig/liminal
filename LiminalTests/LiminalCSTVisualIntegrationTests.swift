@@ -894,6 +894,50 @@ struct LiminalCSTVisualIntegrationTests {
                 "post-edit overlay should be one byte shorter; saw length \(updatedOverlay.range.length) vs initial \(initialOverlay.range.length)")
     }
 
+    @Test("Forest mark overlay tracks size across an undo")
+    func forestMarkOverlayTracksUndo() async throws {
+        // Regression: undo restores the tree via session.installSnapshot
+        // — a path that originally didn't bump document.treeVersion, so
+        // the overlay stayed at the post-edit (shrunk) size after `u`
+        // even though the byte range was back to its pre-edit length.
+        let source = "Hello marked world.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTMark a" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+        fixture.coordinator.installModeObservers(on: fixture.controller)
+
+        let initialLength = try #require(fixture.textView.forestMarkOverlays.first).range.length
+
+        // Record the edit through the undo-aware path so `undoStep`
+        // has something to replay. Begin/commit framing mirrors the
+        // production insert-session shape.
+        let deleteAt = try utf16Offset(of: "marked", in: source)
+        fixture.document.beginInsertSession(at: deleteAt)
+        let edit = TextEdit(
+            range: TextRange(
+                start: TextSize(UInt32(deleteAt)),
+                length: TextSize(1)
+            ),
+            replacement: ""
+        )
+        _ = fixture.document.applyTextEdits([edit])
+        fixture.document.commitInsertSession(at: deleteAt)
+        try await Task.sleep(nanoseconds: 80_000_000)
+        let postEditLength = try #require(fixture.textView.forestMarkOverlays.first).range.length
+        #expect(postEditLength == initialLength - 1, "edit should shrink overlay by 1 byte")
+
+        // Undo the deletion; overlay must grow back.
+        _ = fixture.document.undoStep()
+        try await Task.sleep(nanoseconds: 80_000_000)
+        let postUndoLength = try #require(fixture.textView.forestMarkOverlays.first).range.length
+        #expect(postUndoLength == initialLength,
+                "undo should restore overlay length to \(initialLength); saw \(postUndoLength)")
+    }
+
     @Test(":CSTUnmark drops the slot from the registry")
     func forestMarkUnmarkDropsSlot() throws {
         let source = "# Heading\n"
