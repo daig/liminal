@@ -151,6 +151,12 @@ struct LiminalTextView: NSViewRepresentable {
         private var forestMarksObservation: AnyCancellable?
         private var externalChangeObservation: AnyCancellable?
 
+        /// True while the reload/conflict sheet is on screen. Prevents
+        /// stacking when `presentedItemDidChange` and
+        /// `presentedItemDidGain` both fire for the same conflict
+        /// scenario.
+        private var isExternalChangePromptVisible: Bool = false
+
         /// Stack of `headChildIndex` values, pushed during `:CSTExpand`
         /// and popped during `:CSTNarrow`. Cleared by any other
         /// cstForest-mutating command (lateral motion invalidates the
@@ -2509,11 +2515,17 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         /// `:Reload` — re-read the current document from disk via
-        /// the coordinator. Prompts (same sheet as the external-change
-        /// path) when the disk content differs from the in-memory
-        /// buffer; silent no-op when they match.
+        /// the coordinator. When unresolved iCloud conflicts exist,
+        /// surfaces the 3-button conflict sheet instead of the
+        /// generic reload prompt (consistent with the auto-detected
+        /// external-change path). Silent no-op when the buffer
+        /// matches disk AND no conflicts are pending.
         func reloadCurrentFile() {
             guard let url = document.fileURL else { return }
+            if document.hasUnresolvedConflicts {
+                promptConflictResolution()
+                return
+            }
             let data: Data
             do {
                 data = try CoordinatedFileIO.read(at: url, presenter: nil) {
@@ -2527,39 +2539,78 @@ struct LiminalTextView: NSViewRepresentable {
             if diskSource == document.session.source {
                 return  // nothing to reload
             }
-            // Same prompt as the auto-detected external-change path —
-            // consistent UX.
             promptReload(message: "Reload “\(url.lastPathComponent)” from disk?")
         }
 
         /// Triggered by the LiminalSourceDocument.externalChangeNotification
-        /// observer. Shows the same NSAlert sheet `:Reload` does, but
-        /// pre-fills the copy with the "another app changed this" framing.
+        /// observer. Dispatches to the conflict-flavored sheet when
+        /// the document has unresolved NSFileVersion conflicts (iCloud
+        /// brought down a divergent version), else the generic
+        /// reload-or-keep sheet (local external write).
         func promptExternalChange() {
-            promptReload(
-                message: "This file was changed by another app. Reload from disk and discard unsaved changes in this buffer?"
-            )
+            if document.hasUnresolvedConflicts {
+                promptConflictResolution()
+            } else {
+                promptReload(
+                    message: "This file was changed by another app. Reload from disk and discard unsaved changes in this buffer?"
+                )
+            }
         }
 
         /// Render the reload-or-keep sheet on the document's window.
         /// Confirmation routes through `document.reloadFromDisk()`.
         private func promptReload(message: String) {
-            guard let window = textView?.window else {
+            guard !isExternalChangePromptVisible,
+                  let window = textView?.window
+            else {
                 // No window context — proceed silently (e.g. mid-tab
                 // transition). User can re-run :Reload when they're
                 // back in focus.
                 return
             }
+            isExternalChangePromptVisible = true
             let alert = NSAlert()
             alert.messageText = "Reload from disk?"
             alert.informativeText = message
             alert.addButton(withTitle: "Reload")
             alert.addButton(withTitle: "Keep My Version")
             let doc = document
-            alert.beginSheetModal(for: window) { response in
+            alert.beginSheetModal(for: window) { [weak self] response in
+                self?.isExternalChangePromptVisible = false
                 guard response == .alertFirstButtonReturn else { return }
                 Task { @MainActor in
                     doc.reloadFromDisk()
+                }
+            }
+        }
+
+        /// Conflict-flavored sheet: surfaces three explicit choices
+        /// rather than the binary reload/keep. "Compare Later" leaves
+        /// `hasUnresolvedConflicts = true` so the future ambient
+        /// indicator stays visible (and the eventual proper merge UI
+        /// has its entry point).
+        private func promptConflictResolution() {
+            guard !isExternalChangePromptVisible,
+                  let window = textView?.window
+            else { return }
+            isExternalChangePromptVisible = true
+            let alert = NSAlert()
+            alert.messageText = "A version from another device conflicts with yours."
+            alert.informativeText = "Choose how to resolve this conflict. Compare Later keeps both versions in iCloud so you can decide once a proper diff/merge view ships."
+            alert.addButton(withTitle: "Keep Mine")
+            alert.addButton(withTitle: "Take Theirs")
+            alert.addButton(withTitle: "Compare Later")
+            let doc = document
+            alert.beginSheetModal(for: window) { [weak self] response in
+                self?.isExternalChangePromptVisible = false
+                switch response {
+                case .alertFirstButtonReturn:  // Keep Mine
+                    Task { @MainActor in doc.resolveConflictsKeepingMine() }
+                case .alertSecondButtonReturn:  // Take Theirs
+                    Task { @MainActor in doc.resolveConflictsTakingTheirs() }
+                default:
+                    // Compare Later — hasUnresolvedConflicts stays true.
+                    break
                 }
             }
         }

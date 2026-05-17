@@ -64,9 +64,17 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// iCloud…" indicator.
     @Published private(set) var ubiquityDownloadInProgress: Bool = false
 
+    /// True when the file has one or more unresolved conflict
+    /// versions in `NSFileVersion`'s store (i.e. iCloud detected
+    /// divergent saves from another device). Cleared when the user
+    /// chooses Keep Mine or Take Theirs on the conflict prompt;
+    /// stays true when they pick Compare Later. Future ambient
+    /// indicator + proper merge UI will key off this.
+    @Published private(set) var hasUnresolvedConflicts: Bool = false
+
     /// NSFilePresenter helper. Receives external-change notifications
     /// from the iCloud daemon (and any other coordinated writers);
-    /// callbacks hop to MainActor and invoke `handleExternalChange`.
+    /// callbacks hop to MainActor and invoke `handleExternalChangeOrConflict`.
     private let filePresenter: DocumentFilePresenter
 
     /// True while `filePresenter` is currently registered with
@@ -570,24 +578,37 @@ final class LiminalSourceDocument: ReferenceFileDocument {
 
     // MARK: - File-presenter hooks (called from DocumentFilePresenter on MainActor)
 
-    /// Triggered when the file presenter reports an external change.
+    /// Triggered when the file presenter reports an external change
+    /// OR a new conflict version arrived in `NSFileVersion`'s store.
     /// First applies the self-write coalescing check (our own atomic
     /// `write(to:options:.atomic)` looks like delete-then-create to
     /// the presenter), then either auto-reloads (pending initial
-    /// download) or posts a notification the Coordinator turns into
-    /// a sheet prompt.
+    /// download) or refreshes the `hasUnresolvedConflicts` flag and
+    /// posts a notification the Coordinator turns into the
+    /// appropriate sheet prompt (generic reload vs. 3-button
+    /// conflict).
     @MainActor
-    func handleExternalChange() {
+    func handleExternalChangeOrConflict() {
         guard let url = fileURL else { return }
+        // Refresh the conflict flag regardless — a gain-version
+        // callback can fire without `presentedItemDidChange`, and we
+        // want the latest state on every signal.
+        let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? []
+        hasUnresolvedConflicts = !conflicts.isEmpty
+
         let nowMtime = currentDiskMtime(for: url)
-        if let last = lastSeenDiskMtime, let now = nowMtime, last == now {
-            // Self-write echo — coordinator saw our own atomic temp-rename.
+        if let last = lastSeenDiskMtime, let now = nowMtime, last == now,
+           conflicts.isEmpty {
+            // Self-write echo — coordinator saw our own atomic temp-rename,
+            // AND no new conflict version arrived alongside.
             return
         }
-        // Real external change.
-        if pendingInitialDownload {
+        // Real external change OR new conflict version.
+        if pendingInitialDownload && conflicts.isEmpty {
             // Auto-reload without prompting: the buffer is empty,
-            // there's nothing to lose.
+            // there's nothing to lose. Skip when conflicts exist —
+            // the user should consciously choose which version is
+            // canonical.
             pendingInitialDownload = false
             reloadFromDisk()
             return
@@ -642,6 +663,58 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         } catch {
             NSLog("LiminalSourceDocument: reload failed for \(url.path): \(error)")
         }
+    }
+
+    // MARK: - Conflict resolution (NSFileVersion-based, v1)
+
+    /// "Keep Mine" path: mark every unresolved conflict version as
+    /// resolved without changing the current file. The in-memory
+    /// buffer wins. iCloud may garbage-collect the now-resolved
+    /// versions later. Sets `hasUnresolvedConflicts = false`.
+    @MainActor
+    func resolveConflictsKeepingMine() {
+        guard let url = fileURL else { return }
+        let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? []
+        for version in conflicts { version.isResolved = true }
+        hasUnresolvedConflicts = false
+    }
+
+    /// "Take Theirs" path: read the most-recent conflict version's
+    /// bytes, write them over the current file (coordinated), mark
+    /// all conflict versions resolved, then reload the buffer. When
+    /// multiple conflict versions exist, picks the latest by
+    /// modification date — the proper merge UI will surface them all.
+    @MainActor
+    func resolveConflictsTakingTheirs() {
+        guard let url = fileURL else { return }
+        let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? []
+        guard let chosen = conflicts.max(by: {
+            ($0.modificationDate ?? .distantPast) < ($1.modificationDate ?? .distantPast)
+        }) else {
+            // No conflict versions actually present — flag was stale.
+            hasUnresolvedConflicts = false
+            return
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: chosen.url)
+        } catch {
+            NSLog("LiminalSourceDocument: failed to read conflict version at \(chosen.url.path): \(error)")
+            return
+        }
+        do {
+            try CoordinatedFileIO.write(data, to: url, presenter: filePresenter)
+        } catch {
+            NSLog("LiminalSourceDocument: failed to write taken-version to \(url.path): \(error)")
+            return
+        }
+        for version in conflicts { version.isResolved = true }
+        hasUnresolvedConflicts = false
+        // Reload the buffer to reflect the taken bytes. The
+        // presenter's didChange callback may also fire from our
+        // write, but reloadFromDisk's coordinated re-read is the
+        // authoritative path.
+        reloadFromDisk()
     }
 
     // MARK: - Ubiquity (iCloud Drive) status

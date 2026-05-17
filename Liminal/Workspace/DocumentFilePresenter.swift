@@ -82,10 +82,30 @@ import Foundation
     /// The file's contents changed on disk via someone else — daemon,
     /// another app, another device's iCloud push. Hop to MainActor;
     /// the document decides whether to suppress (self-write) or
-    /// prompt the user.
+    /// prompt the user. Note: `presentedItemDidChange` fires when the
+    /// **current** version's bytes change; `presentedItemDidGainVersion`
+    /// (below) is the complementary signal for "a new version appeared
+    /// in the version store alongside current" (iCloud conflict
+    /// scenario). Both flow through the same handler so the document
+    /// can pick prompt copy based on whether unresolved conflicts
+    /// exist at decision time.
     func presentedItemDidChange() {
         Task { @MainActor [weak owner] in
-            owner?.handleExternalChange()
+            owner?.handleExternalChangeOrConflict()
+        }
+    }
+
+    /// A new `NSFileVersion` appeared in the version store alongside
+    /// the current one — almost exclusively iCloud creating a
+    /// conflict snapshot because another device saved divergent edits
+    /// while we had unsaved changes. The new version sits in Apple's
+    /// version store, so `presentedItemDidChange` may NOT fire for
+    /// this case. We hop to MainActor through the same path; the
+    /// document queries `NSFileVersion.unresolvedConflictVersionsOfItem`
+    /// to pick prompt copy.
+    func presentedItemDidGain(_ version: NSFileVersion) {
+        Task { @MainActor [weak owner] in
+            owner?.handleExternalChangeOrConflict()
         }
     }
 
