@@ -15,21 +15,51 @@ import Foundation
 public final class VaultRegistry {
     public static let shared = VaultRegistry()
 
+    /// Notification posted when a vault root needs folder access but
+    /// we have no security-scoped bookmark for it. The app delegate
+    /// observes this and shows an `NSOpenPanel` pre-filled to the
+    /// vault root. `userInfo[Self.vaultRootKey]` holds the canonical
+    /// `URL`.
+    public static let folderAccessNeededNotification = Notification.Name(
+        "liminal.vaultRegistry.folderAccessNeeded"
+    )
+    public static let vaultRootKey = "vaultRoot"
+
     private var entries: [URL: VaultEntry] = [:]
 
-    private init() {}
+    /// Active security-scoped access sessions keyed by canonical
+    /// vault root. Sessions are kept alive for the process lifetime
+    /// — they release via `deinit` when this registry deinits at app
+    /// termination.
+    private var sessions: [URL: VaultAccessSession] = [:]
+
+    /// Bookmark store the registry consults when it needs to start a
+    /// fresh session. Injectable for tests; defaults to the shared
+    /// `UserDefaults`-backed singleton.
+    private let bookmarkStore: VaultBookmarkStore
+
+    private init(bookmarkStore: VaultBookmarkStore = .shared) {
+        self.bookmarkStore = bookmarkStore
+    }
 
     /// Look up (or lazily create) the entry for the vault containing
-    /// `documentURL`.
+    /// `documentURL`. Resolves the stored bookmark (if any) for the
+    /// computed canonical vault root and starts a security-scoped
+    /// access session before returning, so subsequent reads/writes
+    /// inside the vault don't trip Powerbox.
     public func entry(for documentURL: URL) -> VaultEntry {
-        entryForCanonical(Self.canonicalVaultRoot(for: documentURL))
+        let canonical = Self.canonicalVaultRoot(for: documentURL)
+        ensureAccessing(canonical)
+        return entryForCanonical(canonical)
     }
 
     /// Look up (or lazily create) the entry for a vault root URL
     /// directly (e.g. when a window is keyed on the vault root, not
     /// on a document URL inside it).
     public func entry(forRoot rootURL: URL) -> VaultEntry {
-        entryForCanonical(rootURL.resolvingSymlinksInPath().standardizedFileURL)
+        let canonical = rootURL.resolvingSymlinksInPath().standardizedFileURL
+        ensureAccessing(canonical)
+        return entryForCanonical(canonical)
     }
 
     private func entryForCanonical(_ root: URL) -> VaultEntry {
@@ -39,6 +69,84 @@ public final class VaultRegistry {
         let entry = VaultEntry(rootURL: root)
         entries[root] = entry
         return entry
+    }
+
+    // MARK: - Sandbox: folder bookmarks
+
+    /// True when a security-scoped session is already active for
+    /// `canonicalRoot`. The vault's folder is readable/writable.
+    public func hasActiveSession(forVaultRoot canonicalRoot: URL) -> Bool {
+        sessions[canonicalRoot] != nil
+    }
+
+    /// Resolve a stored bookmark and start accessing it, if needed.
+    /// No-op when a session is already live OR when no bookmark is
+    /// stored (callers may still operate on the raw URL; access
+    /// failures surface downstream as I/O errors and trigger
+    /// `requestFolderAccess` from the cold-start scan path).
+    ///
+    /// Records refreshed bookmark data when Apple reports the
+    /// resolved bookmark was stale.
+    public func ensureAccessing(_ canonicalRoot: URL) {
+        if sessions[canonicalRoot] != nil { return }
+        guard let data = bookmarkStore.bookmarkData(forVaultRoot: canonicalRoot) else {
+            return
+        }
+        guard let session = VaultAccessSession.resolve(data) else {
+            // Bookmark won't resolve — drop it so the next access
+            // attempt fires the prompt instead of retrying silently.
+            bookmarkStore.removeBookmark(forVaultRoot: canonicalRoot)
+            return
+        }
+        sessions[canonicalRoot] = session
+        if session.isStale {
+            // Re-capture and persist fresh bookmark data from the
+            // resolved URL so subsequent launches don't pay the
+            // staleness cost.
+            if let refreshed = try? session.resolvedURL.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            ) {
+                bookmarkStore.setBookmarkData(refreshed, forVaultRoot: canonicalRoot)
+            }
+        }
+    }
+
+    /// Register a freshly-captured bookmark (e.g., after the user
+    /// granted folder access via `NSOpenPanel`) and start accessing
+    /// it. Replaces any prior bookmark/session for this root.
+    public func registerBookmark(_ data: Data, forVaultRoot canonicalRoot: URL) {
+        sessions[canonicalRoot]?.release()
+        sessions[canonicalRoot] = nil
+        bookmarkStore.setBookmarkData(data, forVaultRoot: canonicalRoot)
+        ensureAccessing(canonicalRoot)
+    }
+
+    /// Post the folder-access-needed notification for `canonicalRoot`.
+    /// The app delegate's observer shows `NSOpenPanel` pre-filled to
+    /// the vault root; on user confirm, it calls back through
+    /// `registerBookmark(_:forVaultRoot:)`.
+    public func requestFolderAccess(forVaultRoot canonicalRoot: URL) {
+        NotificationCenter.default.post(
+            name: Self.folderAccessNeededNotification,
+            object: self,
+            userInfo: [Self.vaultRootKey: canonicalRoot]
+        )
+    }
+
+    /// Cheap probe: can we actually enumerate this folder right now?
+    /// Returns true for the app's container areas (temp/Caches/etc.,
+    /// always accessible under sandbox) and for any folder covered
+    /// by a live security-scoped session. Returns false when sandbox
+    /// blocks the read, so callers can fire `requestFolderAccess`
+    /// before falling into a silent-empty cold-start scan.
+    public static func canEnumerateFolder(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+              isDir.boolValue
+        else { return false }
+        return (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
     }
 
     /// Synchronously flush every vault entry's warm-tier cache to disk.
@@ -159,8 +267,21 @@ public final class VaultEntry: ObservableObject {
     ///
     /// Also starts the directory watcher so out-of-band file
     /// additions / removals / renames keep the link index live.
+    ///
+    /// Under sandbox: if we have no security-scoped session AND the
+    /// folder isn't otherwise enumerable (container-local areas like
+    /// `NSTemporaryDirectory()` always are), the scan would silently
+    /// come back empty. Detect upfront and fire the
+    /// folder-access-needed notification; leave
+    /// `hasStartedColdStartScan = false` so the next call (after the
+    /// user grants access) actually scans.
     public func beginColdStartScanIfNeeded() {
         guard !hasStartedColdStartScan else { return }
+        if !VaultRegistry.shared.hasActiveSession(forVaultRoot: rootURL),
+           !VaultRegistry.canEnumerateFolder(rootURL) {
+            VaultRegistry.shared.requestFolderAccess(forVaultRoot: rootURL)
+            return
+        }
         hasStartedColdStartScan = true
         VaultIndexer.scan(rootURL: rootURL) { [weak self] results in
             self?.absorb(scanResults: results)

@@ -2391,6 +2391,17 @@ struct LiminalTextView: NSViewRepresentable {
             let resolver = PathResolver(vaultRoot: vaultRoot)
             guard let url = resolver.resolve(path) else { return }
 
+            // Sandbox: if the resolved URL isn't inside any
+            // already-bookmarked vault scope, pop NSOpenPanel pre-filled
+            // to the path so the user grants Powerbox access with one
+            // click. The bookmark is captured + stored under the file's
+            // *parent folder*, so subsequent opens of siblings inside
+            // that folder don't re-prompt.
+            if !Coordinator.isInsideAnyBookmarkedVault(url) {
+                Coordinator.promptForBookmarkAndOpen(url: url)
+                return
+            }
+
             // Create the file (and any intermediate directories) when
             // it doesn't already exist. New files start empty — the
             // user's first :Write persists them.
@@ -2402,6 +2413,63 @@ struct LiminalTextView: NSViewRepresentable {
                 try? Data().write(to: url, options: .atomic)
             }
 
+            NavigationRouter.shared.navigate(
+                to: url,
+                anchor: nil,
+                disposition: .replaceInCurrentTab
+            )
+        }
+
+        /// True when `url` falls under (or equals) any vault root that
+        /// has a currently-active security-scoped session.
+        private static func isInsideAnyBookmarkedVault(_ url: URL) -> Bool {
+            let target = url.resolvingSymlinksInPath().standardizedFileURL.path
+            for root in VaultBookmarkStore.shared.allVaultRoots() {
+                guard VaultRegistry.shared.hasActiveSession(forVaultRoot: root) else { continue }
+                let rootPath = root.standardizedFileURL.path
+                // Treat the vault root itself + any deeper path as
+                // inside-scope. Append "/" to avoid /foo matching /foobar.
+                let normalizedRoot = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+                if target == rootPath || target.hasPrefix(normalizedRoot) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /// Spawn `NSOpenPanel` pre-filled to `url`'s parent directory
+        /// (with the filename suggested), capture a security-scoped
+        /// bookmark for the *parent folder* so siblings are
+        /// accessible too, and open via `NavigationRouter`.
+        private static func promptForBookmarkAndOpen(url: URL) {
+            let parent = url.deletingLastPathComponent()
+            let panel = NSOpenPanel()
+            panel.title = "Grant Liminal access"
+            panel.message = "Liminal needs access to “\(parent.lastPathComponent)” to open “\(url.lastPathComponent)”."
+            panel.prompt = "Grant Access"
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.directoryURL = parent
+            guard panel.runModal() == .OK, let chosen = panel.url else { return }
+            guard let data = try? chosen.bookmarkData(
+                options: [.withSecurityScope],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            ) else { return }
+
+            let canonical = chosen.resolvingSymlinksInPath().standardizedFileURL
+            VaultRegistry.shared.registerBookmark(data, forVaultRoot: canonical)
+
+            // Create the file if it doesn't exist yet (same as the
+            // happy path), then open.
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try? Data().write(to: url, options: .atomic)
+            }
             NavigationRouter.shared.navigate(
                 to: url,
                 anchor: nil,
