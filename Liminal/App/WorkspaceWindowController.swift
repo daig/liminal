@@ -121,6 +121,15 @@ final class WorkspaceWindowController: ObservableObject, WorkspaceNavigationSubs
         }
     }
 
+    /// `:Quit` entry point. Closes the active tab when there's more
+    /// than one; returns `false` for the last-tab case so the caller
+    /// can close the window instead.
+    func closeActiveTab() -> Bool {
+        guard tabs.count > 1, let active = activeTab else { return false }
+        closeTab(active.id)
+        return true
+    }
+
     func handleNavigation(_ request: NavigationRequest, disposition: NavigationDisposition) {
         switch disposition {
         case .replaceInCurrentTab:

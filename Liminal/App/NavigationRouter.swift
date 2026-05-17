@@ -106,6 +106,14 @@ public final class NavigationRouter {
         }
     }
 
+    /// Forward `:Quit` to the active workspace's `closeActiveTab`.
+    /// Returns the workspace's result: `true` if a tab was closed,
+    /// `false` if there's no active workspace OR the workspace is
+    /// down to its last tab (caller closes the window instead).
+    public func closeActiveWorkspaceTab() -> Bool {
+        activeWorkspace?.closeActiveTab() ?? false
+    }
+
     private func openInDocumentWindow(_ request: NavigationRequest) {
         if deliverToOpenDocument(request) {
             return
@@ -186,4 +194,15 @@ public protocol NavigationSubscriber: AnyObject {
 @MainActor
 public protocol WorkspaceNavigationSubscriber: AnyObject {
     func handleNavigation(_ request: NavigationRequest, disposition: NavigationDisposition)
+    /// Close the currently-active tab. Returns `true` if a tab was
+    /// closed; `false` when this is the only tab in the window (caller
+    /// is responsible for closing the window). Drives `:Quit`.
+    func closeActiveTab() -> Bool
+}
+
+public extension WorkspaceNavigationSubscriber {
+    /// Default no-op so existing conformers that haven't implemented
+    /// the close path stay source-compatible. Production
+    /// `WorkspaceWindowController` overrides.
+    func closeActiveTab() -> Bool { false }
 }

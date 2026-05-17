@@ -840,6 +840,12 @@ public final class VimController: ObservableObject {
             delegate?.cstExpand(count: count)
         case .cstNarrow(let count):
             delegate?.cstNarrow(count: count)
+        case .writeCurrentFile:
+            delegate?.writeCurrentFile()
+        case .quitCurrent:
+            delegate?.quitCurrent()
+        case .editPath(let path):
+            delegate?.editPath(path)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1751,6 +1757,35 @@ public final class VimController: ObservableObject {
             .cstNarrow(count: count ?? 1)
         })
 
+        // MARK: Ex / file commands — vim's :w / :q / :e for the
+        // editor. :Edit uses .dynamicSingle so its popup row stage
+        // shows nothing (we don't supply path completions in v1) and
+        // Enter dispatches the literal-typed text via the
+        // acceptCommandLineEntry fallback.
+
+        registry.register(.init(
+            name: "Write",
+            description: "Save the current document to disk"
+        ) { _, _ in
+            .writeCurrentFile
+        })
+
+        registry.register(.init(
+            name: "Quit",
+            description: "Close the current tab (closes window if last tab)"
+        ) { _, _ in
+            .quitCurrent
+        })
+
+        registry.register(.init(
+            name: "Edit",
+            description: "Open a file by path (vault-relative; .lim appended if missing)",
+            argSpec: .dynamicSingle(label: "path")
+        ) { args, _ in
+            guard let path = args.first, !path.isEmpty else { return nil }
+            return .editPath(path: path)
+        })
+
         return registry
     }
 
@@ -2016,6 +2051,13 @@ public protocol VimControllerDelegate: AnyObject {
     /// stack at each step. When the stack is empty, falls back to
     /// first-child behavior. Backs `:CSTNarrow`.
     func cstNarrow(count: Int)
+    /// Save the current document to its backing file. Backs `:Write`.
+    func writeCurrentFile()
+    /// Close the current tab (last tab → close window). Backs `:Quit`.
+    func quitCurrent()
+    /// Open `path` via `PathResolver`; create if missing. Backs
+    /// `:Edit <path>`.
+    func editPath(_ path: String)
 }
 
 extension VimControllerDelegate {
@@ -2062,4 +2104,7 @@ extension VimControllerDelegate {
     public func forestMarkPreview(letter: Character) -> ForestMarkPreview? { nil }
     public func cstExpand(count: Int) {}
     public func cstNarrow(count: Int) {}
+    public func writeCurrentFile() {}
+    public func quitCurrent() {}
+    public func editPath(_ path: String) {}
 }

@@ -2356,6 +2356,59 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
+        // MARK: - Ex / file commands
+
+        /// `:Write` — flush the current document to its backing file
+        /// via the same atomic write path used by autosave. Silent
+        /// no-op when the document has no backing URL (the document
+        /// already short-circuits on `nil fileURL`).
+        func writeCurrentFile() {
+            _ = document.writeToBackingFileIfPossible()
+        }
+
+        /// `:Quit` — close the active tab. When this is the only tab
+        /// in the window, close the window via `performClose(_:)`
+        /// (which honors the AppKit save-confirmation flow). Does
+        /// NOT quit the application — that's Cmd-Q.
+        func quitCurrent() {
+            if NavigationRouter.shared.closeActiveWorkspaceTab() {
+                return
+            }
+            // Last tab (or no active workspace) — close the window
+            // hosting this text view.
+            textView?.window?.performClose(nil)
+        }
+
+        /// `:Edit <path>` — resolve via `PathResolver` against the
+        /// current document's vault root, create the file if it
+        /// doesn't exist (matching the `[[NewLinkName]]` flow), and
+        /// open it in the current tab. Silent no-op when the input
+        /// can't be resolved (empty, or vault-relative with no vault).
+        func editPath(_ path: String) {
+            let vaultRoot = document.fileURL.map {
+                VaultRegistry.shared.entry(for: $0).rootURL
+            }
+            let resolver = PathResolver(vaultRoot: vaultRoot)
+            guard let url = resolver.resolve(path) else { return }
+
+            // Create the file (and any intermediate directories) when
+            // it doesn't already exist. New files start empty — the
+            // user's first :Write persists them.
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try? Data().write(to: url, options: .atomic)
+            }
+
+            NavigationRouter.shared.navigate(
+                to: url,
+                anchor: nil,
+                disposition: .replaceInCurrentTab
+            )
+        }
+
         // MARK: - Visual CST helpers
 
         /// Validate that the active forest still references the document's

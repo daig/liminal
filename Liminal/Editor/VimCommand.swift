@@ -143,6 +143,23 @@ public enum VimCommand: Sendable, Equatable {
     /// no longer resolves (tree mutated). Backs `:CSTNarrow`.
     case cstNarrow(count: Int)
 
+    // MARK: - Ex / file
+
+    /// Save the current document to its backing file. Backs `:Write`
+    /// (vim's `:w`). Silent no-op when there is no backing file.
+    case writeCurrentFile
+
+    /// Close the current tab. Closes the window when it's the last
+    /// tab. Backs `:Quit` (vim's `:q`). Does NOT quit the app — the
+    /// user uses Cmd-Q for that, matching standard Mac convention.
+    case quitCurrent
+
+    /// Resolve `path` against the current vault (via `PathResolver`)
+    /// and open it. Creates the file if it doesn't exist (matches the
+    /// existing `[[NewLinkName]]` create-on-click flow). Backs
+    /// `:Edit <path>` (vim's `:e`).
+    case editPath(path: String)
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into

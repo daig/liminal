@@ -94,6 +94,8 @@ struct CommandRegistryTests {
             "CSTMark", "CSTJumpToMark", "CSTUnmark",
             // Slice D — smart-expand / smart-narrow
             "CSTExpand", "CSTNarrow",
+            // Slice E — ex / file commands
+            "Write", "Quit", "Edit",
         ]
         let actual = Set(registry.commandNames())
         #expect(expected.isSubset(of: actual),
@@ -375,6 +377,38 @@ struct CommandRegistryTests {
             registry.resolve(name: "CSTUnmark", args: ["m"], count: nil)
             == .unsetForestMark(letter: "m")
         )
+    }
+
+    @Test("Write / Quit dispatch the ex-file VimCommands without args")
+    func exFileNoArgCommandsDispatch() {
+        let registry = VimController.defaultCommands()
+        #expect(registry.resolve(name: "Write", args: [], count: nil) == .writeCurrentFile)
+        #expect(registry.resolve(name: "Quit", args: [], count: nil) == .quitCurrent)
+    }
+
+    @Test("Edit dispatches editPath with the typed path arg")
+    func editCommandDispatchesPath() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "Edit", args: ["foo/bar"], count: nil)
+            == .editPath(path: "foo/bar")
+        )
+        // Empty arg returns nil so the literal-text fallback doesn't
+        // dispatch an empty path.
+        #expect(registry.resolve(name: "Edit", args: [""], count: nil) == nil)
+        #expect(registry.resolve(name: "Edit", args: [], count: nil) == nil)
+    }
+
+    @Test("Edit uses .dynamicSingle so the popup arg stage shows no static options")
+    func editUsesDynamicSingleArgSpec() throws {
+        let registry = VimController.defaultCommands()
+        let cmd = try #require(registry.command(named: "Edit"))
+        switch cmd.argSpec {
+        case .dynamicSingle(let label):
+            #expect(label == "path")
+        case .single, .none:
+            Issue.record("Edit should have .dynamicSingle argSpec for free-form path input")
+        }
     }
 
     @Test("CSTExpand / CSTNarrow thread count through their dispatched VimCommand")
