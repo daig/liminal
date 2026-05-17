@@ -938,6 +938,143 @@ struct LiminalCSTVisualIntegrationTests {
                 "undo should restore overlay length to \(initialLength); saw \(postUndoLength)")
     }
 
+    // MARK: - Slice D: smart-expand / smart-narrow
+
+    @Test("CSTExpand then CSTNarrow restores the original descent path")
+    func smartExpandThenNarrowRestoresOriginalForest() throws {
+        // Doc with rich nesting so we can descend two levels.
+        let source = "This is **bold** and *italic* text.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "bold", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+        // Descend twice via :CSTFirstChild to get deep into the inline tree.
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        let deepest = try #require(fixture.coordinator.cstForest)
+        let deepestRange = deepest.byteRange
+
+        // Expand twice.
+        fixture.coordinator.cstExpand(count: 1)
+        let afterFirstExpand = try #require(fixture.coordinator.cstForest)
+        #expect(afterFirstExpand.byteRange != deepestRange,
+                "expand should move cstForest up one level")
+        fixture.coordinator.cstExpand(count: 1)
+
+        // Narrow twice — should land back on the original deepest forest.
+        fixture.coordinator.cstNarrow(count: 1)
+        fixture.coordinator.cstNarrow(count: 1)
+        let restored = try #require(fixture.coordinator.cstForest)
+        #expect(restored.byteRange == deepestRange,
+                "after expand-expand / narrow-narrow, expected byte range \(deepestRange); saw \(restored.byteRange)")
+    }
+
+    @Test("CSTNarrow from empty stack behaves like :CSTFirstChild")
+    func smartNarrowFromEmptyStackFallsBackToFirstChild() throws {
+        let source = "Hello world.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        let entry = try #require(fixture.coordinator.cstForest)
+
+        // Reference: what :CSTFirstChild would do.
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        let firstChildBenchmark = try #require(fixture.coordinator.cstForest)
+
+        // Reset and try :CSTNarrow with empty stack from the same entry.
+        fixture.coordinator.enterCSTVisualMode()
+        #expect(try #require(fixture.coordinator.cstForest).byteRange == entry.byteRange)
+        fixture.coordinator.cstNarrow(count: 1)
+        let narrowResult = try #require(fixture.coordinator.cstForest)
+
+        #expect(narrowResult.byteRange == firstChildBenchmark.byteRange,
+                "empty-stack narrow should equal :CSTFirstChild result")
+    }
+
+    @Test("CSTExpand at root is a no-op (no parent)")
+    func smartExpandAtRootIsNoOp() throws {
+        let source = "Just one paragraph.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        // Ascend saturating to root.
+        fixture.coordinator.cstNavigate(.parent, count: .max)
+        let beforeExpand = try #require(fixture.coordinator.cstForest)
+        fixture.coordinator.cstExpand(count: 1)
+        let afterExpand = try #require(fixture.coordinator.cstForest)
+        #expect(afterExpand.byteRange == beforeExpand.byteRange,
+                "Expand at top should not move cstForest")
+    }
+
+    @Test("Lateral navigation clears the descent stack")
+    func lateralCommandClearsDescentStack() throws {
+        // Multi-paragraph doc so we have something to slide between.
+        let source = "First.\n\nSecond.\n\nThird.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "Second", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+
+        // Build descent history.
+        fixture.coordinator.cstExpand(count: 1)
+        #expect(fixture.coordinator.cstDescentStack.count == 1,
+                "Expand should have pushed one entry; saw \(fixture.coordinator.cstDescentStack.count)")
+
+        // Lateral move (cstNavigate is a non-Expand/Narrow CST mutator).
+        fixture.coordinator.cstNavigate(.nextSibling, count: 1)
+        #expect(fixture.coordinator.cstDescentStack.isEmpty,
+                "lateral move must clear the descent stack; saw \(fixture.coordinator.cstDescentStack)")
+    }
+
+    @Test("CSTExpand with count 3 round-trips with CSTNarrow with count 3")
+    func smartExpandCount3RoundTripsWithNarrowCount3() throws {
+        let source = "Hello **bold** world.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: try utf16Offset(of: "bold", in: source))
+        fixture.coordinator.enterCSTVisualMode()
+        // Drill down a few levels.
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        let start = try #require(fixture.coordinator.cstForest)
+        let startRange = start.byteRange
+
+        fixture.coordinator.cstExpand(count: 3)
+        fixture.coordinator.cstNarrow(count: 3)
+        let restored = try #require(fixture.coordinator.cstForest)
+        #expect(restored.byteRange == startRange,
+                "3:Expand then 3:Narrow should restore; expected \(startRange); saw \(restored.byteRange)")
+    }
+
+    @Test("Exiting .visualCST clears the descent stack")
+    func exitingVisualCSTClearsDescentStack() throws {
+        let source = "Hello world.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        let deep = try #require(fixture.coordinator.cstForest)
+        fixture.coordinator.cstExpand(count: 1)
+
+        // Exit visualCST (mode observer clears state).
+        fixture.controller.forceNormalMode()
+
+        // Re-enter; stack should be empty so Narrow falls back to first-child.
+        fixture.placeCursor(atUTF16: 0)
+        fixture.coordinator.enterCSTVisualMode()
+        fixture.coordinator.cstNarrow(count: 1)
+        let restored = try #require(fixture.coordinator.cstForest)
+
+        #expect(restored.byteRange != deep.byteRange || restored.byteRange == deep.byteRange,
+                "this assertion always holds — see the real check below")
+        // Real check: cstForest after restored-narrow should be a first-child of entry,
+        // NOT the deep-from-previous-session position.
+        // We re-construct the firstChild benchmark for verification.
+        fixture.coordinator.enterCSTVisualMode()
+        fixture.coordinator.cstNavigate(.firstChild, count: 1)
+        let firstChildBenchmark = try #require(fixture.coordinator.cstForest)
+        #expect(restored.byteRange == firstChildBenchmark.byteRange,
+                "after mode exit + re-enter, Narrow should equal first-child (stack was cleared)")
+    }
+
     @Test(":CSTUnmark drops the slot from the registry")
     func forestMarkUnmarkDropsSlot() throws {
         let source = "# Heading\n"

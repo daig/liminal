@@ -149,6 +149,19 @@ struct LiminalTextView: NSViewRepresentable {
         private var modeObservation: AnyCancellable?
         private var marksObservation: AnyCancellable?
         private var forestMarksObservation: AnyCancellable?
+
+        /// Stack of `headChildIndex` values, pushed during `:CSTExpand`
+        /// and popped during `:CSTNarrow`. Cleared by any other
+        /// cstForest-mutating command (lateral motion invalidates the
+        /// recorded descent) and on exit from `.visualCST` mode. Cap
+        /// prevents unbounded growth in pathological cases.
+        ///
+        /// Internal (not private) so integration tests can assert stack
+        /// depth directly — verifying "lateral clears the stack" via
+        /// behavior alone is too indirect (it depends on which kinds
+        /// happen to share byte ranges in the test fixture).
+        var cstDescentStack: [Int] = []
+        static let cstDescentStackCap = 32
         private var treeVersionObservation: AnyCancellable?
         private var preferencesObservation: AnyCancellable?
         private var fileURLObservation: AnyCancellable?
@@ -225,6 +238,7 @@ struct LiminalTextView: NSViewRepresentable {
                         self.visualBlockAnchor = nil
                         self.visualHeadUTF16 = nil
                         self.cstForest = nil
+                        self.cstDescentStack.removeAll()
                         self.textView?.cstSelectionRanges = []
                         self.textView?.cstHeadEdge = nil
                     }
@@ -1964,6 +1978,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// controller back to normal so the user doesn't sit in an
         /// empty `.visualCST`.
         func enterCSTVisualMode() {
+            cstDescentStack.removeAll()
             guard let textView,
                   let tree = document.session.currentTree
             else {
@@ -1994,6 +2009,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// ``fields``, etc.) to land on a meaningful structural unit.
         func cstNavigate(_ motion: CSTMotion, count: Int) {
             guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstDescentStack.removeAll()
             cstForest = forest.moved(
                 by: Self.forestMotion(for: motion),
                 extending: false,
@@ -2008,6 +2024,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// returns nil for those, the forest stays put.
         func extendCSTSelection(_ motion: CSTMotion, count: Int) {
             guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstDescentStack.removeAll()
             cstForest = forest.moved(
                 by: Self.forestMotion(for: motion),
                 extending: true,
@@ -2035,6 +2052,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// the other end of the selection) has a hook.
         func swapCSTEnds() {
             guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstDescentStack.removeAll()
             cstForest = forest.withEndsSwapped()
             mirrorCSTSelection()
         }
@@ -2046,6 +2064,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// Backs `:CSTNextBlock` / `:CSTPreviousBlock`.
         func cstBlockPeer(direction: ForestMotion.Direction, extending: Bool) {
             guard ensureForestIsLive(), let initial = cstForest else { return }
+            cstDescentStack.removeAll()
 
             let initialKind = initial.parent.withCursor { cursor in
                 cursor.green { green in green.child(at: initial.headChildIndex) }.kind
@@ -2099,6 +2118,7 @@ struct LiminalTextView: NSViewRepresentable {
                   let tree = document.session.currentTree,
                   let textView
             else { return }
+            cstDescentStack.removeAll()
             let source = textView.string
             let byte: Int
             switch end {
@@ -2147,6 +2167,7 @@ struct LiminalTextView: NSViewRepresentable {
                   let tree = document.session.currentTree,
                   let anchor = document.vimController.forestMarks.anchor(named: letter)
             else { return }
+            cstDescentStack.removeAll()
             switch anchor.resolve(in: tree) {
             case .strong(let forest), .weak(let forest), .recovered(let forest):
                 cstForest = forest
@@ -2198,6 +2219,55 @@ struct LiminalTextView: NSViewRepresentable {
             return CSTPreview.format(raw, max: 40)
         }
 
+        // MARK: - Smart-expand / smart-narrow
+
+        /// `:CSTExpand` — ascend `count` navigable levels, pushing the
+        /// leaving `headChildIndex` onto the descent stack at each step.
+        /// Bails when there's no parent (already at the topmost
+        /// forest). Stack is capped at
+        /// `Coordinator.cstDescentStackCap`; older entries drop.
+        func cstExpand(count: Int) {
+            guard ensureForestIsLive() else { return }
+            var moved = false
+            for _ in 0..<max(1, count) {
+                guard let forest = cstForest,
+                      let parent = forest.parentForest()
+                else { break }
+                if cstDescentStack.count >= Coordinator.cstDescentStackCap {
+                    cstDescentStack.removeFirst()
+                }
+                cstDescentStack.append(forest.headChildIndex)
+                cstForest = parent
+                moved = true
+            }
+            if moved { mirrorCSTSelection() }
+        }
+
+        /// `:CSTNarrow` — descend `count` levels, popping the descent
+        /// stack at each step. When the stack is empty, falls back to
+        /// first-child behavior (matching `:CSTFirstChild`). When the
+        /// saved index doesn't resolve in the current tree
+        /// (`childForest(at:)` returns nil — e.g. tree mutated),
+        /// silently falls back to first-child for that step too.
+        func cstNarrow(count: Int) {
+            guard ensureForestIsLive() else { return }
+            var moved = false
+            for _ in 0..<max(1, count) {
+                guard let forest = cstForest else { break }
+                let nextForest: LiminalForest?
+                if let savedIdx = cstDescentStack.popLast(),
+                   let restored = forest.childForest(at: savedIdx) {
+                    nextForest = restored
+                } else {
+                    nextForest = forest.firstChildForest()
+                }
+                guard let target = nextForest else { break }
+                cstForest = target
+                moved = true
+            }
+            if moved { mirrorCSTSelection() }
+        }
+
         /// Generic forest-motion dispatch — used by every CST command
         /// that doesn't fit the four-case `CSTMotion` enum or the
         /// subtree-bounded find. Builds a `ForestMotion` from the
@@ -2205,6 +2275,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// `?? forest` saturation pattern as the existing `cstNavigate`.
         func cstMove(descriptor: ForestMotion.Descriptor, extending: Bool) {
             guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstDescentStack.removeAll()
             let motion = ForestMotion(
                 axis: descriptor.axis,
                 direction: descriptor.direction,
@@ -2228,6 +2299,7 @@ struct LiminalTextView: NSViewRepresentable {
             count: Int
         ) {
             guard ensureForestIsLive(), let forest = cstForest else { return }
+            cstDescentStack.removeAll()
             let predicate = ForestMotion.Predicate.containingAny(kind.category)
             let motion: ForestMotion = (direction == .forward)
                 ? .subtreePreorderForward(predicate)

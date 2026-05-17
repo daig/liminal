@@ -828,6 +828,10 @@ public final class VimController: ObservableObject {
             delegate?.jumpToForestMark(letter: letter)
         case .unsetForestMark(let letter):
             delegate?.unsetForestMark(letter: letter)
+        case .cstExpand(let count):
+            delegate?.cstExpand(count: count)
+        case .cstNarrow(let count):
+            delegate?.cstNarrow(count: count)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1719,6 +1723,26 @@ public final class VimController: ObservableObject {
             return .unsetForestMark(letter: ch)
         })
 
+        // MARK: Smart-expand / smart-narrow — vim's incremental selection
+        // for the CST plane. Expand ascends one navigable level (same as
+        // :CSTParent) but pushes the leaving headChildIndex onto a
+        // Coordinator-private descent stack. Narrow pops + descends to
+        // that exact child; empty-stack fallback is first-child.
+
+        registry.register(.init(
+            name: "CSTExpand",
+            description: "Ascend one navigable level, remembering the descent path for :CSTNarrow"
+        ) { _, count in
+            .cstExpand(count: count ?? 1)
+        })
+
+        registry.register(.init(
+            name: "CSTNarrow",
+            description: "Descend back through the remembered :CSTExpand path; falls back to first-child when no history"
+        ) { _, count in
+            .cstNarrow(count: count ?? 1)
+        })
+
         return registry
     }
 
@@ -1963,6 +1987,14 @@ public protocol VimControllerDelegate: AnyObject {
     /// the slot's current resolution strength. Returns `nil` when the
     /// slot is empty or its anchor resolves to `.lost`.
     func forestMarkPreview(letter: Character) -> ForestMarkPreview?
+    /// Smart-expand: ascend `count` navigable levels, pushing each
+    /// leaving `headChildIndex` onto a Coordinator-private descent
+    /// stack. Caps stack depth at ~32. Backs `:CSTExpand`.
+    func cstExpand(count: Int)
+    /// Smart-narrow: descend `count` levels, popping the descent
+    /// stack at each step. When the stack is empty, falls back to
+    /// first-child behavior. Backs `:CSTNarrow`.
+    func cstNarrow(count: Int)
 }
 
 extension VimControllerDelegate {
@@ -2007,4 +2039,6 @@ extension VimControllerDelegate {
     public func jumpToForestMark(letter: Character) {}
     public func unsetForestMark(letter: Character) {}
     public func forestMarkPreview(letter: Character) -> ForestMarkPreview? { nil }
+    public func cstExpand(count: Int) {}
+    public func cstNarrow(count: Int) {}
 }

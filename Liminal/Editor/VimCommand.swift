@@ -132,6 +132,17 @@ public enum VimCommand: Sendable, Equatable {
     /// any mode (it's a registry mutation, not a selection change).
     case unsetForestMark(letter: Character)
 
+    /// Smart-expand: ascend one navigable level (same as `:CSTParent`)
+    /// while pushing the leaving `headChildIndex` onto a descent-history
+    /// stack. Repeated `count` times. Backs `:CSTExpand`.
+    case cstExpand(count: Int)
+
+    /// Smart-narrow: pop the descent-history stack and descend into the
+    /// current head, landing at the saved child index. Falls back to
+    /// first-child behavior when the stack is empty or the saved index
+    /// no longer resolves (tree mutated). Backs `:CSTNarrow`.
+    case cstNarrow(count: Int)
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into

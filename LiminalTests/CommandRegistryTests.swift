@@ -92,6 +92,8 @@ struct CommandRegistryTests {
             "CSTDocumentStart", "CSTDocumentEnd",
             // Slice C — forest marks
             "CSTMark", "CSTJumpToMark", "CSTUnmark",
+            // Slice D — smart-expand / smart-narrow
+            "CSTExpand", "CSTNarrow",
         ]
         let actual = Set(registry.commandNames())
         #expect(expected.isSubset(of: actual),
@@ -372,6 +374,27 @@ struct CommandRegistryTests {
         #expect(
             registry.resolve(name: "CSTUnmark", args: ["m"], count: nil)
             == .unsetForestMark(letter: "m")
+        )
+    }
+
+    @Test("CSTExpand / CSTNarrow thread count through their dispatched VimCommand")
+    func smartExpandNarrowThreadCount() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "CSTExpand", args: [], count: nil)
+            == .cstExpand(count: 1)
+        )
+        #expect(
+            registry.resolve(name: "CSTExpand", args: [], count: 3)
+            == .cstExpand(count: 3)
+        )
+        #expect(
+            registry.resolve(name: "CSTNarrow", args: [], count: nil)
+            == .cstNarrow(count: 1)
+        )
+        #expect(
+            registry.resolve(name: "CSTNarrow", args: [], count: 4)
+            == .cstNarrow(count: 4)
         )
     }
 
