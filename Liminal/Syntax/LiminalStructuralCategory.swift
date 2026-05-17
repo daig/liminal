@@ -91,6 +91,11 @@ public struct LiminalStructuralCategory: OptionSet, Sendable, Hashable {
 
     /// Emphasis family (`emphasis`, `strong`, `strikethrough`, `highlight`).
     public static let emphasis       = Self(rawValue: 1 << 29)
+
+    /// Every defined category. Useful as a mask for `.differentFrom`
+    /// when the caller wants "any category bit difference" — e.g.,
+    /// the default `w`/`b` kind-run semantic.
+    public static let all = Self(rawValue: UInt64.max)
 }
 
 public extension LiminalStructuralCategory {

@@ -266,6 +266,112 @@ struct LiminalCSTVisualIntegrationTests {
         #expect(after == before, "no heading in subtree → forest unchanged")
     }
 
+    @Test(":CSTLastChild descends to the last navigable child of the head")
+    func lastChildDescendsToLast() throws {
+        let source = "- a\n- b\n- c\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        // cstVisualEntry lands at the listItem level; press `h` to
+        // ascend to the list so CSTLastChild descends INTO the list
+        // (not into the first list item).
+        #expect(headKind(try #require(fixture.coordinator.cstForest)) == .listItem)
+        _ = fixture.controller.handle(.char("h"))
+        #expect(headKind(try #require(fixture.coordinator.cstForest)) == .list)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTLastChild" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let last = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(last) == .listItem)
+        let cOffset = try utf16Offset(of: "- c", in: source)
+        #expect(
+            Int(last.byteRange.start.rawValue) == cOffset,
+            "expected last item starting at \(cOffset); saw \(last.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test(":CSTNextBlock hops to the next block-level sibling, ascending from inline depth")
+    func nextBlockHopsBetweenParagraphs() throws {
+        let source = "First paragraph.\n\nSecond paragraph.\n"
+        let fixture = try makeFixture(source)
+        // Place cursor inside the first paragraph's text.
+        let insideOffset = try utf16Offset(of: "paragraph", in: source)
+        fixture.placeCursor(atUTF16: insideOffset)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        // Entry should land on the first paragraph (cstVisualEntry skips glue).
+        let firstForest = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(firstForest) == .paragraph)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTNextBlock" { _ = fixture.controller.handle(.char(ch)) }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let secondForest = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(secondForest) == .paragraph)
+        let secondOffset = try utf16Offset(of: "Second paragraph", in: source)
+        #expect(
+            Int(secondForest.byteRange.start.rawValue) == secondOffset,
+            "expected second paragraph at \(secondOffset); saw \(secondForest.byteRange.start.rawValue)"
+        )
+    }
+
+    @Test(":CSTNextSiblingHeading skips deeper-level headings")
+    func nextSiblingHeadingSkipsDeeperLevels() throws {
+        let source = "# H1a\n\n## H2a\n\n# H1b\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        #expect(headKind(try #require(fixture.coordinator.cstForest)) == .atxHeading)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTNextSiblingHeading" {
+            _ = fixture.controller.handle(.char(ch))
+        }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        let result = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(result) == .atxHeading)
+        let h1bOffset = try utf16Offset(of: "# H1b", in: source)
+        #expect(
+            Int(result.byteRange.start.rawValue) == h1bOffset,
+            "expected H1b at \(h1bOffset) — same level as H1a, skipping H2a"
+        )
+    }
+
+    @Test(":CSTGlobalFind heading jumps to the next heading anywhere in the document")
+    func globalFindLeavesSubtree() throws {
+        // First paragraph has no heading; the heading is in root's
+        // second-after-blankLine position. :CSTFind (subtree-bounded)
+        // would return nil. :CSTGlobalFind crosses into the next
+        // root sibling and lands on the heading.
+        let source = "Intro paragraph.\n\n# The Heading\n\nMore body.\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        #expect(fixture.controller.mode == .visualCST)
+        let entryForest = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(entryForest) == .paragraph)
+
+        _ = fixture.controller.handle(.char(":"))
+        for ch in "CSTGlobalFind heading" {
+            _ = fixture.controller.handle(.char(ch))
+        }
+        _ = fixture.controller.handle(.special(.returnKey))
+
+        #expect(fixture.controller.mode == .visualCST)
+        let after = try #require(fixture.coordinator.cstForest)
+        #expect(
+            headKind(after) == .atxHeading,
+            "global preorder forward should cross root siblings to find the heading; saw \(headKind(after))"
+        )
+    }
+
     @Test(":CSTEnter from normal mode lands in .visualCST with cstForest set")
     func enterCSTViaCommandLineFromNormal() throws {
         let fixture = try makeFixture("Hello world.\n")

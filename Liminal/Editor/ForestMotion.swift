@@ -71,8 +71,26 @@ public struct ForestMotion: Sendable {
         /// rebased to the new position (snapshot is per-step, not
         /// once-per-resolve).
         case differentFrom(LiminalStructuralCategory)
+        /// Heading kind whose level matches `match` relative to the
+        /// step's starting forest. If the start head isn't itself a
+        /// heading, the start's level is taken from its nearest
+        /// enclosing heading ancestor; if there isn't one, no
+        /// candidate matches. Backs `][` / `[]` / `]h` / `[h`.
+        case headingLevel(HeadingLevelMatch)
         /// Escape hatch.
         case custom(@Sendable (LiminalForest) -> Bool)
+    }
+
+    /// How a `.headingLevel` predicate compares a candidate heading's
+    /// level to the step's starting context.
+    public enum HeadingLevelMatch: Sendable, Equatable, Hashable {
+        /// Same level as start (vim `][` / `[]`).
+        case sameAsStart
+        /// Strictly deeper than start — higher level number, e.g. level
+        /// 3 deeper than level 2 (vim's `]h` / `[h` proposed semantic).
+        case deeperThanStart
+        /// Strictly shallower than start — lower level number.
+        case shallowerThanStart
     }
 
     public let axis: Axis
@@ -134,6 +152,85 @@ public extension ForestMotion {
     /// iteration as `.forward`). Backs vim-style `F<kind>`.
     static func subtreePreorderBackward(_ predicate: Predicate = .any) -> ForestMotion {
         ForestMotion(axis: .subtreePreorder, direction: .backward, predicate: predicate)
+    }
+}
+
+// MARK: - Additional forest navigation primitives
+
+public extension SyntaxForest where Policy == LiminalCSTPolicy {
+    /// Descend to the LAST navigable child of the head's pointed node.
+    /// Mirrors Cambium's ``firstChildForest`` but lands on the last
+    /// sibling. Implemented as `firstChildForest()` + `slidForward()`
+    /// in a tight loop (Cambium doesn't expose a direct primitive).
+    /// Returns `nil` for the same reasons as `firstChildForest()`:
+    /// head pointing at a token, an opaque-policy parent, or a parent
+    /// with no navigable children.
+    func lastChildForest() -> SyntaxForest<Policy>? {
+        guard let first = firstChildForest() else { return nil }
+        var current = first
+        while let next = current.slidForward() {
+            current = next
+        }
+        return current
+    }
+}
+
+// MARK: - Equatable subset for VimCommand dispatch
+
+public extension ForestMotion {
+    /// Equatable / Hashable subset of `ForestMotion` — omits the
+    /// `.custom` predicate variant. Used by `VimCommand.cstMove` to
+    /// carry a dispatchable motion through the binding tree (VimCommand
+    /// must be Equatable, but a closure-bearing predicate isn't).
+    ///
+    /// Convert to a full `ForestMotion` via the resolver's `init` plus
+    /// `predicate.asPredicate`.
+    struct Descriptor: Sendable, Equatable, Hashable {
+        public var axis: Axis
+        public var direction: Direction
+        public var predicate: StructuredPredicate
+        /// Forwarded directly to `moved(by:extending:count:)`. Default
+        /// of 1 matches the kernel's typical single-step semantics.
+        public var count: Int
+
+        public init(
+            axis: Axis,
+            direction: Direction,
+            predicate: StructuredPredicate = .any,
+            count: Int = 1
+        ) {
+            self.axis = axis
+            self.direction = direction
+            self.predicate = predicate
+            self.count = count
+        }
+    }
+
+    /// Predicate vocabulary expressible without a closure. Mirrors
+    /// `Predicate` minus `.custom`.
+    enum StructuredPredicate: Sendable, Equatable, Hashable {
+        case any
+        case containingAny(LiminalStructuralCategory)
+        case containingAll(LiminalStructuralCategory)
+        case excluding(LiminalStructuralCategory)
+        case differentFrom(LiminalStructuralCategory)
+        case kindIn(Set<LiminalKind>)
+        case headingLevel(HeadingLevelMatch)
+    }
+}
+
+public extension ForestMotion.StructuredPredicate {
+    /// Lift to the full `ForestMotion.Predicate` enum for kernel use.
+    var asPredicate: ForestMotion.Predicate {
+        switch self {
+        case .any:                       return .any
+        case .containingAny(let cat):    return .containingAny(cat)
+        case .containingAll(let cat):    return .containingAll(cat)
+        case .excluding(let cat):        return .excluding(cat)
+        case .differentFrom(let cat):    return .differentFrom(cat)
+        case .kindIn(let kinds):         return .kindIn(kinds)
+        case .headingLevel(let match):   return .headingLevel(match)
+        }
     }
 }
 
@@ -425,6 +522,21 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
             let startMasked = headCategories(of: start).intersection(mask)
             let candidateMasked = headCategories(of: candidate).intersection(mask)
             return startMasked != candidateMasked
+        case .headingLevel(let match):
+            // Candidate must itself be a heading.
+            guard headKind(of: candidate) == .atxHeading,
+                  let candidateLevel = headingLevel(of: candidate)
+            else { return false }
+            // Start's level is either its own (if start head is a
+            // heading) or its nearest enclosing heading ancestor's.
+            // No reachable heading → no candidate matches.
+            guard let startLevel = enclosingHeadingLevel(of: start)
+            else { return false }
+            switch match {
+            case .sameAsStart:        return candidateLevel == startLevel
+            case .deeperThanStart:    return candidateLevel > startLevel
+            case .shallowerThanStart: return candidateLevel < startLevel
+            }
         case .custom(let fn):
             return fn(candidate)
         }
@@ -438,5 +550,39 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
 
     private static func headCategories(of forest: SyntaxForest<Policy>) -> LiminalStructuralCategory {
         headKind(of: forest).categories
+    }
+
+    /// Read the `AtxHeadingSyntax.level` for the head's pointed child,
+    /// or `nil` if the head doesn't point at a heading. Used by
+    /// `.headingLevel` predicate evaluation.
+    private static func headingLevel(of forest: SyntaxForest<Policy>) -> Int? {
+        guard headKind(of: forest) == .atxHeading else { return nil }
+        let handle: SyntaxNodeHandle<LiminalLanguage>? = forest.parent.withCursor { cursor in
+            cursor.withChildNode(atRawIndex: forest.headChildIndex) { child in
+                child.makeHandle()
+            }
+        }
+        guard let handle else { return nil }
+        return AtxHeadingSyntax(unchecked: handle).level
+    }
+
+    /// Find the level of the heading at or before `forest` in document
+    /// preorder. Returns the head's own level if it's a heading,
+    /// otherwise walks backward through preorder (markdown headings
+    /// are siblings of their section content, not ancestors, so the
+    /// parent chain doesn't help — backward preorder finds the most
+    /// recent heading in source order, which IS the "enclosing
+    /// section's heading"). `nil` when no preceding heading exists.
+    private static func enclosingHeadingLevel(of forest: SyntaxForest<Policy>) -> Int? {
+        if let level = headingLevel(of: forest) { return level }
+        var cursor: SyntaxForest<Policy>? = forest
+        while let f = cursor {
+            guard let prev = preorderNext(from: f, direction: .backward) else {
+                return nil
+            }
+            if let level = headingLevel(of: prev) { return level }
+            cursor = prev
+        }
+        return nil
     }
 }

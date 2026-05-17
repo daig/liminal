@@ -461,6 +461,135 @@ struct ForestMotionTests {
         #expect(leaf.moved(by: .subtreePreorderBackward(), extending: false) == nil)
     }
 
+    // MARK: - Heading-level predicate (slice B)
+
+    @Test(".headingLevel(.sameAsStart) lands on the next same-level heading")
+    func headingLevelSameAsStart() throws {
+        // H1a (level 1) → ## H2a (level 2) → # H1b (level 1).
+        // Forward same-level from H1a should skip H2a and land on H1b.
+        let source = "# H1a\n\n## H2a\n\n# H1b\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        #expect(Self.headKind(start) == .atxHeading)
+
+        let motion = ForestMotion(
+            axis: .preorder,
+            direction: .forward,
+            predicate: .headingLevel(.sameAsStart)
+        )
+        let result = try #require(start.moved(by: motion, extending: false))
+        let h1bOffset = Self.byteOffset(of: "# H1b", in: source)
+        #expect(Int(result.byteRange.start.rawValue) == h1bOffset)
+    }
+
+    @Test(".headingLevel(.deeperThanStart) finds the next strictly-deeper heading")
+    func headingLevelDeeperThanStart() throws {
+        // # H1 → # H1b (same level — skip) → ## H2 (deeper — land).
+        let source = "# H1\n\n# H1b\n\n## H2\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+
+        let motion = ForestMotion(
+            axis: .preorder,
+            direction: .forward,
+            predicate: .headingLevel(.deeperThanStart)
+        )
+        let result = try #require(start.moved(by: motion, extending: false))
+        let h2Offset = Self.byteOffset(of: "## H2", in: source)
+        #expect(Int(result.byteRange.start.rawValue) == h2Offset)
+    }
+
+    @Test(".headingLevel falls back to enclosing heading when start isn't a heading")
+    func headingLevelUsesEnclosingForNonHeadingStart() throws {
+        // From inside the body paragraph (enclosing heading is H1, level 1),
+        // sameAsStart forward should land on H2 (also level 1).
+        let source = "# H1\n\nBody paragraph.\n\n# H2\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let bodyOffset = Self.byteOffset(of: "Body", in: source)
+        let start = try #require(
+            LiminalForest.cstVisualEntry(at: TextSize(UInt32(bodyOffset)), in: tree)
+        )
+        #expect(Self.headKind(start) == .paragraph)
+
+        let motion = ForestMotion(
+            axis: .preorder,
+            direction: .forward,
+            predicate: .headingLevel(.sameAsStart)
+        )
+        let result = try #require(start.moved(by: motion, extending: false))
+        let h2Offset = Self.byteOffset(of: "# H2", in: source)
+        #expect(Int(result.byteRange.start.rawValue) == h2Offset)
+    }
+
+    @Test(".headingLevel returns nil when no enclosing heading exists")
+    func headingLevelNilWithoutEnclosingHeading() throws {
+        let source = "Just plain text.\n\nMore text.\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+
+        let motion = ForestMotion(
+            axis: .preorder,
+            direction: .forward,
+            predicate: .headingLevel(.sameAsStart)
+        )
+        #expect(start.moved(by: motion, extending: false) == nil)
+    }
+
+    @Test(".headingLevel(.shallowerThanStart) finds a strictly-shallower heading")
+    func headingLevelShallowerThanStart() throws {
+        // ## H2 → ### H3 (skip, deeper) → # H1 (shallower — land).
+        let source = "## H2\n\n### H3\n\n# H1\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+
+        let motion = ForestMotion(
+            axis: .preorder,
+            direction: .forward,
+            predicate: .headingLevel(.shallowerThanStart)
+        )
+        let result = try #require(start.moved(by: motion, extending: false))
+        let h1Offset = Self.byteOffset(of: "# H1", in: source)
+        #expect(Int(result.byteRange.start.rawValue) == h1Offset)
+    }
+
+    // MARK: - lastChildForest
+
+    @Test("lastChildForest lands on the LAST navigable child")
+    func lastChildForestLandsOnLastSibling() throws {
+        let source = "- a\n- b\n- c\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        // cstVisualEntry lands at the listItem level (`list > listItem`);
+        // ascend once to put the head on the list so `lastChildForest`
+        // descends into the list to find its last item.
+        let entry = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
+        #expect(Self.headKind(entry) == .listItem)
+        let listForest = try #require(entry.parentForest())
+        #expect(Self.headKind(listForest) == .list)
+
+        let last = try #require(listForest.lastChildForest())
+        #expect(Self.headKind(last) == .listItem)
+        let cOffset = Self.byteOffset(of: "- c", in: source)
+        #expect(Int(last.byteRange.start.rawValue) == cOffset,
+                "expected last list item to start at \(cOffset); saw \(last.byteRange.start.rawValue)")
+    }
+
+    @Test("lastChildForest returns nil for a leaf head")
+    func lastChildForestNilForLeaf() throws {
+        let source = "Hello.\n"
+        let parsed = try LiminalParser().parse(source)
+        let tree = parsed.tree
+        // Drill down to the inlineText leaf.
+        let leaf = try #require(LiminalForest.containing(.zero, in: tree, affinity: .downstream))
+        #expect(Self.headKind(leaf) == .inlineText)
+        #expect(leaf.lastChildForest() == nil)
+    }
+
     @Test("subtreePreorder with extending: true returns nil for both directions")
     func subtreePreorderExtendingReturnsNil() throws {
         let parsed = try LiminalParser().parse("Hello **bold** world.\n")

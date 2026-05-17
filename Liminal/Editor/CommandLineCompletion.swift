@@ -139,6 +139,15 @@ public enum FuzzyMatcher {
                 } else {
                     score -= (matchIdx - prev - 1)
                 }
+            } else if matchIdx > 0 {
+                // Penalize unmatched leading characters so a query
+                // that matches earlier in the candidate ranks higher.
+                // Without this, e.g. "find" against `CSTGlobalFind`
+                // (where the F gets a CamelCase boundary bonus) can
+                // outscore `CSTFind`. Penalizing skipped prefix balances
+                // the CamelCase win and lets length tiebreaks favor
+                // the shorter, more-direct candidate.
+                score -= matchIdx
             }
             prevMatchIdx = matchIdx
         }

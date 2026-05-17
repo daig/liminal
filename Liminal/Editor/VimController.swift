@@ -736,6 +736,12 @@ public final class VimController: ObservableObject {
             pendingCharArgument = (direction == .forward) ? .findKindForward : .findKindBackward
         case .cstFindKind(let direction, let kind, let count):
             delegate?.cstFindKind(direction: direction, kind: kind, count: count)
+        case .cstMove(let descriptor, let extending):
+            delegate?.cstMove(descriptor: descriptor, extending: extending)
+        case .cstBlockPeer(let direction, let extending):
+            delegate?.cstBlockPeer(direction: direction, extending: extending)
+        case .cstLastChild(let extending):
+            delegate?.cstLastChild(extending: extending)
         case .enterCommandLine:
             commandLineReturnMode = mode
             setMode(.commandLine)
@@ -1274,6 +1280,279 @@ public final class VimController: ObservableObject {
             description: "Toggle the task checkbox at the cursor"
         ) { _, _ in .toggleTaskAtCursor })
 
+        // MARK: Sibling endpoints — saturating count walks to first/last.
+
+        registry.register(.init(
+            name: "CSTFirstSibling",
+            description: "Slide to the first navigable sibling under current parent"
+        ) { _, _ in .cstNavigate(.previousSibling, count: .max) })
+
+        registry.register(.init(
+            name: "CSTLastSibling",
+            description: "Slide to the last navigable sibling under current parent"
+        ) { _, _ in .cstNavigate(.nextSibling, count: .max) })
+
+        // MARK: Undo / Redo — CST-aware history walk on the document.
+
+        registry.register(.init(
+            name: "Undo",
+            description: "Walk back one entry in the CST-aware undo history"
+        ) { _, count in .undo(count: count ?? 1) })
+
+        registry.register(.init(
+            name: "Redo",
+            description: "Walk forward one entry in the CST-aware undo history"
+        ) { _, count in .redo(count: count ?? 1) })
+
+        // MARK: Visual operators — only effectful while in a visual mode.
+
+        registry.register(.init(
+            name: "CSTYank",
+            description: "Yank the current visual selection to the system pasteboard"
+        ) { _, _ in .yankSelection })
+
+        registry.register(.init(
+            name: "CSTDelete",
+            description: "Delete the current visual selection (yanks first)"
+        ) { _, _ in .deleteSelection })
+
+        registry.register(.init(
+            name: "CSTChange",
+            description: "Delete the current visual selection and enter insert mode"
+        ) { _, _ in .changeSelection })
+
+        // MARK: Global preorder — document-wide search variants.
+
+        registry.register(.init(
+            name: "CSTGlobalFind",
+            description: "Find next node of given kind anywhere in the document",
+            argSpec: kindArgSpec
+        ) { args, count in
+            guard let arg = args.first,
+                  let kind = TypedDescentKind(commandArgument: arg)
+            else { return nil }
+            return .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .forward,
+                    predicate: .containingAny(kind.category),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTGlobalFindLast",
+            description: "Find previous node of given kind anywhere in the document",
+            argSpec: kindArgSpec
+        ) { args, count in
+            guard let arg = args.first,
+                  let kind = TypedDescentKind(commandArgument: arg)
+            else { return nil }
+            return .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .backward,
+                    predicate: .containingAny(kind.category),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        // MARK: Axis-by-kind — ascend / descend to a structural kind.
+
+        registry.register(.init(
+            name: "CSTAncestor",
+            description: "Ascend to the nearest ancestor of given kind",
+            argSpec: kindArgSpec
+        ) { args, count in
+            guard let arg = args.first,
+                  let kind = TypedDescentKind(commandArgument: arg)
+            else { return nil }
+            return .cstMove(
+                descriptor: .init(
+                    axis: .ancestor,
+                    direction: .forward,
+                    predicate: .containingAny(kind.category),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTDescendant",
+            description: "Descend along first-child chain to the nearest descendant of given kind",
+            argSpec: kindArgSpec
+        ) { args, count in
+            guard let arg = args.first,
+                  let kind = TypedDescentKind(commandArgument: arg)
+            else { return nil }
+            return .cstMove(
+                descriptor: .init(
+                    axis: .descendant,
+                    direction: .forward,
+                    predicate: .containingAny(kind.category),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        // MARK: Kind-runs — hop past consecutive siblings sharing categories.
+
+        registry.register(.init(
+            name: "CSTKindRunForward",
+            description: "Skip ahead to the next sibling with a different category set"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .sibling,
+                    direction: .forward,
+                    predicate: .differentFrom(.all),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTKindRunBackward",
+            description: "Skip back to the previous sibling with a different category set"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .sibling,
+                    direction: .backward,
+                    predicate: .differentFrom(.all),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        // MARK: Heading-level navigation — needs `.headingLevel` predicate.
+        // Level is relative to the start forest (or its enclosing heading
+        // if start isn't itself a heading).
+
+        registry.register(.init(
+            name: "CSTNextSiblingHeading",
+            description: "Jump forward to the next heading at the same level"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .forward,
+                    predicate: .headingLevel(.sameAsStart),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTPreviousSiblingHeading",
+            description: "Jump back to the previous heading at the same level"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .backward,
+                    predicate: .headingLevel(.sameAsStart),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTNextDeeperHeading",
+            description: "Jump forward to the next heading at a strictly deeper level"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .forward,
+                    predicate: .headingLevel(.deeperThanStart),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTPreviousDeeperHeading",
+            description: "Jump back to the previous heading at a strictly deeper level"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .backward,
+                    predicate: .headingLevel(.deeperThanStart),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTNextShallowerHeading",
+            description: "Jump forward to the next heading at a strictly shallower level"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .forward,
+                    predicate: .headingLevel(.shallowerThanStart),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        registry.register(.init(
+            name: "CSTPreviousShallowerHeading",
+            description: "Jump back to the previous heading at a strictly shallower level"
+        ) { _, count in
+            .cstMove(
+                descriptor: .init(
+                    axis: .preorder,
+                    direction: .backward,
+                    predicate: .headingLevel(.shallowerThanStart),
+                    count: count ?? 1
+                ),
+                extending: false
+            )
+        })
+
+        // MARK: Block-peer — `}` / `{` semantics. Ascends to a blockItem
+        // (if needed) and slides to the next/previous blockItem sibling.
+
+        registry.register(.init(
+            name: "CSTNextBlock",
+            description: "Hop to the next block-level sibling (paragraph, heading, list, ...)"
+        ) { _, _ in
+            .cstBlockPeer(direction: .forward, extending: false)
+        })
+
+        registry.register(.init(
+            name: "CSTPreviousBlock",
+            description: "Hop to the previous block-level sibling"
+        ) { _, _ in
+            .cstBlockPeer(direction: .backward, extending: false)
+        })
+
+        // MARK: Last-child descent — opposite of l.
+
+        registry.register(.init(
+            name: "CSTLastChild",
+            description: "Descend to the last navigable child of the current head"
+        ) { _, _ in
+            .cstLastChild(extending: false)
+        })
+
         return registry
     }
 
@@ -1475,6 +1754,18 @@ public protocol VimControllerDelegate: AnyObject {
     /// `kind`. Forward returns the first match in preorder; backward
     /// returns the last. Backs `f<letter>` / `F<letter>`.
     func cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int)
+    /// Generic forest motion: build a `ForestMotion` from `descriptor`
+    /// and drive `forest.moved(by:extending:count:)`. Used by every
+    /// `:` command that doesn't map to one of the four fixed
+    /// `CSTMotion` cases — `:CSTGlobalFind`, `:CSTAncestor`,
+    /// `:CSTKindRunForward`, etc.
+    func cstMove(descriptor: ForestMotion.Descriptor, extending: Bool)
+    /// Block-peer hop: ascend to nearest `.blockItem`, then slide to
+    /// the next / previous `.blockItem` sibling. Backs `:CSTNextBlock`
+    /// / `:CSTPreviousBlock`.
+    func cstBlockPeer(direction: ForestMotion.Direction, extending: Bool)
+    /// Descend to the head's last navigable child. Backs `:CSTLastChild`.
+    func cstLastChild(extending: Bool)
 }
 
 extension VimControllerDelegate {
@@ -1503,4 +1794,13 @@ extension VimControllerDelegate {
         kind: TypedDescentKind,
         count: Int
     ) {}
+    public func cstMove(
+        descriptor: ForestMotion.Descriptor,
+        extending: Bool
+    ) {}
+    public func cstBlockPeer(
+        direction: ForestMotion.Direction,
+        extending: Bool
+    ) {}
+    public func cstLastChild(extending: Bool) {}
 }

@@ -1980,6 +1980,80 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
+        /// Block-peer hop: if head isn't already a `.blockItem`,
+        /// ascend until it is; then slide to the next/previous
+        /// `.blockItem` sibling. Both steps go through the kernel via
+        /// `forest.moved(...)` with the same `?? forest` saturation.
+        /// Backs `:CSTNextBlock` / `:CSTPreviousBlock`.
+        func cstBlockPeer(direction: ForestMotion.Direction, extending: Bool) {
+            guard ensureForestIsLive(), let initial = cstForest else { return }
+
+            let initialKind = initial.parent.withCursor { cursor in
+                cursor.green { green in green.child(at: initial.headChildIndex) }.kind
+            }
+            let ascended: LiminalForest
+            if initialKind.categories.contains(.blockItem) {
+                ascended = initial
+            } else {
+                ascended = initial.moved(
+                    by: .ancestor(.containingAny(.blockItem)),
+                    extending: false
+                ) ?? initial
+            }
+
+            // Block-peer skips blankLine — it's a blockItem structurally
+            // but blank lines aren't meaningful navigation targets (vim's
+            // `}` jumps OVER them to the next real block).
+            let slide = ForestMotion(
+                axis: .sibling,
+                direction: direction,
+                predicate: .custom { candidate in
+                    let kind = candidate.parent.withCursor { cursor in
+                        cursor.green { $0.child(at: candidate.headChildIndex) }.kind
+                    }
+                    return kind.categories.contains(.blockItem)
+                        && kind != .blankLine
+                }
+            )
+            cstForest = ascended.moved(
+                by: slide,
+                extending: extending,
+                count: 1
+            ) ?? ascended
+            mirrorCSTSelection()
+        }
+
+        /// Descend to the head's last navigable child (mirrors
+        /// `cstNavigate(.firstChild, ...)` for the opposite end of
+        /// the children list). Backs `:CSTLastChild`.
+        func cstLastChild(extending: Bool) {
+            guard !extending else { return }
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            guard let last = forest.lastChildForest() else { return }
+            cstForest = last
+            mirrorCSTSelection()
+        }
+
+        /// Generic forest-motion dispatch — used by every CST command
+        /// that doesn't fit the four-case `CSTMotion` enum or the
+        /// subtree-bounded find. Builds a `ForestMotion` from the
+        /// descriptor and drives `forest.moved(...)` with the same
+        /// `?? forest` saturation pattern as the existing `cstNavigate`.
+        func cstMove(descriptor: ForestMotion.Descriptor, extending: Bool) {
+            guard ensureForestIsLive(), let forest = cstForest else { return }
+            let motion = ForestMotion(
+                axis: descriptor.axis,
+                direction: descriptor.direction,
+                predicate: descriptor.predicate.asPredicate
+            )
+            cstForest = forest.moved(
+                by: motion,
+                extending: extending,
+                count: descriptor.count
+            ) ?? forest
+            mirrorCSTSelection()
+        }
+
         /// Typed descent: search the current forest's subtree for a
         /// node matching `kind`. `.forward` lands on the first match in
         /// preorder; `.backward` lands on the last. No-op (cstForest

@@ -100,6 +100,24 @@ public enum VimCommand: Sendable, Equatable {
     /// returns the first match in preorder; backward returns the last.
     case cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int)
 
+    /// Generic forest-motion dispatch — used by every CST command
+    /// that doesn't fit the fixed `CSTMotion` enum (e.g. global find,
+    /// ancestor-by-kind, kind-runs, sibling endpoints). Carries an
+    /// equatable `ForestMotion.Descriptor` instead of a full
+    /// `ForestMotion` (which can't be Equatable because of `.custom`).
+    case cstMove(descriptor: ForestMotion.Descriptor, extending: Bool)
+
+    /// Block-peer hop. Ascends until the head is a `.blockItem` (if
+    /// it isn't already), then slides to the next/previous `.blockItem`
+    /// sibling. Backs `:CSTNextBlock` / `:CSTPreviousBlock` (the
+    /// `}` / `{` family in the old proposal).
+    case cstBlockPeer(direction: ForestMotion.Direction, extending: Bool)
+
+    /// Descend to the LAST navigable child of the head. Mirrors
+    /// `.cstNavigate(.firstChild, ...)` but lands on the last sibling.
+    /// Backs `:CSTLastChild`.
+    case cstLastChild(extending: Bool)
+
     // MARK: - Command-line mode
 
     /// `:` from normal / visual / .visualCST: flip the controller into
