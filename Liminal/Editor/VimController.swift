@@ -60,6 +60,16 @@ public final class VimController: ObservableObject {
     /// Cleared on Enter (after dispatch) or Esc.
     @Published public private(set) var commandLineInput: String = ""
 
+    /// Completion entries for the current `commandLineInput`, in display
+    /// order. The popup view consumes this directly. Recomputed whenever
+    /// `commandLineInput` mutates.
+    @Published public private(set) var commandLineCompletions: [CompletionEntry] = []
+
+    /// Index of the currently-highlighted entry in `commandLineCompletions`,
+    /// or `nil` for "no selection" (which is the default state when the
+    /// popup first appears on empty input). Driven by Down/Up/Tab/Shift-Tab.
+    @Published public private(set) var commandLineHighlightedIndex: Int? = nil
+
     public weak var delegate: VimControllerDelegate?
 
     private nonisolated(unsafe) let bindings: VimBindingTree
@@ -72,6 +82,14 @@ public final class VimController: ObservableObject {
     /// or Esc cancel). Captured when entering, defaulted to .normal
     /// for safety. Internal — UI doesn't need to observe it.
     private var commandLineReturnMode: VimMode = .normal
+
+    /// Lazily-computed reverse map from command name → chord display
+    /// strings (e.g. `"CSTParent" → ["h"]`). Built on first access by
+    /// scanning `bindings.enumerateBindings(...)` across every mode.
+    /// Used by the popup to surface chord shortcuts next to each
+    /// command. Bindings don't change at runtime, so a single computation
+    /// suffices for the controller's lifetime.
+    private var chordHintMapCache: [String: [String]]? = nil
 
     public nonisolated init(
         bindings: VimBindingTree,
@@ -154,41 +172,34 @@ public final class VimController: ObservableObject {
     }
 
     /// Collects characters into ``commandLineInput`` while in
-    /// `.commandLine` mode. `<Esc>` cancels, `<Enter>` dispatches the
-    /// resolved command via the registry, `<BS>` deletes the last char
-    /// (or cancels if the buffer is empty — vim convention).
+    /// `.commandLine` mode. Drives the completion popup state too:
+    /// every input mutation refreshes `commandLineCompletions`;
+    /// Down/Up/Tab/Shift-Tab navigate the popup; Enter dispatches the
+    /// highlighted entry (with arg-stage advance for commands that
+    /// take args). `<Esc>` cancels; `<BS>` deletes the last char (or
+    /// cancels if the buffer is empty — vim convention).
     private func handleCommandLine(_ key: VimKey) -> KeyHandled {
         switch key.payload {
         case .special(.escape):
             commandLineInput = ""
+            commandLineCompletions = []
+            commandLineHighlightedIndex = nil
             setMode(commandLineReturnMode)
         case .special(.returnKey):
-            let input = commandLineInput
-            let returnMode = commandLineReturnMode
-            commandLineInput = ""
-            // Dispatch first (still in .commandLine mode), then return
-            // to the prior mode only if dispatch didn't already flip
-            // somewhere else. This avoids a double mode transition
-            // (.commandLine → returnMode → newMode) whose first leg
-            // schedules an async observer that nukes selection state
-            // built by the second leg's delegate call. Concretely:
-            // `:CSTEnter<CR>` from normal needs to land in .visualCST
-            // with cstForest set — the old "setMode(returnMode) then
-            // dispatch" order let the .normal-transition observer wipe
-            // the forest just after the .visualCST delegate built it.
-            dispatchNamedCommandInput(input)
-            if mode == .commandLine {
-                setMode(returnMode)
-            }
+            acceptCommandLineEntry()
         case .special(.backspace), .special(.delete):
             if commandLineInput.isEmpty {
                 // Vim convention: backspace on empty input cancels.
+                commandLineCompletions = []
+                commandLineHighlightedIndex = nil
                 setMode(commandLineReturnMode)
             } else {
                 commandLineInput.removeLast()
+                refreshCommandLineCompletions()
             }
         case .special(.space):
             commandLineInput.append(" ")
+            refreshCommandLineCompletions()
         case .character(let ch):
             // Reject control-modified chars (Ctrl-C etc.); accept any
             // printable bare character.
@@ -196,12 +207,250 @@ public final class VimController: ObservableObject {
                   !key.modifiers.contains(.command)
             else { return .consumed }
             commandLineInput.append(ch)
-        case .special(.tab), .special(.left), .special(.right),
-             .special(.up), .special(.down):
-            // Defer: tab completion + arrow-key cursor editing are v2.
+            refreshCommandLineCompletions()
+        case .special(.tab):
+            // Shift-Tab moves up, plain Tab moves down — wraps around.
+            let delta = key.modifiers.contains(.shift) ? -1 : 1
+            moveCommandLineHighlight(by: delta)
+        case .special(.up):
+            moveCommandLineHighlight(by: -1)
+        case .special(.down):
+            moveCommandLineHighlight(by: 1)
+        case .special(.left), .special(.right):
+            // Defer: cursor-within-line editing is v2.
             break
         }
         return .consumed
+    }
+
+    /// Accept the currently-highlighted completion (Enter pressed).
+    /// Behavior depends on the entry:
+    /// - Highlighted command WITH args (e.g. `:CSTFind`): replace the
+    ///   buffer with `<name> ` and stay in command-line mode so the
+    ///   user picks an arg next. Refreshes completions to show the
+    ///   arg options.
+    /// - Highlighted command WITHOUT args, OR highlighted arg option:
+    ///   replace the buffer with the full dispatchable string,
+    ///   dispatch it, and return to the prior mode.
+    /// - No highlight (empty input, no matches, or just-arrived in
+    ///   arg stage without typing): fall back to dispatching whatever
+    ///   was literally typed (which silently no-ops on bogus input).
+    private func acceptCommandLineEntry() {
+        let returnMode = commandLineReturnMode
+        if let entry = highlightedCompletionEntry() {
+            let (stage, _) = parseCommandLineStage()
+            switch stage {
+            case .commandName:
+                if entry.isExecutable {
+                    commandLineInput = entry.acceptValue
+                    finalizeCommandLineDispatch(returnMode: returnMode)
+                } else {
+                    // Advance to arg stage: append `<name> `, recompute.
+                    commandLineInput = entry.acceptValue + " "
+                    refreshCommandLineCompletions()
+                    // Stay in .commandLine — user types/picks arg next.
+                }
+            case .arg:
+                // Replace the arg portion only (keep `<name> ` prefix).
+                if let spaceIdx = commandLineInput.firstIndex(of: " ") {
+                    let prefix = commandLineInput[...spaceIdx]
+                    commandLineInput = String(prefix) + entry.acceptValue
+                }
+                finalizeCommandLineDispatch(returnMode: returnMode)
+            }
+        } else {
+            // Fallback: dispatch what was literally typed.
+            finalizeCommandLineDispatch(returnMode: returnMode)
+        }
+    }
+
+    /// Snapshot the buffer, clear state, dispatch via the registry,
+    /// then return to `returnMode` if the dispatched command didn't
+    /// flip somewhere else. Same care taken as the original .returnKey
+    /// handler around the .commandLine → returnMode → newMode race.
+    private func finalizeCommandLineDispatch(returnMode: VimMode) {
+        let input = commandLineInput
+        commandLineInput = ""
+        commandLineCompletions = []
+        commandLineHighlightedIndex = nil
+        dispatchNamedCommandInput(input)
+        if mode == .commandLine {
+            setMode(returnMode)
+        }
+    }
+
+    /// Move the popup highlight up or down with wrap-around. From the
+    /// "no highlight" state, Down lands on the first entry and Up on
+    /// the last.
+    private func moveCommandLineHighlight(by delta: Int) {
+        guard !commandLineCompletions.isEmpty else { return }
+        let n = commandLineCompletions.count
+        let current = commandLineHighlightedIndex ?? (delta > 0 ? -1 : n)
+        var next = (current + delta) % n
+        if next < 0 { next += n }
+        commandLineHighlightedIndex = next
+    }
+
+    private func highlightedCompletionEntry() -> CompletionEntry? {
+        guard let idx = commandLineHighlightedIndex,
+              idx >= 0,
+              idx < commandLineCompletions.count
+        else { return nil }
+        return commandLineCompletions[idx]
+    }
+
+    // MARK: - Command-line completion
+
+    /// Recompute `commandLineCompletions` and `commandLineHighlightedIndex`
+    /// from the current `commandLineInput`. Called on entry to
+    /// `.commandLine` and after every input mutation.
+    private func refreshCommandLineCompletions() {
+        let (stage, query) = parseCommandLineStage()
+        let entries: [CompletionEntry]
+        switch stage {
+        case .commandName:
+            entries = buildCommandNameCompletions(query: query)
+        case .arg:
+            let commandName = commandLineInput
+                .split(separator: " ", omittingEmptySubsequences: true)
+                .first
+                .map(String.init) ?? ""
+            if let cmd = commands.command(named: commandName),
+               case .single(_, let options) = cmd.argSpec {
+                entries = buildArgCompletions(query: query, options: options)
+            } else {
+                entries = []
+            }
+        }
+        commandLineCompletions = entries
+        // Highlight the first entry as soon as the user starts typing
+        // a query; leave nil on empty query so empty `:` shows the
+        // list without committing to a default.
+        if entries.isEmpty || query.isEmpty {
+            commandLineHighlightedIndex = nil
+        } else {
+            commandLineHighlightedIndex = 0
+        }
+    }
+
+    /// Parse the current `commandLineInput` into `(stage, query)` —
+    /// determines whether the popup should match command names or
+    /// argument options for the leading command.
+    private func parseCommandLineStage() -> (stage: CompletionStage, query: String) {
+        let input = commandLineInput
+        if let spaceIdx = input.firstIndex(of: " ") {
+            let commandPart = String(input[..<spaceIdx])
+            let argPart = String(input[input.index(after: spaceIdx)...])
+            if let cmd = commands.command(named: commandPart),
+               case .single(let label, _) = cmd.argSpec {
+                return (.arg(label: label), argPart)
+            }
+            // Either the leading token isn't a command, or it takes no
+            // args — fall back to commandName stage (popup will show
+            // "no matches" for whatever's typed, which is the truthful
+            // signal).
+            return (.commandName, input)
+        }
+        return (.commandName, input)
+    }
+
+    private func buildCommandNameCompletions(query: String) -> [CompletionEntry] {
+        var results: [(LiminalCommand, MatchResult)] = []
+        for cmd in commands.allCommands() {
+            if let match = FuzzyMatcher.match(query: query, against: cmd.name) {
+                results.append((cmd, match))
+            }
+        }
+        results.sort { a, b in
+            if a.1.score != b.1.score { return a.1.score > b.1.score }
+            if a.0.name.count != b.0.name.count {
+                return a.0.name.count < b.0.name.count
+            }
+            return a.0.name < b.0.name
+        }
+        return results.map { cmd, match in
+            // matchedIndices are in `cmd.name`; the display string is
+            // ":\(cmd.name)" so we shift indices by +1 to keep them
+            // aligned for popup highlighting.
+            let displayIndices = match.matchedIndices.map { $0 + 1 }
+            let isExec: Bool
+            switch cmd.argSpec {
+            case .none:        isExec = true
+            case .single:      isExec = false
+            }
+            return CompletionEntry(
+                display: ":\(cmd.name)",
+                acceptValue: cmd.name,
+                description: cmd.description,
+                chordHint: chordsForCommand(named: cmd.name).first,
+                matchedIndices: displayIndices,
+                isExecutable: isExec
+            )
+        }
+    }
+
+    private func buildArgCompletions(
+        query: String,
+        options: [ArgOption]
+    ) -> [CompletionEntry] {
+        var results: [(ArgOption, MatchResult)] = []
+        for opt in options {
+            if let match = FuzzyMatcher.match(query: query, against: opt.value) {
+                results.append((opt, match))
+            }
+        }
+        results.sort { a, b in
+            if a.1.score != b.1.score { return a.1.score > b.1.score }
+            if a.0.value.count != b.0.value.count {
+                return a.0.value.count < b.0.value.count
+            }
+            return a.0.value < b.0.value
+        }
+        return results.map { opt, match in
+            CompletionEntry(
+                display: opt.value,
+                acceptValue: opt.value,
+                description: opt.description,
+                chordHint: nil,
+                matchedIndices: match.matchedIndices,
+                isExecutable: true
+            )
+        }
+    }
+
+    /// Chord display strings (e.g. `["h"]`) for `name`. Built lazily
+    /// on first call by scanning every mode's bindings for
+    /// `.executeNamedCommand(name, _, _)`. Subsequent calls hit the
+    /// cache.
+    public func chordsForCommand(named name: String) -> [String] {
+        if let cached = chordHintMapCache?[name] { return cached }
+        if chordHintMapCache == nil {
+            chordHintMapCache = computeChordHintMap()
+        }
+        return chordHintMapCache?[name] ?? []
+    }
+
+    private func computeChordHintMap() -> [String: [String]] {
+        var map: [String: [String]] = [:]
+        let modes: [VimMode] = [
+            .normal, .visual, .visualLine, .visualBlock, .visualCST, .insert,
+        ]
+        for mode in modes {
+            for binding in bindings.enumerateBindings(mode: mode) {
+                if case .executeNamedCommand(let name, _, _) = binding.command {
+                    let display = binding.sequence.map(\.displayString).joined()
+                    var existing = map[name] ?? []
+                    if !existing.contains(display) {
+                        existing.append(display)
+                    }
+                    map[name] = existing
+                }
+            }
+        }
+        for key in map.keys {
+            map[key]?.sort { $0.count < $1.count }
+        }
+        return map
     }
 
     /// Parse a typed `:` line and dispatch the resolved command. Silent
@@ -491,6 +740,7 @@ public final class VimController: ObservableObject {
             commandLineReturnMode = mode
             setMode(.commandLine)
             commandLineInput = ""
+            refreshCommandLineCompletions()
         case .executeNamedCommand(let name, let args, let count):
             if let resolved = commands.resolve(name: name, args: args, count: count) {
                 dispatch(resolved)
@@ -982,9 +1232,15 @@ public final class VimController: ObservableObject {
             description: "Swap forest anchor and head endpoints"
         ) { _, _ in .swapCSTEnds })
 
+        let kindArgSpec = ArgSpec.single(
+            label: "kind",
+            options: TypedDescentKind.argOptions
+        )
+
         registry.register(.init(
             name: "CSTFind",
-            description: "Find first node of given kind in current subtree"
+            description: "Find first node of given kind in current subtree",
+            argSpec: kindArgSpec
         ) { args, count in
             guard let arg = args.first,
                   let kind = TypedDescentKind(commandArgument: arg)
@@ -994,7 +1250,8 @@ public final class VimController: ObservableObject {
 
         registry.register(.init(
             name: "CSTFindLast",
-            description: "Find last node of given kind in current subtree"
+            description: "Find last node of given kind in current subtree",
+            argSpec: kindArgSpec
         ) { args, count in
             guard let arg = args.first,
                   let kind = TypedDescentKind(commandArgument: arg)

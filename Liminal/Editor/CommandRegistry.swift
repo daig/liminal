@@ -14,9 +14,15 @@ public struct LiminalCommand: Sendable {
     /// Vim-convention name: starts with a capital letter, no spaces.
     public let name: String
 
-    /// Short human-readable description for `:help`-style surfaces (not
-    /// yet displayed; reserved for future docs/hints).
+    /// Short human-readable description, shown in the command-line
+    /// popup and (future) `:help`-style surfaces.
     public let description: String
+
+    /// What argument(s) the command expects, drives the popup's
+    /// argument-completion stage. `.none` for the majority of
+    /// commands; structured options for ones with a fixed argument
+    /// vocabulary (e.g. `:CSTFind <kind>`).
+    public let argSpec: ArgSpec
 
     /// Resolves typed args + an optional count into a dispatchable
     /// `VimCommand`. Args are whitespace-split tokens after the command
@@ -27,11 +33,41 @@ public struct LiminalCommand: Sendable {
     public init(
         name: String,
         description: String,
+        argSpec: ArgSpec = .none,
         handler: @escaping @Sendable ([String], Int?) -> VimCommand?
     ) {
         self.name = name
         self.description = description
+        self.argSpec = argSpec
         self.handler = handler
+    }
+}
+
+/// Describes what a `:` command expects after its name. Drives the
+/// argument-completion stage of the popup. Kept narrow on purpose —
+/// only `.single` is needed for the current CST-aware vocabulary;
+/// multi-arg shapes can be added when a consumer demands them.
+public enum ArgSpec: Sendable, Equatable {
+    /// Command takes no arguments. Accepting it dispatches immediately.
+    case none
+    /// Command takes exactly one positional argument chosen from
+    /// `options`. `label` is the human-readable name shown in the
+    /// popup header (e.g. `"kind"` for `:CSTFind kind`).
+    case single(label: String, options: [ArgOption])
+}
+
+/// One option in a `.single` argument spec.
+public struct ArgOption: Sendable, Equatable {
+    /// The string inserted into the input buffer / passed as the
+    /// argument (e.g. `"heading"`).
+    public let value: String
+    /// Short human-readable description, shown next to the value in
+    /// the popup (e.g. `"Headings (any level)"`).
+    public let description: String
+
+    public init(value: String, description: String) {
+        self.value = value
+        self.description = description
     }
 }
 
@@ -61,5 +97,17 @@ public final class CommandRegistry: @unchecked Sendable {
     /// tab-completion / `:help` surfaces.
     public func commandNames() -> [String] {
         commands.keys.sorted()
+    }
+
+    /// Look up a registered command by its exact name. Returns `nil`
+    /// for unknown names; case-sensitive.
+    public func command(named name: String) -> LiminalCommand? {
+        commands[name]
+    }
+
+    /// All registered commands, in alphabetical order by name. Used by
+    /// the command-line completion popup to enumerate candidates.
+    public func allCommands() -> [LiminalCommand] {
+        commands.keys.sorted().compactMap { commands[$0] }
     }
 }

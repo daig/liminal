@@ -130,6 +130,9 @@ private struct WorkspaceDetail: View {
             .overlay(alignment: .bottom) {
                 HintOverlayHost(controller: tab.document.vimController)
             }
+            .overlay(alignment: .bottom) {
+                CommandLinePopupHost(controller: tab.document.vimController)
+            }
             Divider()
             StatusBar(document: tab.document, controller: tab.document.vimController)
                 .padding(.horizontal, 12)
@@ -137,6 +140,29 @@ private struct WorkspaceDetail: View {
             Divider()
             CSTInspectorView(inspector: tab.document.cstInspector)
         }
+    }
+}
+
+/// Observer wrapper around `VimController` for the command-line popup.
+/// Mirrors the `HintOverlayHost` pattern — SwiftUI needs the
+/// `@ObservedObject` declared on the consuming view (not on a parent)
+/// for nested-controller publishes to drive re-renders.
+private struct CommandLinePopupHost: View {
+    @ObservedObject var controller: VimController
+
+    var body: some View {
+        CommandLinePopupView(
+            entries: controller.commandLineCompletions,
+            highlightedIndex: controller.commandLineHighlightedIndex,
+            onRowAccepted: { _ in
+                // Click-to-select isn't wired through the controller's
+                // dispatch in v1 — the popup is keyboard-driven. A
+                // future slice can add `controller.acceptCompletion(at:)`
+                // and route the click through it.
+            }
+        )
+        .animation(.easeOut(duration: 0.11),
+                   value: controller.commandLineCompletions)
     }
 }
 

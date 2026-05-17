@@ -73,6 +73,45 @@ public struct VimBindingTree {
         return .none
     }
 
+    /// One terminal binding discovered by ``enumerateBindings(mode:)``.
+    /// Used to build the chord-hint reverse map for the command-line
+    /// completion popup.
+    public struct EnumeratedBinding: Sendable {
+        public let sequence: [VimKey]
+        public let description: String?
+        public let command: VimCommand
+    }
+
+    /// Depth-first walk of all terminal bindings registered for `mode`.
+    /// Each terminal node's `commandFactory` is evaluated with `nil`
+    /// count to produce a representative `VimCommand` (chord-shortcut
+    /// bindings produce `.executeNamedCommand(...)`, which the caller
+    /// matches on to build the reverse map).
+    public func enumerateBindings(mode: VimMode) -> [EnumeratedBinding] {
+        guard let root = rootsByMode[mode] else { return [] }
+        var result: [EnumeratedBinding] = []
+        walk(node: root, prefix: [], into: &result)
+        return result
+    }
+
+    private func walk(
+        node: Node,
+        prefix: [VimKey],
+        into result: inout [EnumeratedBinding]
+    ) {
+        if let factory = node.commandFactory {
+            result.append(EnumeratedBinding(
+                sequence: prefix,
+                description: node.description,
+                command: factory(nil)
+            ))
+        }
+        for key in node.insertionOrderKeys {
+            guard let child = node.children[key] else { continue }
+            walk(node: child, prefix: prefix + [key], into: &result)
+        }
+    }
+
     public func hints(after prefix: [VimKey], mode: VimMode) -> [VimHintItem] {
         guard let root = rootsByMode[mode] else { return [] }
         var node = root

@@ -205,6 +205,20 @@ public enum TypedDescentKind: Sendable, Equatable, Hashable {
         default:             return nil
         }
     }
+
+    /// Argument options surfaced in the `:CSTFind` / `:CSTFindLast`
+    /// completion popup. Order is the canonical display order.
+    public static let argOptions: [ArgOption] = [
+        .init(value: "heading",      description: "Headings (atxHeading kind)"),
+        .init(value: "code",         description: "Code blocks and inline code spans"),
+        .init(value: "math",         description: "Math blocks and inline math"),
+        .init(value: "reference",    description: "Any reference (link, embed, wikilink, …)"),
+        .init(value: "markdownlink", description: "Markdown-style links (mdLink, autolink)"),
+        .init(value: "wikilink",     description: "Wikilinks ([[name]])"),
+        .init(value: "embed",        description: "Embeds (images, wiki embeds, structured embeds)"),
+        .init(value: "typedblock",   description: "Typed-construct family (typedBlock, typedInline, …)"),
+        .init(value: "blockanchor",  description: "Block-id anchors (^name)"),
+    ]
 }
 
 /// Structural motions specific to ``VimMode/visualCST``. Distinct from
