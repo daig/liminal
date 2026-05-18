@@ -610,7 +610,7 @@ struct LiminalCSTVisualIntegrationTests {
         defer { SystemPasteboard.pasteboard = originalPasteboard }
 
         let copySource = "- source\n  - bar\n  - baz\n"
-        let parsedCopy = try LiminalParser().parse(copySource)
+        let parsedCopy = try LiminalParser().parse(CambiumSource(copySource))
         let copyForest = try #require(
             firstChildListForestInFirstListItem(in: parsedCopy.tree)
         )
@@ -631,7 +631,7 @@ struct LiminalCSTVisualIntegrationTests {
 
         let expected = "- foo\n  - one\n  - bar\n  - baz\n  - two\n"
         #expect(fixture.textView.string == expected)
-        #expect(fixture.document.session.source == expected)
+        #expect(fixture.document.session.source == CambiumSource(expected))
     }
 
     @Test("explicit CST list item paste handles target list item after blank line")
@@ -643,7 +643,7 @@ struct LiminalCSTVisualIntegrationTests {
         defer { SystemPasteboard.pasteboard = originalPasteboard }
 
         let copySource = "- source\n  - bar\n"
-        let parsedCopy = try LiminalParser().parse(copySource)
+        let parsedCopy = try LiminalParser().parse(CambiumSource(copySource))
         let copyForest = try #require(
             firstChildListForestInFirstListItem(in: parsedCopy.tree)
         )
@@ -667,7 +667,7 @@ struct LiminalCSTVisualIntegrationTests {
 
         let expected = "before\n\n- foo\n- bar\n- baz\n"
         #expect(fixture.textView.string == expected)
-        #expect(fixture.document.session.source == expected)
+        #expect(fixture.document.session.source == CambiumSource(expected))
     }
 
     @Test("explicit CST list item paste splices into top-level list")
@@ -679,7 +679,7 @@ struct LiminalCSTVisualIntegrationTests {
         defer { SystemPasteboard.pasteboard = originalPasteboard }
 
         let copySource = "- bar\n- baz\n"
-        let parsedCopy = try LiminalParser().parse(copySource)
+        let parsedCopy = try LiminalParser().parse(CambiumSource(copySource))
         let copyForest = try #require(
             rootListItemsForest(in: parsedCopy.tree)
         )
@@ -702,7 +702,7 @@ struct LiminalCSTVisualIntegrationTests {
 
         let expected = "- foo\n- bar\n- baz\n- qux\n"
         #expect(fixture.textView.string == expected)
-        #expect(fixture.document.session.source == expected)
+        #expect(fixture.document.session.source == CambiumSource(expected))
     }
 
     // MARK: - Safety
@@ -719,7 +719,7 @@ struct LiminalCSTVisualIntegrationTests {
         // fresh tree, leaving the Coordinator's cstForest referencing
         // the old one. The next navigation call's treeID check should
         // self-clear without crashing.
-        try fixture.document.session.replaceSource("Completely different text.\n")
+        try fixture.document.session.replaceSource(CambiumSource("Completely different text.\n"))
 
         fixture.coordinator.cstNavigate(.nextSibling, count: 1)
         // Navigation early-returns because ensureForestIsLive() cleared
@@ -1141,7 +1141,7 @@ private final class CSTFixture {
 
     init(source: String) throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource(source)
+        try document.session.replaceSource(CambiumSource(source))
         self.document = document
         self.controller = document.vimController
 

@@ -9,7 +9,7 @@ struct LiminalForestSmokeTests {
     @Test("forest at root child wraps a navigable kind")
     func forestAtRootChildIsNavigable() throws {
         let parser = LiminalParser()
-        let parsed = try parser.parse("# Hello\n\nA paragraph.\n")
+        let parsed = try parser.parse(CambiumSource("# Hello\n\nA paragraph.\n"))
         let tree = parsed.tree
 
         // The first navigable thing under root is a paragraph or heading.
@@ -28,13 +28,13 @@ struct LiminalForestSmokeTests {
     @Test("slidForward at root level moves between navigable document items")
     func slidForwardCrossesNavigableSiblings() throws {
         let parser = LiminalParser()
-        let parsed = try parser.parse("""
+        let parsed = try parser.parse(CambiumSource("""
         # Heading
 
         First paragraph.
 
         Second paragraph.
-        """)
+        """))
         let tree = parsed.tree
 
         let f = try #require(LiminalForest.containing(
@@ -71,11 +71,11 @@ struct LiminalForestSmokeTests {
     @Test("firstChildForest refuses to descend into an opaque fenced code block")
     func opaqueCodeBlockBlocksDescent() throws {
         let parser = LiminalParser()
-        let parsed = try parser.parse("""
+        let parsed = try parser.parse(CambiumSource("""
         ```swift
         let x = 1
         ```
-        """)
+        """))
         let tree = parsed.tree
 
         // Find the fenced code block as a singleton forest.
@@ -95,7 +95,7 @@ struct LiminalForestSmokeTests {
     @Test("anchor captured against unchanged tree round-trips strong")
     func anchorRoundTripsStrong() throws {
         let parser = LiminalParser()
-        let parsed = try parser.parse("First paragraph.\n\nSecond paragraph.\n")
+        let parsed = try parser.parse(CambiumSource("First paragraph.\n\nSecond paragraph.\n"))
         let tree = parsed.tree
 
         let f = try #require(LiminalForest.containing(
@@ -116,7 +116,7 @@ struct LiminalForestSmokeTests {
     @Test("anchor survives intra-paragraph edit as weak when block structure stays")
     func anchorReportsWeakAfterIntraSubtreeEdit() throws {
         let parser = LiminalParser()
-        let parsed1 = try parser.parse("First paragraph.\n")
+        let parsed1 = try parser.parse(CambiumSource("First paragraph.\n"))
         let firstTree = parsed1.tree
 
         // Downstream point containment descends to the smallest navigable node
@@ -132,7 +132,7 @@ struct LiminalForestSmokeTests {
         let anchor = LiminalForestAnchor.from(f)
 
         // Reparse with edited content (paragraph still exists, with different text).
-        let parsed2 = try parser.parse("First paragraph, edited.\n")
+        let parsed2 = try parser.parse(CambiumSource("First paragraph, edited.\n"))
         let newTree = parsed2.tree
 
         let resolution = anchor.resolve(in: newTree)

@@ -10,7 +10,7 @@ struct HighlighterTests {
     @Test("spans cover every byte of the source with no gaps or overlaps")
     func spansTileTheSource() throws {
         let source = "# Hello\n\nworld\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         #expect(!spans.isEmpty)
@@ -31,7 +31,7 @@ struct HighlighterTests {
 
     @Test("ATX heading marker is delimiter; body inherits heading modifier")
     func atxHeading() throws {
-        let parsed = try LiminalParser().parse("# Hello\n")
+        let parsed = try LiminalParser().parse(CambiumSource("# Hello\n"))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let markerSpan = try #require(spans.first { byteText($0, in: "# Hello\n") == "#" })
@@ -46,7 +46,7 @@ struct HighlighterTests {
     @Test("thematic break markers are delimiters")
     func thematicBreak() throws {
         let source = "* * *\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let markerSpans = spans.filter { byteText($0, in: source) == "*" }
@@ -59,7 +59,7 @@ struct HighlighterTests {
     @Test("code span's backticks are delimiter, inner content is codeContent")
     func codeSpan() throws {
         let source = "hello `code` world\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let openBacktick = spans.first { byteText($0, in: source) == "`" && $0.category == .delimiter }
@@ -74,7 +74,7 @@ struct HighlighterTests {
     @Test("wikilink: target is linkText, brackets are delimiter")
     func wikilink() throws {
         let source = "see [[Target]]\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let target = try #require(spans.first { byteText($0, in: source) == "Target" })
@@ -89,7 +89,7 @@ struct HighlighterTests {
     @Test("autolink target is linkText and angle brackets are delimiters")
     func autolink() throws {
         let source = "see <https://example.org> and www.example.org\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let angleTarget = try #require(spans.first { byteText($0, in: source) == "https://example.org" })
@@ -109,7 +109,7 @@ struct HighlighterTests {
     @Test("emphasis text carries .emphasis modifier")
     func emphasisModifier() throws {
         let source = "a *em* b\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "em" })
@@ -119,7 +119,7 @@ struct HighlighterTests {
     @Test("strong text carries .strong modifier")
     func strongModifier() throws {
         let source = "a **strong** b\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "strong" })
@@ -129,7 +129,7 @@ struct HighlighterTests {
     @Test("strikethrough text carries .strikethrough modifier")
     func strikethroughModifier() throws {
         let source = "a ~~struck~~ b\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "struck" })
@@ -139,7 +139,7 @@ struct HighlighterTests {
     @Test("highlight text carries .highlight modifier")
     func highlightModifier() throws {
         let source = "a ==marked== b\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "marked" })
@@ -149,19 +149,19 @@ struct HighlighterTests {
     @Test("open strikethrough and highlight delimiters carry recovery modifiers")
     func openStyledDelimiterRecoveryModifiers() throws {
         let strikeSource = "~~draft"
-        let strikeParsed = try LiminalParser().parse(strikeSource)
+        let strikeParsed = try LiminalParser().parse(CambiumSource(strikeSource))
         let strikeSpans = LiminalHighlighter().spans(for: strikeParsed.rootSyntax)
         let strikeText = try #require(strikeSpans.first { byteText($0, in: strikeSource) == "draft" })
         #expect(strikeText.modifiers.contains(.strikethrough))
 
         let highlightSource = "==marked"
-        let highlightParsed = try LiminalParser().parse(highlightSource)
+        let highlightParsed = try LiminalParser().parse(CambiumSource(highlightSource))
         let highlightSpans = LiminalHighlighter().spans(for: highlightParsed.rootSyntax)
         let highlightText = try #require(highlightSpans.first { byteText($0, in: highlightSource) == "marked" })
         #expect(highlightText.modifiers.contains(.highlight))
 
         let emphasisSource = "*draft"
-        let emphasisParsed = try LiminalParser().parse(emphasisSource)
+        let emphasisParsed = try LiminalParser().parse(CambiumSource(emphasisSource))
         let emphasisSpans = LiminalHighlighter().spans(for: emphasisParsed.rootSyntax)
         let literalText = try #require(emphasisSpans.first { byteText($0, in: emphasisSource) == "*draft" })
         #expect(!literalText.modifiers.contains(.emphasis))
@@ -170,7 +170,7 @@ struct HighlighterTests {
     @Test("nested strong + emphasis carries both modifiers")
     func nestedStrongEmphasisModifiers() throws {
         let source = "**bold *both* bold**\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "both" })
@@ -181,7 +181,7 @@ struct HighlighterTests {
     @Test("nested emphasis + strong carries both modifiers")
     func nestedEmphasisStrongModifiers() throws {
         let source = "*em **both** em*\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "both" })
@@ -192,7 +192,7 @@ struct HighlighterTests {
     @Test("nested strikethrough + highlight carries both modifiers")
     func nestedInlineModifiers() throws {
         let source = "~~==x==~~\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let inner = try #require(spans.first { byteText($0, in: source) == "x" })
@@ -209,7 +209,7 @@ struct HighlighterTests {
         body
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let fence = try #require(spans.first { byteText($0, in: source) == ":::" })
@@ -227,7 +227,7 @@ struct HighlighterTests {
     @Test("comment block: fence delimiter, body commentContent")
     func commentBlock() throws {
         let source = "%%\nsecret note\n%%\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         // body content lands as a single commentText token spanning the
@@ -246,7 +246,7 @@ struct HighlighterTests {
         // inside `{...}`. The walker's error-scope propagation should mark
         // those tokens as `.error` category.
         let source = "@Foo{?}\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let spans = LiminalHighlighter().spans(for: parsed.rootSyntax)
 
         let hasError = spans.contains { $0.category == .error }

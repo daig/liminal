@@ -141,7 +141,7 @@ struct LiminalCSTPolicyTests {
 
     @Test("cstVisualEntry inside inline text ascends to the block-level container")
     func cstVisualEntryAscendsToBlock() throws {
-        let parsed = try LiminalParser().parse("Hello, world.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello, world.\n"))
         let tree = parsed.tree
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: tree)
@@ -162,7 +162,7 @@ struct LiminalCSTPolicyTests {
     @Test("cstVisualEntry inside a fenced code block lands on the block itself")
     func cstVisualEntryOnFencedCodeBlock() throws {
         let source = "```swift\nlet x = 1\n```\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         // Pick an offset inside the code block.
         let forest = try #require(
@@ -182,7 +182,7 @@ struct LiminalCSTPolicyTests {
     @Test("cstVisualEntry at a block start after a blank line targets the downstream block")
     func cstVisualEntryAtBlockStartAfterBlankLineTargetsDownstreamBlock() throws {
         let source = "Paragraph.\n\n- item\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let offset = TextSize(UInt32(byteOffset(of: "- item", in: source)))
         let forest = try #require(
@@ -199,7 +199,7 @@ struct LiminalCSTPolicyTests {
     @Test("cstVisualEntry at first list item content character targets paragraph content")
     func cstVisualEntryAtFirstListItemContentCharacterTargetsParagraph() throws {
         let source = "- foo\n  - bar\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let offset = TextSize(UInt32(byteOffset(of: "foo", in: source)))
         let forest = try #require(
@@ -215,7 +215,7 @@ struct LiminalCSTPolicyTests {
 
     @Test("cstVisualEntry returns nil for an empty document")
     func cstVisualEntryEmptyDocument() throws {
-        let parsed = try LiminalParser().parse("")
+        let parsed = try LiminalParser().parse(CambiumSource(""))
         let tree = parsed.tree
         let forest = LiminalForest.cstVisualEntry(at: .zero, in: tree)
         #expect(forest == nil)

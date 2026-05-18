@@ -201,9 +201,9 @@ struct VaultColdStartTests {
         )
         // Track both via `indexCurrentDocument` (no cache-dirty side
         // effect), then register one as an open document.
-        let openParsed = try LiminalParser().parse("[[X]]")
+        let openParsed = try LiminalParser().parse(CambiumSource("[[X]]"))
         entry.indexCurrentDocument(openURL, rootSyntax: openParsed.rootSyntax, content: "[[X]]")
-        let closedParsed = try LiminalParser().parse("[[Y]]")
+        let closedParsed = try LiminalParser().parse(CambiumSource("[[Y]]"))
         entry.indexCurrentDocument(closedURL, rootSyntax: closedParsed.rootSyntax, content: "[[Y]]")
         entry.registerOpenDocument(openURL)
 

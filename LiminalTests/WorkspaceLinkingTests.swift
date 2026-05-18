@@ -234,7 +234,7 @@ struct WorkspaceLinkingTests {
     @Test("document index builds headings and wiki references from Slice 1 CST")
     func documentIndexBuildsHeadingsAndWikiReferencesFromSlice1CST() throws {
         let source = "# Section Title\n\nParagraph [[Target#Heading|Alias]] and ![[Embed#^block|payload]].\n![[BlockEmbed|raw payload]]\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         #expect(index.blockOffsets == [0, 17, 83])
@@ -268,7 +268,7 @@ struct WorkspaceLinkingTests {
         Nested paragraph ^nested-block
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
         let paragraphOffset = try sourceRange(of: "Paragraph", in: source).start
         let nestedParagraphOffset = try sourceRange(of: "Nested paragraph", in: source).start
@@ -291,7 +291,7 @@ struct WorkspaceLinkingTests {
 
         > Quote [[Quote Target]]
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
         let listItemOffset = try sourceRange(of: "- Item", in: source).start
 
@@ -309,7 +309,7 @@ struct WorkspaceLinkingTests {
     @Test("document index stores target token ranges while preserving containment ranges")
     func documentIndexStoresTargetTokenRangesWhilePreservingContainmentRanges() throws {
         let source = "See [[Target|Alias]].\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
         let reference = try #require(index.references.first)
 
@@ -333,7 +333,7 @@ struct WorkspaceLinkingTests {
         let sourceNote = makeNote(relativePath: "Source.md")
         let targetNote = makeNote(relativePath: "Target.md")
         let sourceIndex = try DocumentIndex.build(
-            root: LiminalParser().parse(sourceContent).rootSyntax,
+            root: LiminalParser().parse(CambiumSource(sourceContent)).rootSyntax,
             source: sourceContent
         )
 
@@ -359,7 +359,7 @@ struct WorkspaceLinkingTests {
         Body with [[Linked Note]] inside.
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         let targets = index.references.map(\.target.rawTargetString).sorted()
@@ -382,7 +382,7 @@ struct WorkspaceLinkingTests {
         :::
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         #expect(index.references.map(\.target.rawTargetString).sorted() == [
@@ -409,7 +409,7 @@ struct WorkspaceLinkingTests {
           }
         }
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         #expect(index.headings.map(\.title) == ["Top-Level Heading"])
@@ -452,7 +452,7 @@ struct WorkspaceLinkingTests {
     @Test("document index walks Slice 5 rich inline containers but skips raw payloads")
     func documentIndexWalksSlice5RichInlineContainersButSkipsRawPayloads() throws {
         let source = #"*[[Emphasis]]* **[[Strong]]** ~~[[Strike]]~~ ==[[Highlight]]== ^[[[Foot]]] %% [[Ignored Comment]] %% \([[Ignored Math]]\)"#
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         #expect(index.references.map(\.target.rawTargetString).sorted() == [
@@ -474,7 +474,7 @@ struct WorkspaceLinkingTests {
         [[Ignored HTML]]
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         #expect(index.references.map(\.target.rawTargetString).sorted() == [
@@ -618,7 +618,7 @@ struct WorkspaceLinkingTests {
     @Test("Phase 4.5 indexer emits markdown link references with kind .link")
     func phase45IndexerEmitsMarkdownLinkReferences() throws {
         let source = "See [Site](https://example.org) and [Note](Folder/Note#Section).\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         let links = index.references.filter { $0.kind == .link }
@@ -637,7 +637,7 @@ struct WorkspaceLinkingTests {
     @Test("Phase 4.5 indexer emits autolink references with normalized external targets")
     func phase45IndexerEmitsAutolinkReferences() throws {
         let source = "See https://example.org and www.example.org and user@example.org.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         let links = index.references.filter { $0.kind == .link }
@@ -656,7 +656,7 @@ struct WorkspaceLinkingTests {
     @Test("Phase 4.5 indexer emits markdown image references with kind .embed")
     func phase45IndexerEmitsMarkdownImageReferences() throws {
         let source = "Header ![Alt text](cover.png) and ![Remote](https://example.org/img.png).\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
 
         let embeds = index.references.filter { $0.kind == .embed }
@@ -672,7 +672,7 @@ struct WorkspaceLinkingTests {
     @Test("Phase 4.5 indexer drops references with empty destinations")
     func phase45IndexerDropsEmptyDestinationReferences() throws {
         let source = "Empty link [label]() and image ![alt]().\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let index = DocumentIndex.build(from: parsed)
         #expect(index.references.isEmpty)
     }
@@ -850,7 +850,7 @@ struct WorkspaceLinkingTests {
     }
 
     private func indexedTargets(in source: String) throws -> [String] {
-        let index = try DocumentIndex.build(from: LiminalParser().parse(source))
+        let index = try DocumentIndex.build(from: LiminalParser().parse(CambiumSource(source)))
         return index.references.map(\.target.rawTargetString)
     }
 }

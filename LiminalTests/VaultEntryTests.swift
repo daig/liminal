@@ -19,7 +19,7 @@ struct VaultEntryTests {
         let entry = VaultEntry(rootURL: URL(fileURLWithPath: "/tmp/v"))
         let url = URL(fileURLWithPath: "/tmp/v/Source.lim")
         let source = "[[Other]] and [[#Heading]]\n# Heading"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
 
         entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: source)
 
@@ -47,8 +47,8 @@ struct VaultEntryTests {
         let sourceText = "[[Target]]"
         let targetText = "Hello"
 
-        let sourceParsed = try LiminalParser().parse(sourceText)
-        let targetParsed = try LiminalParser().parse(targetText)
+        let sourceParsed = try LiminalParser().parse(CambiumSource(sourceText))
+        let targetParsed = try LiminalParser().parse(CambiumSource(targetText))
 
         entry.indexCurrentDocument(sourceURL, rootSyntax: sourceParsed.rootSyntax, content: sourceText)
         entry.indexCurrentDocument(targetURL, rootSyntax: targetParsed.rootSyntax, content: targetText)
@@ -66,7 +66,7 @@ struct VaultEntryTests {
     func removeDoc() throws {
         let entry = VaultEntry(rootURL: URL(fileURLWithPath: "/tmp/v"))
         let url = URL(fileURLWithPath: "/tmp/v/Note.lim")
-        let parsed = try LiminalParser().parse("# Heading")
+        let parsed = try LiminalParser().parse(CambiumSource("# Heading"))
         entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: "# Heading")
         #expect(entry.notes[url] != nil)
 
@@ -82,11 +82,11 @@ struct VaultEntryTests {
         let entry = VaultEntry(rootURL: URL(fileURLWithPath: "/tmp/v"))
         let url = URL(fileURLWithPath: "/tmp/v/Note.lim")
 
-        let firstParsed = try LiminalParser().parse("# A")
+        let firstParsed = try LiminalParser().parse(CambiumSource("# A"))
         entry.indexCurrentDocument(url, rootSyntax: firstParsed.rootSyntax, content: "# A")
         #expect(entry.indexes[url]?.headings.first?.title == "A")
 
-        let secondParsed = try LiminalParser().parse("# B")
+        let secondParsed = try LiminalParser().parse(CambiumSource("# B"))
         entry.indexCurrentDocument(url, rootSyntax: secondParsed.rootSyntax, content: "# B")
 
         #expect(entry.notes.count == 1)
@@ -175,7 +175,7 @@ struct VaultIndexerTests {
         let existingURL = root.appendingPathComponent("Existing.lim")
         let canonicalExisting = VaultRegistry.canonicalNoteURL(for: existingURL)
         let openContent = "[[InMemTarget]]"
-        let existingParsed = try LiminalParser().parse(openContent)
+        let existingParsed = try LiminalParser().parse(CambiumSource(openContent))
         entry.indexCurrentDocument(
             existingURL,
             rootSyntax: existingParsed.rootSyntax,
@@ -208,7 +208,7 @@ struct VaultIndexerTests {
         let entry = VaultEntry(rootURL: root)
         let docURL = root.appendingPathComponent("Doc.lim")
         let canonical = VaultRegistry.canonicalNoteURL(for: docURL)
-        let parsed = try LiminalParser().parse("hi")
+        let parsed = try LiminalParser().parse(CambiumSource("hi"))
         entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: "hi")
 
         // Remove the file from disk, then refresh — the open document is
@@ -286,7 +286,7 @@ struct VaultIndexerTests {
         let entry = VaultEntry(rootURL: root)
 
         let openContent = "[[OpenDocTarget]]"
-        let parsed = try LiminalParser().parse(openContent)
+        let parsed = try LiminalParser().parse(CambiumSource(openContent))
         entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: openContent)
 
         let scan = VaultIndexer.scanSync(rootURL: root)

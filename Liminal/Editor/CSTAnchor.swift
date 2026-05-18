@@ -6,11 +6,11 @@ import CambiumCore
 /// something else at the same path".
 public struct NodeFingerprint: Sendable, Equatable, Hashable {
     public let kind: LiminalKind
-    public let structuralHash: UInt64
+    public let contentHash: ContentHash
 
-    public init(kind: LiminalKind, structuralHash: UInt64) {
+    public init(kind: LiminalKind, contentHash: ContentHash) {
         self.kind = kind
-        self.structuralHash = structuralHash
+        self.contentHash = contentHash
     }
 }
 
@@ -90,7 +90,7 @@ public extension CSTAnchor {
                 guard descendantKind == fingerprint.kind else {
                     return nil  // signal: try recovery
                 }
-                if descendant.greenHash == fingerprint.structuralHash {
+                if descendant.greenHash == fingerprint.contentHash {
                     let off = min(internalOffset.rawValue, nodeLen)
                     return .strong(byteOffset: TextSize(nodeStart + off))
                 }
@@ -141,7 +141,7 @@ public extension CSTAnchor {
             internalOffset: delta,
             fingerprint: NodeFingerprint(
                 kind: LiminalLanguage.kind(for: cursor.rawKind),
-                structuralHash: cursor.greenHash
+                contentHash: cursor.greenHash
             )
         )
     }

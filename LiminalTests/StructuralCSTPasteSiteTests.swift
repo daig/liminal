@@ -6,7 +6,7 @@ import Testing
 struct StructuralCSTPasteSiteTests {
     @Test("exact cursor captures the smallest cursor focus without climbing")
     func exactCursorCapturesSmallestFocusWithoutClimbing() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let resolved = try #require(
             StructuralCSTPasteSiteResolver.resolve(
                 scope: .exactCursor,
@@ -29,7 +29,7 @@ struct StructuralCSTPasteSiteTests {
 
     @Test("exact cursor returns nil for an empty root")
     func exactCursorReturnsNilForEmptyRoot() throws {
-        let parsed = try LiminalParser().parse("")
+        let parsed = try LiminalParser().parse(CambiumSource(""))
         let resolved = StructuralCSTPasteSiteResolver.resolve(
             scope: .exactCursor,
             in: parsed.tree,
@@ -42,7 +42,7 @@ struct StructuralCSTPasteSiteTests {
 
     @Test("root projection in an empty document targets root without a reference child")
     func rootProjectionInEmptyDocumentTargetsRootWithoutReferenceChild() throws {
-        let parsed = try LiminalParser().parse("")
+        let parsed = try LiminalParser().parse(CambiumSource(""))
         let resolved = try #require(
             StructuralCSTPasteSiteResolver.resolve(
                 scope: .rootProjectedFromCursor,
@@ -72,7 +72,7 @@ struct StructuralCSTPasteSiteTests {
         - foo
           - bar
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let listIndex = try #require(
             rootChildIndex(in: parsed.tree, kind: .list)
         )
@@ -98,7 +98,7 @@ struct StructuralCSTPasteSiteTests {
     @Test("root projection at EOF references the last root child")
     func rootProjectionAtEOFReferencesLastRootChild() throws {
         let source = "One.\n\nTwo.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let last = try #require(lastRootChild(in: parsed.tree))
 
         let resolved = try #require(
@@ -118,7 +118,7 @@ struct StructuralCSTPasteSiteTests {
     @Test("root projection after a blank line at a list marker chooses the list")
     func rootProjectionAfterBlankLineAtListMarkerChoosesList() throws {
         let source = "before\n\n- foo\n- baz\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let listIndex = try #require(
             rootChildIndex(in: parsed.tree, kind: .list)
         )
@@ -140,7 +140,7 @@ struct StructuralCSTPasteSiteTests {
 
     @Test("parent projection one level from paragraph text targets inline content")
     func parentProjectionOneLevelTargetsInlineContent() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let resolved = try #require(
             StructuralCSTPasteSiteResolver.resolve(
                 scope: .parentProjectedFromCursor(levels: 1),
@@ -164,7 +164,7 @@ struct StructuralCSTPasteSiteTests {
 
     @Test("parent projection two levels from paragraph text targets paragraph")
     func parentProjectionTwoLevelsTargetsParagraph() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let resolved = try #require(
             StructuralCSTPasteSiteResolver.resolve(
                 scope: .parentProjectedFromCursor(levels: 2),
@@ -181,7 +181,7 @@ struct StructuralCSTPasteSiteTests {
 
     @Test("parent projection rejects zero and excessive levels")
     func parentProjectionRejectsInvalidLevels() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let zero = StructuralCSTPasteSiteResolver.resolve(
             scope: .parentProjectedFromCursor(levels: 0),
             in: parsed.tree,
@@ -204,7 +204,7 @@ struct StructuralCSTPasteSiteTests {
     @Test("nearest ancestor projection from list content targets the list item")
     func nearestAncestorProjectionTargetsListItem() throws {
         let source = "- foo\n  - bar\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let cursorOffset = try byteOffset(of: "bar", in: source)
 
         let resolved = try #require(
@@ -224,7 +224,7 @@ struct StructuralCSTPasteSiteTests {
     @Test("nearest ancestor projection from nested list content chooses inner list")
     func nearestAncestorProjectionChoosesInnerList() throws {
         let source = "- foo\n  - bar\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let cursorOffset = try byteOffset(of: "bar", in: source)
 
         let resolved = try #require(
@@ -245,7 +245,7 @@ struct StructuralCSTPasteSiteTests {
 
     @Test("nearest ancestor projection returns nil when kind is absent")
     func nearestAncestorProjectionMissingKindReturnsNil() throws {
-        let parsed = try LiminalParser().parse("- foo\n")
+        let parsed = try LiminalParser().parse(CambiumSource("- foo\n"))
         let resolved = StructuralCSTPasteSiteResolver.resolve(
             scope: .nearestAncestorProjectedFromCursor(kind: .blockQuote),
             in: parsed.tree,

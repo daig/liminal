@@ -45,7 +45,7 @@ struct HighlightDirtySpanTests {
         let source = "first\n\n```swift\nlet x = 1\n```\n\nlast\n"
         let firstSeed = byteRange(of: "first", in: source)
         let lastSeed = byteRange(of: "last", in: source)
-        let session = LiminalEditorSession(source: source)
+        let session = LiminalEditorSession(source: CambiumSource(source))
         let parsed = try session.parse()
         let ranges = LiminalDirtySpan.expandedHighlightRanges(
             root: parsed.rootSyntax,
@@ -59,7 +59,7 @@ struct HighlightDirtySpanTests {
 }
 
 private func expandedRanges(in source: String, seed: TextRange) throws -> [TextRange] {
-    let session = LiminalEditorSession(source: source)
+    let session = LiminalEditorSession(source: CambiumSource(source))
     let parsed = try session.parse()
     return LiminalDirtySpan.expandedHighlightRanges(
         root: parsed.rootSyntax,

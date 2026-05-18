@@ -23,7 +23,6 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     let session: LiminalEditorSession
     let vimController: VimController
     let cstInspector: CSTInspector
-    private let writesThroughToFile: Bool
 
     /// CST-aware undo history. Captures tree/cursor/mark snapshots
     /// and text patches at vim transaction boundaries; on undo, the
@@ -84,9 +83,14 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     private var isFilePresenterRegistered: Bool = false
 
     /// Snapshot of disk content as of our last synchronization with
-    /// it — set after every successful read (initial load, reload)
-    /// AND after every successful write. Used to distinguish:
+    /// it — set after every successful read (initial load, reload),
+    /// after every successful write, AND after SwiftUI's NSDocument
+    /// autosave hands us the snapshot via `fileWrapper(snapshot:configuration:)`.
+    /// Used to distinguish:
     /// - our own coordinated atomic-write echoes
+    /// - SwiftUI's NSDocument-autosave writes (it goes through its own
+    ///   `NSFileCoordinator` with NSDocument as presenter, which fires
+    ///   our presenter as an "external change")
     /// - peer-presenter round-trips that produce identical bytes
     ///   (e.g. another editor opens the file and saves without
     ///   changing anything)
@@ -102,7 +106,29 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// definitive question — "is what's on disk the same bytes I last
     /// synced with?" — and answers it correctly regardless of any of
     /// those failure modes.
-    private var lastObservedDiskSource: String?
+    ///
+    /// **Why a lock.** SwiftUI's autosave path calls
+    /// `fileWrapper(snapshot:configuration:)` from a context we don't
+    /// control (potentially off-MainActor), and we need to snap the
+    /// baseline forward synchronously before that wrapper is written
+    /// — otherwise the presenter callback can fire on MainActor with a
+    /// stale baseline and prompt-fire spuriously. Every other access
+    /// site is MainActor; the lock is contended only across the
+    /// SwiftUI-write boundary.
+    private let baselineLock = NSLock()
+    private var _lastObservedDiskSource: String?
+    private var lastObservedDiskSource: String? {
+        get {
+            baselineLock.lock()
+            defer { baselineLock.unlock() }
+            return _lastObservedDiskSource
+        }
+        set {
+            baselineLock.lock()
+            defer { baselineLock.unlock() }
+            _lastObservedDiskSource = newValue
+        }
+    }
 
     /// `true` when the document was opened against an evicted iCloud
     /// placeholder (empty bytes). The eventual download completion
@@ -161,7 +187,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         // calls setFileURL with a buffer that's already diverged from
         // disk, we'd want a coordinated re-read here — currently no
         // such path exists.)
-        lastObservedDiskSource = url == nil ? nil : session.source
+        lastObservedDiskSource = url == nil ? nil : session.source.toString()
 
         // Kick the ubiquity check for the new URL. No-op for local
         // files; for evicted iCloud files it starts a download and
@@ -186,7 +212,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         entry.indexCurrentDocument(
             url,
             rootSyntax: root,
-            content: session.source
+            content: session.source.toString()
         )
         // Kick off the one-shot vault scan so Cmd-clicks to
         // not-yet-open notes can resolve. Idempotent across calls.
@@ -217,7 +243,6 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
-        self.writesThroughToFile = false
         self.filePresenter = DocumentFilePresenter(owner: nil)
         // undoHistory is lazy — first access happens
         // on the MainActor in the Coordinator's makeNSView. Don't
@@ -242,9 +267,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
-        self.writesThroughToFile = true
         self.filePresenter = DocumentFilePresenter(owner: nil)
-        try session.replaceSource(source)
+        try session.replaceSource(CambiumSource(source))
         syncFromSession()
         filePresenter.owner = self
         // This init is reached from the @MainActor convenience init
@@ -263,9 +287,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         self.session = LiminalEditorSession()
         self.vimController = VimController()
         self.cstInspector = CSTInspector()
-        self.writesThroughToFile = false
         self.filePresenter = DocumentFilePresenter(owner: nil)
-        try session.replaceSource(source)
+        try session.replaceSource(CambiumSource(source))
         syncFromSession()
         filePresenter.owner = self
         // Seeding deferred to Coordinator.makeNSView.
@@ -277,11 +300,23 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     }
 
     func snapshot(contentType: UTType) throws -> String {
-        session.source
+        // SwiftUI's `ReferenceFileDocument` protocol requires String, so
+        // this is a load-bearing materialization on the autosave path.
+        // Cost is O(N) per autosave (rare). Step 3+4 cleanups don't
+        // remove it; only a future "rope-native document I/O" would.
+        session.source.toString()
     }
 
     func fileWrapper(snapshot: String, configuration: WriteConfiguration) throws -> FileWrapper {
-        FileWrapper(regularFileWithContents: Data(snapshot.utf8))
+        // SwiftUI's NSDocument-backed autosave is about to write these
+        // bytes to disk via its own NSFileCoordinator (with NSDocument
+        // as the presenter), which will fire OUR presenter as an
+        // "external change". Record the bytes as the new self-write
+        // baseline NOW — synchronously, before the wrapper is handed
+        // back — so the subsequent presentedItemDidChange coalesces
+        // correctly instead of prompting the user about their own save.
+        lastObservedDiskSource = snapshot
+        return FileWrapper(regularFileWithContents: Data(snapshot.utf8))
     }
 
     /// Forward a textual edit to the session. Called by `LiminalTextView`'s
@@ -314,7 +349,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 cstInspector.refresh(
                     cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                     root: newRoot,
-                    source: session.source
+                    source: session.source.toString()
                 )
                 treeVersion &+= 1
             }
@@ -400,7 +435,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             cstInspector.refresh(
                 cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                 root: newRoot,
-                source: session.source
+                source: session.source.toString()
             )
             treeVersion &+= 1
         }
@@ -433,7 +468,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             cstInspector.refresh(
                 cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                 root: newRoot,
-                source: session.source
+                source: session.source.toString()
             )
             treeVersion &+= 1
         }
@@ -445,9 +480,9 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     @MainActor
     @discardableResult
     func writeToBackingFileIfPossible() -> Bool {
-        guard writesThroughToFile, let fileURL else { return false }
+        guard let fileURL else { return false }
         do {
-            let writtenSource = session.source
+            let writtenSource = session.source.toString()
             try CoordinatedFileIO.write(
                 Data(writtenSource.utf8),
                 to: fileURL,
@@ -466,7 +501,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             // our own save for an external edit, then opportunistically
             // flush the warm-tier cache (a no-op when nothing's dirty).
             let entry = VaultRegistry.shared.entry(for: fileURL)
-            entry.noteFileWrittenThrough(fileURL, content: session.source)
+            entry.noteFileWrittenThrough(fileURL, content: writtenSource)
             Task { await entry.flushCacheIfDirty() }
             return true
         } catch {
@@ -569,7 +604,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
 
         #if DEBUG
         precondition(
-            session.source == navigation.target.tree.sourceText(),
+            session.source == CambiumSource(navigation.target.tree.sourceText()),
             "Undo source and target CST diverged"
         )
         #endif
@@ -579,7 +614,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             cstInspector.refresh(
                 cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                 root: root,
-                source: session.source
+                source: session.source.toString()
             )
             treeVersion &+= 1
         }
@@ -601,34 +636,41 @@ final class LiminalSourceDocument: ReferenceFileDocument {
 
     /// Triggered when the file presenter reports an external change
     /// OR a new conflict version arrived in `NSFileVersion`'s store.
-    /// First applies the self-write coalescing check (our own atomic
-    /// `write(to:options:.atomic)` looks like delete-then-create to
-    /// the presenter), then either auto-reloads (pending initial
-    /// download) or refreshes the `hasUnresolvedConflicts` flag and
-    /// posts a notification the Coordinator turns into the
-    /// appropriate sheet prompt (generic reload vs. 3-button
-    /// conflict).
+    /// Refreshes `hasUnresolvedConflicts` (a gain-version callback can
+    /// fire without `presentedItemDidChange`, so we re-query every
+    /// time), then applies the self-write coalescing check. If coalesce
+    /// fails, either auto-reloads (pending initial iCloud download) or
+    /// posts a notification the Coordinator turns into the appropriate
+    /// sheet prompt (generic reload vs. 3-button conflict).
     @MainActor
     func handleExternalChangeOrConflict() {
         guard let url = fileURL else { return }
-        // Refresh the conflict flag regardless — a gain-version
-        // callback can fire without `presentedItemDidChange`, and we
-        // want the latest state on every signal.
         let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? []
         hasUnresolvedConflicts = !conflicts.isEmpty
 
-        // Content-based self-write coalescing (replaces the prior
-        // mtime check). Read disk via the coordinator, compare bytes
-        // to our last-synced baseline. If they match, this is an
-        // echo of one of our own writes OR an unrelated write that
-        // produced identical bytes — either way, there's nothing
-        // for the user to decide. Coalesce.
+        // Content-based self-write coalescing. Read disk (uncoordinated
+        // — see `readCurrentDiskSource` for why) and suppress when disk
+        // matches either:
+        //   - the in-memory buffer (`session.source`) — nothing for
+        //     the user to decide, the editor already reflects what's
+        //     on disk. Backstops any write path we don't explicitly
+        //     hook (e.g. a SwiftUI autosave whose `fileWrapper`-time
+        //     baseline update somehow lost the race to the presenter
+        //     callback).
+        //   - our recorded baseline (`lastObservedDiskSource`) —
+        //     echoes of our own coordinated writes, SwiftUI autosaves
+        //     we hooked via `fileWrapper`, or peer round-trips that
+        //     produced identical bytes.
+        // Snap the baseline forward on coalesce so future callbacks
+        // start from a fresh observation of disk state.
         let currentDiskSource = readCurrentDiskSource(url: url)
-        if let baseline = lastObservedDiskSource,
-           let current = currentDiskSource,
-           current == baseline,
+        if let current = currentDiskSource,
            conflicts.isEmpty {
-            return
+            let bufferString = session.source.toString()
+            if current == bufferString || current == lastObservedDiskSource {
+                lastObservedDiskSource = current
+                return
+            }
         }
         // Real external change OR new conflict version.
         if pendingInitialDownload && conflicts.isEmpty {
@@ -646,26 +688,38 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         )
     }
 
-    /// Coordinated read of the current disk content as a String, or
-    /// nil if the read fails or the bytes aren't valid UTF-8. Used
-    /// by `handleExternalChangeOrConflict` for self-write coalescing
-    /// — comparing actual content is the definitive answer to "is
-    /// what's on disk the same as what I last synced with?"
+    /// Uncoordinated read of the current disk content as a String,
+    /// or nil if the read fails or the bytes aren't valid UTF-8.
+    /// Used by `handleExternalChangeOrConflict` for self-write
+    /// coalescing — comparing actual content is the definitive
+    /// answer to "is what's on disk the same as what I last synced
+    /// with?"
+    ///
+    /// **Why uncoordinated.** This runs on MainActor inside the
+    /// presenter callback. `NSFileCoordinator.coordinate` is
+    /// synchronous and can block the calling thread waiting for
+    /// other presenters to relinquish — notably SwiftUI's NSDocument
+    /// presenter, which may itself need MainActor to respond.
+    /// That's a classic main-thread deadlock (Apple's own docs warn
+    /// against it). The authoritative reload path (`reloadFromDisk`)
+    /// keeps coordination because it runs in response to an explicit
+    /// user action where blocking briefly is acceptable; here, by
+    /// contract, `presentedItemDidChange` only fires after the
+    /// peer's write has committed, so a raw read sees the final
+    /// bytes. Torn reads from an in-progress iCloud daemon write
+    /// would at worst cause a single spurious prompt the user can
+    /// dismiss — vastly better than beachballing the editor.
     @MainActor
     private func readCurrentDiskSource(url: URL) -> String? {
-        do {
-            let data = try CoordinatedFileIO.read(at: url, presenter: filePresenter) {
-                try Data(contentsOf: $0)
-            }
-            return String(data: data, encoding: .utf8)
-        } catch {
-            return nil
-        }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     /// Triggered when the presenter reports that the backing file
     /// was deleted by another agent. v1: log + keep buffer. The next
-    /// `:Write` recreates the file at the same path.
+    /// edit's `writeToBackingFileIfPossible` (auto-fired by
+    /// `writeThroughIfNeeded`) recreates the file at the same path
+    /// via the coordinator's atomic write.
     @MainActor
     func handlePresentedItemDeletion() {
         guard let url = fileURL else { return }
@@ -687,7 +741,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 NSLog("LiminalSourceDocument: reload skipped — file at \(url.path) isn't UTF-8")
                 return
             }
-            try session.replaceSource(source)
+            try session.replaceSource(CambiumSource(source))
             syncFromSession()
             treeVersion &+= 1
             // Reset undo history to a fresh post-reload baseline so
@@ -717,15 +771,24 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     // MARK: - Conflict resolution (NSFileVersion-based, v1)
 
     /// "Keep Mine" path: mark every unresolved conflict version as
-    /// resolved without changing the current file. The in-memory
-    /// buffer wins. iCloud may garbage-collect the now-resolved
-    /// versions later. Sets `hasUnresolvedConflicts = false`.
+    /// resolved AND flush the in-memory buffer to disk. iCloud may
+    /// garbage-collect the now-resolved versions later. Sets
+    /// `hasUnresolvedConflicts = false`.
+    ///
+    /// The flush mirrors the generic-reload prompt's "Keep My Version"
+    /// path. Without it, when iCloud's other-device version is what
+    /// currently sits on disk (a common case — the conflict often
+    /// arrives because iCloud already overwrote our last save), the
+    /// user picks "Keep Mine", we mark the conflict resolved, but disk
+    /// silently retains the other-device version. The flush makes the
+    /// user's intent ("my buffer wins") true on disk immediately.
     @MainActor
     func resolveConflictsKeepingMine() {
         guard let url = fileURL else { return }
         let conflicts = NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? []
         for version in conflicts { version.isResolved = true }
         hasUnresolvedConflicts = false
+        writeToBackingFileIfPossible()
     }
 
     /// "Take Theirs" path: read the most-recent conflict version's

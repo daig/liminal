@@ -1,3 +1,4 @@
+import CambiumCore
 import Testing
 @testable import Liminal
 
@@ -6,7 +7,7 @@ struct SchemaValidatorTests {
     @Test("clean prelude-shaped document produces no validation diagnostics")
     func cleanDocumentProducesNoValidationDiagnostics() throws {
         let source = "# Heading\n\nParagraph text with [[Target]].\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -16,7 +17,7 @@ struct SchemaValidatorTests {
     @Test("unknown typed constructor produces unresolved-type warning")
     func unknownTypedConstructorProducesUnresolvedTypeWarning() throws {
         let source = "@DoesNotExist{x: 1}\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -117,7 +118,7 @@ struct SchemaValidatorTests {
         Hello
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -138,7 +139,7 @@ struct SchemaValidatorTests {
         Body @DoesNotExist[label]
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -154,7 +155,7 @@ struct SchemaValidatorTests {
         // any text-shaped type. Use an inline @Link constructor inside a
         // paragraph so the kind check passes (Link is .inline).
         let source = "Body @Link{href: 123}[label]\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -176,7 +177,7 @@ struct SchemaValidatorTests {
         body content
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -194,7 +195,7 @@ struct SchemaValidatorTests {
         // v0.2 §8.2: duplicate fields are syntactically valid; the schema
         // pass reports them as an error rather than crashing.
         let source = "Body @Link{href: \"a\", href: \"b\"}[label]\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -304,7 +305,7 @@ struct SchemaValidatorTests {
         // and an inline `[surface]` body. Per spec §8.1 the surface body
         // already maps to the @content field; doubling them is ambiguous.
         let source = "Body @Link{href: \"T\", body: @[field]}[surface]\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -322,7 +323,7 @@ struct SchemaValidatorTests {
         // WikiLink.body is `inline @content`. An explicit numeric value
         // cannot match `.inline`.
         let source = "Body @WikiLink{target: \"T\", body: 123}\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -362,7 +363,7 @@ struct SchemaValidatorTests {
         // paragraph; the validator should descend into Paragraph.content
         // and flag the nested unresolved type.
         let source = "Body @DoesNotExist[label]\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -375,7 +376,7 @@ struct SchemaValidatorTests {
     @Test("validation diagnostics carry the offending node's source range")
     func validationDiagnosticsCarrySourceRange() throws {
         let source = "@DoesNotExist{x: 1}\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -394,7 +395,7 @@ struct SchemaValidatorTests {
         :::
         @Person{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -413,7 +414,7 @@ struct SchemaValidatorTests {
         body
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -431,7 +432,7 @@ struct SchemaValidatorTests {
         ::use type "./schema.lim" as ext
         @ext.Person{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -443,7 +444,7 @@ struct SchemaValidatorTests {
     @Test("Phase 3b.3 unaliased external reference still warns")
     func phase3b3UnaliasedExternalReferenceStillWarns() throws {
         let source = "@unknown.Whatever{}\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -460,7 +461,7 @@ struct SchemaValidatorTests {
         type Document : document = { foo: str }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -477,7 +478,7 @@ struct SchemaValidatorTests {
         ::use data "./people.lim" as people
         @people.Person{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -494,7 +495,7 @@ struct SchemaValidatorTests {
         @ext.Person{name: "Ada"}
         @ext.Card{title: "Hi"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -513,7 +514,7 @@ struct SchemaValidatorTests {
         ::use type "./schema.lim" only { } as ext
         @ext.Person{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -529,7 +530,7 @@ struct SchemaValidatorTests {
         ::use type "./schema.lim" as ext
         @ext{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -549,7 +550,7 @@ struct SchemaValidatorTests {
         type Document : document = { bar: str }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -575,7 +576,7 @@ struct SchemaValidatorTests {
         :::
         @Person{}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -593,7 +594,7 @@ struct SchemaValidatorTests {
         :::
         @Person{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -624,7 +625,7 @@ struct SchemaValidatorTests {
         :::
         @Item{name: "Ada", payload: "anything"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -650,7 +651,7 @@ struct SchemaValidatorTests {
         :::
         @Item{tags: ["a", "b"]}
         """
-        let validParsed = try LiminalParser().parse(validSource)
+        let validParsed = try LiminalParser().parse(CambiumSource(validSource))
         let validDocument = LiminalLowerer().lower(validParsed)
         let valid = SchemaValidator().validate(validDocument, against: LiminalPrelude.schema)
 
@@ -665,7 +666,7 @@ struct SchemaValidatorTests {
         :::
         @Item{tags: "not-list"}
         """
-        let invalidParsed = try LiminalParser().parse(invalidSource)
+        let invalidParsed = try LiminalParser().parse(CambiumSource(invalidSource))
         let invalidDocument = LiminalLowerer().lower(invalidParsed)
         let invalid = SchemaValidator().validate(invalidDocument, against: LiminalPrelude.schema)
 
@@ -683,7 +684,7 @@ struct SchemaValidatorTests {
         :::
         @Item{name: "Ada"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -700,7 +701,7 @@ struct SchemaValidatorTests {
         :::
         @Person{name: "Ada", extra: "x"}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -722,7 +723,7 @@ struct SchemaValidatorTests {
         :::
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -741,7 +742,7 @@ struct SchemaValidatorTests {
         :::
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -760,7 +761,7 @@ struct SchemaValidatorTests {
         :::
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -779,7 +780,7 @@ struct SchemaValidatorTests {
         :::
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -801,7 +802,7 @@ struct SchemaValidatorTests {
         :::
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 
@@ -909,7 +910,7 @@ struct SchemaValidatorTests {
         type Item : value = { tags: [str?] }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first,
@@ -935,7 +936,7 @@ struct SchemaValidatorTests {
         type Person : value = { nick: str? }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first,
@@ -957,7 +958,7 @@ struct SchemaValidatorTests {
         type Color : value = enum { red, green, blue }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first,
@@ -983,7 +984,7 @@ struct SchemaValidatorTests {
         }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first,
@@ -1011,7 +1012,7 @@ struct SchemaValidatorTests {
         type A : value = str @readonly @deprecated("old")
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first,
@@ -1051,7 +1052,7 @@ struct SchemaValidatorTests {
         }
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first,
@@ -1085,7 +1086,7 @@ struct SchemaValidatorTests {
         type Pic : value = embed<Image>
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         guard case .schema(let block) = document.items.first else {
@@ -1112,7 +1113,7 @@ struct SchemaValidatorTests {
         @Painted{tint: red}
         @Painted{tint: purple}
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let validated = SchemaValidator().validate(document, against: LiminalPrelude.schema)
 

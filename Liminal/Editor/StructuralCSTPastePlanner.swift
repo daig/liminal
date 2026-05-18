@@ -445,7 +445,7 @@ enum StructuralCSTPastePlanner {
               payload.projection.kind == .listItemContent
         else { return nil }
 
-        let parsed = try LiminalParser().parse(payload.logicalText)
+        let parsed = try LiminalParser().parse(CambiumSource(payload.logicalText))
         return parsed.tree.withRoot { root -> StructuralCSTFragment? in
             guard root.childOrTokenCount == 1,
                   root.green({ $0.child(at: 0) }).kind == .list
@@ -488,7 +488,7 @@ enum StructuralCSTPastePlanner {
             targetBaseIndent: targetBaseIndent,
             topLevelMarker: topLevelMarker
         )
-        let parsed = try LiminalParser().parse(shifted)
+        let parsed = try LiminalParser().parse(CambiumSource(shifted))
         return try parsed.tree.withRoot { root -> GreenTreeSnapshot<LiminalLanguage> in
             for index in 0..<root.childOrTokenCount {
                 let kind = root.green { $0.child(at: index) }.kind
@@ -597,7 +597,7 @@ enum StructuralCSTPastePlanner {
     private static func singleListFragment(
         from source: String
     ) throws -> StructuralCSTFragment? {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         return parsed.tree.withRoot { root -> StructuralCSTFragment? in
             guard root.childOrTokenCount == 1,
                   root.green({ $0.child(at: 0) }).kind == .list
@@ -732,7 +732,7 @@ enum StructuralCSTPastePlanner {
     private static func listItemSnapshot(
         from source: String
     ) throws -> GreenTreeSnapshot<LiminalLanguage> {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         return try parsed.tree.withRoot { root -> GreenTreeSnapshot<LiminalLanguage> in
             guard root.childOrTokenCount == 1,
                   root.green({ $0.child(at: 0) }).kind == .list
@@ -831,7 +831,7 @@ enum StructuralCSTPastePlanner {
     private static func parsedRootPayload(
         from source: String
     ) throws -> ParsedRootPayload {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let childKinds = parsed.tree.withRoot { root in
             (0..<root.childOrTokenCount).map { index in
                 root.green { $0.child(at: index) }.kind
@@ -1040,7 +1040,7 @@ enum StructuralCSTPastePlanner {
         from source: String,
         expectedChildKinds: [LiminalKind]
     ) throws -> GreenTreeSnapshot<LiminalLanguage> {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let childKinds = parsed.tree.withRoot { root in
             (0..<root.childOrTokenCount).map { index in
                 root.green { $0.child(at: index) }.kind
@@ -1058,7 +1058,7 @@ enum StructuralCSTPastePlanner {
         from source: String,
         expectedKind: LiminalKind
     ) throws -> GreenTreeSnapshot<LiminalLanguage> {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         return try parsed.tree.withRoot { root -> GreenTreeSnapshot<LiminalLanguage> in
             guard root.childOrTokenCount == 1,
                   root.green({ $0.child(at: 0) }).kind == expectedKind

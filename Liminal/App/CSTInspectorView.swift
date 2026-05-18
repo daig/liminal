@@ -66,7 +66,7 @@ struct CSTInspectorView: View {
                 DetailRow(label: "Path", value: pathString(node.path))
                 DetailRow(
                     label: "Hash",
-                    value: String(format: "0x%016llx", node.structuralHash)
+                    value: String(format: "0x%016llx%016llx", node.contentHash.high64, node.contentHash.low64)
                 )
                 DetailRow(
                     label: "Text",

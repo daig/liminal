@@ -1,3 +1,4 @@
+import CambiumCore
 import Foundation
 import Testing
 @testable import Liminal
@@ -5,7 +6,7 @@ import Testing
 @Suite("WorkspaceWindowController")
 @MainActor
 struct WorkspaceWindowControllerTests {
-    @Test("replace navigation retargets the active tab without writing the host document externally")
+    @Test("replace navigation retargets the active tab and flushes the host buffer to disk")
     func replaceNavigationRetargetsActiveTab() throws {
         VaultRegistry.shared.resetForTesting()
         defer { VaultRegistry.shared.resetForTesting() }
@@ -16,7 +17,7 @@ struct WorkspaceWindowControllerTests {
         let sourceURL = try #require(urls["Source.lim"])
         let targetURL = try #require(urls["Target.lim"])
         let sourceDocument = LiminalSourceDocument()
-        try sourceDocument.session.replaceSource("Unsaved Source\n")
+        try sourceDocument.session.replaceSource(CambiumSource("Unsaved Source\n"))
         let workspace = WorkspaceWindowController(
             initialDocument: sourceDocument,
             initialFileURL: sourceURL
@@ -27,9 +28,15 @@ struct WorkspaceWindowControllerTests {
         let persistedSource = try String(contentsOf: sourceURL, encoding: .utf8)
 
         #expect(workspace.tabs.count == 1)
-        #expect(persistedSource == "Source\n")
+        // Navigation flushes the outgoing tab's buffer to its backing
+        // file via `writeToBackingFileIfPossible` — same authoritative
+        // write path every edit goes through, host-backed or standalone.
+        // Without this, host-backed docs whose buffer diverged from
+        // disk (external edit acknowledged via "Keep My Version", say)
+        // would silently lose those edits whenever the user navigated.
+        #expect(persistedSource == "Unsaved Source\n")
         #expect(workspace.activeTab?.fileURL == VaultRegistry.canonicalNoteURL(for: targetURL))
-        #expect(workspace.activeTab?.document.session.source == "Target\n")
+        #expect(workspace.activeTab?.document.session.source == CambiumSource("Target\n"))
         #expect(workspace.activeTab?.navigationRequest == request)
 
         let backRequest = NavigationRequest(targetURL: sourceURL, anchor: nil)
@@ -39,7 +46,7 @@ struct WorkspaceWindowControllerTests {
         #expect(workspace.tabs.count == 1)
         #expect(returnedTab.document === sourceDocument)
         #expect(returnedTab.isHostBacked == true)
-        #expect(returnedTab.document.session.source == "Unsaved Source\n")
+        #expect(returnedTab.document.session.source == CambiumSource("Unsaved Source\n"))
     }
 
     @Test("shift navigation opens the target in a new active tab")
@@ -63,7 +70,7 @@ struct WorkspaceWindowControllerTests {
 
         #expect(workspace.tabs.count == 2)
         #expect(workspace.activeTab?.fileURL == VaultRegistry.canonicalNoteURL(for: targetURL))
-        #expect(workspace.activeTab?.document.session.source == "Target\n")
+        #expect(workspace.activeTab?.document.session.source == CambiumSource("Target\n"))
         #expect(workspace.activeTab?.navigationRequest == request)
     }
 
@@ -80,7 +87,7 @@ struct WorkspaceWindowControllerTests {
         let targetURL = try #require(urls["Target.lim"])
         let thirdURL = try #require(urls["Third.lim"])
         let sourceDocument = LiminalSourceDocument()
-        try sourceDocument.session.replaceSource("Source\n")
+        try sourceDocument.session.replaceSource(CambiumSource("Source\n"))
         let workspace = WorkspaceWindowController(
             initialDocument: sourceDocument,
             initialFileURL: sourceURL
@@ -91,7 +98,7 @@ struct WorkspaceWindowControllerTests {
             disposition: .newTab
         )
         let targetTab = try #require(workspace.activeTab)
-        try targetTab.document.session.replaceSource("Unsaved Target\n")
+        try targetTab.document.session.replaceSource(CambiumSource("Unsaved Target\n"))
 
         workspace.handleNavigation(
             NavigationRequest(targetURL: thirdURL, anchor: nil),

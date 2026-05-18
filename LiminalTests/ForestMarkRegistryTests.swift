@@ -9,7 +9,7 @@ struct ForestMarkRegistryTests {
     // Build a real LiminalForestAnchor by parsing a tiny doc and
     // capturing whatever cstVisualEntry returns at byte 0.
     private static func sampleAnchor(_ source: String = "Hello world.\n") throws -> LiminalForestAnchor {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: parsed.tree)
         )

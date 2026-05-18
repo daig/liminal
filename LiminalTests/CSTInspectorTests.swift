@@ -8,7 +8,7 @@ struct CSTInspectorTests {
 
     private func makeRoot(_ source: String) throws -> RootSyntax {
         let session = LiminalEditorSession()
-        try session.replaceSource(source)
+        try session.replaceSource(CambiumSource(source))
         return try #require(session.parseResult?.rootSyntax)
     }
 

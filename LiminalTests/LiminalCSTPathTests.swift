@@ -78,12 +78,12 @@ struct LiminalCSTPathTests {
 
     @Test("live cursor and forest paths match Cambium full child-index paths")
     func liveCursorAndForestPaths() throws {
-        let parsed = try LiminalParser().parse("""
+        let parsed = try LiminalParser().parse(CambiumSource("""
         One.
 
         - two
           - three
-        """)
+        """))
         let tree = parsed.tree
 
         let rootPath = tree.withRoot { root in

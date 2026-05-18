@@ -27,7 +27,7 @@ public struct CSTNodeDetails: Sendable, Equatable, Hashable {
     /// stable identity when paired with a fingerprint.
     public let path: [UInt32]
     /// Cambium's content-addressed `greenHash` for this subtree.
-    public let structuralHash: UInt64
+    public let contentHash: ContentHash
     /// A short, single-line preview of the node's source text. Multi-line
     /// content is condensed; long content is truncated with an ellipsis.
     public let preview: String

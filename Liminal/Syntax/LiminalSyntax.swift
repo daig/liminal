@@ -570,9 +570,11 @@ enum LiminalDirtySpan {
 public struct LiminalParser {
     public init() {}
 
-    public func parse(_ source: String) throws -> LiminalParseResult {
+    public func parse(_ source: CambiumSource) throws -> LiminalParseResult {
         var builder = GreenTreeBuilder<LiminalLanguage>(policy: .documentLocal)
-        var parser = LiminalCSTParser(source: source)
+        // TODO(rope-phase-2-follow-up): once the streaming lexer lands, consume
+        // source.makeChunkIterator() directly instead of materializing a String.
+        var parser = LiminalCSTParser(source: source.toString())
         try parser.parse(with: &builder)
         let build = try builder.finish()
         let tree = build.snapshot.makeSyntaxTree().intoShared()
@@ -580,15 +582,23 @@ public struct LiminalParser {
     }
 
     fileprivate func parse(
-        _ source: String,
+        _ source: CambiumSource,
         edits: [TextEdit],
         previousTree: SharedSyntaxTree<LiminalLanguage>?,
         incrementalSession: IncrementalParseSession<LiminalLanguage>?,
         context: consuming GreenTreeContext<LiminalLanguage>
     ) throws -> LiminalParseSessionBuildOutput {
         var builder = GreenTreeBuilder<LiminalLanguage>(context: consume context)
+        // Set up the canonical Cambium ingest path so a future streaming-lexer
+        // rewrite has the handoff in place. Today we still bridge to String.
+        // TODO(rope-phase-2-follow-up): replace this materialization with
+        // input.buffer.makeChunkIterator() consumption.
+        let input = ParseInput<LiminalLanguage>(source: source, edits: edits, previousTree: previousTree)
+        let bridgedSource = input.buffer.withContiguousUTF8 {
+            String(decoding: $0, as: UTF8.self)
+        }
         var parser = LiminalCSTParser(
-            source: source,
+            source: bridgedSource,
             edits: edits,
             previousTree: previousTree,
             incrementalSession: incrementalSession
@@ -662,7 +672,7 @@ public final class LiminalParseSession {
 
     @discardableResult
     public func parse(
-        _ source: String,
+        _ source: CambiumSource,
         edits: [TextEdit] = []
     ) throws -> LiminalParseResult {
         _ = incrementalSession.consumeAcceptedReuses()
@@ -695,7 +705,7 @@ public final class LiminalParseSession {
     }
 
     private func performFullParse(
-        source: String,
+        source: CambiumSource,
         edits: [TextEdit]
     ) throws -> LiminalParseResult {
         let coldStart = (lastTree == nil && edits.isEmpty)
@@ -769,7 +779,7 @@ public final class LiminalParseSession {
     /// parse) when the strategy isn't applicable — empty previous tree,
     /// edit ranges out of the document, or any defensive bail-out.
     private func performSkipCleanRegionsParse(
-        source: String,
+        source: CambiumSource,
         edits: [TextEdit],
         previousTree: SharedSyntaxTree<LiminalLanguage>
     ) throws -> LiminalParseResult? {
@@ -1053,21 +1063,13 @@ public final class LiminalParseSession {
         )
     }
 
-    /// Materialize `source.utf8[start..<end]` as a `String`. Uses
-    /// `withContiguousStorageIfAvailable` for the fast path (native
-    /// UTF-8-backed Swift strings) and falls back to a one-off `[UInt8]`
-    /// copy otherwise. Returns `nil` if the byte range is out of bounds.
-    private static func utf8Slice(of source: String, from start: Int, to end: Int) -> String? {
-        let utf8Count = source.utf8.count
-        guard start >= 0, end >= start, end <= utf8Count else { return nil }
-        if let result = source.utf8.withContiguousStorageIfAvailable({ buffer -> String in
-            let slice = UnsafeBufferPointer(rebasing: buffer[start..<end])
-            return String(decoding: slice, as: UTF8.self)
-        }) {
-            return result
-        }
-        let array = Array(source.utf8)
-        return String(decoding: array[start..<end], as: UTF8.self)
+    /// Materialize `source[start..<end]` as a `String` from the rope.
+    /// Returns `nil` if the byte range is out of bounds. The rope's
+    /// `substring(in:)` is O(log N + range_length) via chunked copy.
+    private static func utf8Slice(of source: CambiumSource, from start: Int, to end: Int) -> String? {
+        guard start >= 0, end >= start, end <= source.byteCount else { return nil }
+        let range = TextRange(start: TextSize(UInt32(start)), end: TextSize(UInt32(end)))
+        return source.substring(in: range)
     }
 
     public var currentTree: SharedSyntaxTree<LiminalLanguage>? {
@@ -1181,6 +1183,4 @@ struct StructuralReplaceOutput {
 
 public enum LiminalEditError: Error, Equatable, Sendable {
     case noParsedTree
-    case overlappingEdits
-    case editOutOfRange(start: UInt32, end: UInt32, sourceByteLength: Int)
 }

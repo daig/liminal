@@ -9,7 +9,7 @@ struct CSTAnchorTests {
 
     private func makeSession(_ source: String) throws -> LiminalEditorSession {
         let session = LiminalEditorSession()
-        try session.replaceSource(source)
+        try session.replaceSource(CambiumSource(source))
         return session
     }
 
@@ -40,7 +40,7 @@ struct CSTAnchorTests {
         // token inside the paragraph; depending on tree shape this might
         // also be the paragraph itself. Either way the kind should be
         // non-nil and stable.
-        #expect(anchor.fingerprint.structuralHash != 0)
+        #expect(anchor.fingerprint.contentHash != ContentHash(low64: 0, high64: 0))
     }
 
     @Test("anchor at end of document falls back to root")

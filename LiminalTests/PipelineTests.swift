@@ -1,3 +1,4 @@
+import CambiumCore
 import Testing
 @testable import Liminal
 
@@ -6,7 +7,7 @@ struct PipelineTests {
     @Test("Slice 1 lowerer and lossless printer preserve source through the Cambium tree")
     func slice1LowererAndLosslessPrinterPreserveSourceThroughCambiumTree() throws {
         let source = "# Typed documents\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let printed = LiminalPrinter().print(document)
 
@@ -19,7 +20,7 @@ struct PipelineTests {
     @Test("canonical printer currently mirrors lossless source")
     func canonicalPrinterCurrentlyMirrorsLosslessSource() throws {
         let source = "# Typed documents\n\nBody\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
 
         #expect(LiminalPrinter().print(document, mode: .canonical) == source)
@@ -35,7 +36,7 @@ struct PipelineTests {
         :::
         !{Person}[Ada](#ada)
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let printed = LiminalPrinter().print(document)
 
@@ -58,7 +59,7 @@ struct PipelineTests {
         Hello ${person.name}
         :::
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parsed)
         let printed = LiminalPrinter().print(document)
 
@@ -70,7 +71,7 @@ struct PipelineTests {
 
     @Test("editor session owns the parse session boundary")
     func editorSessionOwnsParseSessionBoundary() throws {
-        let session = LiminalEditorSession(source: "hello")
+        let session = LiminalEditorSession(source: CambiumSource("hello"))
         let parsed = try session.parse()
         let document = try session.lowerCurrentDocument()
 
@@ -80,7 +81,7 @@ struct PipelineTests {
 
     @Test("render document reads semantic document state without owning source")
     func renderDocumentUsesSemanticDocumentWithoutOwningSource() throws {
-        let parsed = try LiminalParser().parse("preview")
+        let parsed = try LiminalParser().parse(CambiumSource("preview"))
         let document = LiminalLowerer().lower(parsed)
         let renderDocument = RenderDocument(document: document)
 

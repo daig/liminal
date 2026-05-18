@@ -31,7 +31,7 @@ struct LiminalTextView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 12, height: 12)
         textView.typingAttributes = context.coordinator.theme.defaultAttributes
 
-        textView.string = document.session.source
+        textView.string = document.session.source.toString()
         textView.textStorage?.delegate = context.coordinator
         textView.delegate = context.coordinator
         textView.vimController = document.vimController
@@ -61,7 +61,7 @@ struct LiminalTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? VimTextView else { return }
-        let target = document.session.source
+        let target = document.session.source.toString()
         if textView.string != target {
             context.coordinator.isApplyingProgrammaticEdit = true
             textView.string = target
@@ -513,7 +513,7 @@ struct LiminalTextView: NSViewRepresentable {
                     location: editedRange.location,
                     length: editedRange.length - delta
                 )
-                let preEditSource = document.session.source
+                let preEditSource = document.session.source.toString()
                 guard let byteRange = LiminalTextView.utf16RangeToByteRange(
                     preEditRange,
                     in: preEditSource
@@ -1614,7 +1614,7 @@ struct LiminalTextView: NSViewRepresentable {
 
             #if DEBUG
             precondition(
-                textView.string == document.session.source,
+                textView.string == document.session.source.toString(),
                 "Structural paste text view and target CST source diverged"
             )
             #endif
@@ -2418,7 +2418,7 @@ struct LiminalTextView: NSViewRepresentable {
                     return
                 }
                 Coordinator.writeBufferAndRetarget(
-                    source: document.session.source,
+                    source: document.session.source.toString(),
                     to: url,
                     document: document
                 )
@@ -2427,7 +2427,7 @@ struct LiminalTextView: NSViewRepresentable {
             // Outside any bookmarked scope — NSSavePanel handles the
             // Powerbox grant AND the file-exists confirmation.
             Coordinator.promptSavePanelAndWriteAs(
-                buffer: document.session.source,
+                buffer: document.session.source.toString(),
                 suggested: url,
                 document: document
             )
@@ -2536,7 +2536,7 @@ struct LiminalTextView: NSViewRepresentable {
                 return
             }
             guard let diskSource = String(data: data, encoding: .utf8) else { return }
-            if diskSource == document.session.source {
+            if diskSource == document.session.source.toString() {
                 return  // nothing to reload
             }
             promptReload(message: "Reload “\(url.lastPathComponent)” from disk?")
@@ -2577,9 +2577,22 @@ struct LiminalTextView: NSViewRepresentable {
             let doc = document
             alert.beginSheetModal(for: window) { [weak self] response in
                 self?.isExternalChangePromptVisible = false
-                guard response == .alertFirstButtonReturn else { return }
                 Task { @MainActor in
-                    doc.reloadFromDisk()
+                    switch response {
+                    case .alertFirstButtonReturn:  // Reload
+                        doc.reloadFromDisk()
+                    case .alertSecondButtonReturn:  // Keep My Version
+                        // Explicitly flush the buffer through so the
+                        // user's intent — "my version wins" — takes
+                        // effect immediately. Without this, disk
+                        // continues to hold the external bytes until
+                        // the next text edit triggers writeThroughIfNeeded,
+                        // and any presenter callback in that window
+                        // re-fires the prompt with stale disk content.
+                        doc.writeToBackingFileIfPossible()
+                    default:
+                        break
+                    }
                 }
             }
         }

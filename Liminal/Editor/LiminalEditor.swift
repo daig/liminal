@@ -23,18 +23,18 @@ public struct LiminalEditResult: Sendable {
 }
 
 public final class LiminalEditorSession {
-    public private(set) var source: String
+    public private(set) var source: CambiumSource
     public private(set) var parseResult: LiminalParseResult?
 
     private let parseSession: LiminalParseSession
 
-    public init(source: String = "", parseSession: LiminalParseSession = LiminalParseSession()) {
+    public init(source: CambiumSource = CambiumSource(), parseSession: LiminalParseSession = LiminalParseSession()) {
         self.source = source
         self.parseSession = parseSession
     }
 
     @discardableResult
-    public func replaceSource(_ source: String, edits: [TextEdit] = []) throws -> LiminalParseResult {
+    public func replaceSource(_ source: CambiumSource, edits: [TextEdit] = []) throws -> LiminalParseResult {
         self.source = source
         let result = try parseSession.parse(source, edits: edits)
         self.parseResult = result
@@ -74,19 +74,21 @@ public final class LiminalEditorSession {
     /// Apply textual edits to the current source and re-parse from scratch.
     ///
     /// Edits are expressed in **old-source** UTF-8 byte coordinates per
-    /// Cambium's `TextEdit` contract. The implementation splices on a
-    /// `[UInt8]` buffer (never `String.Index`) and applies edits in
-    /// descending start order so each edit's range remains valid against
-    /// the in-progress buffer. Throws `LiminalEditError.overlappingEdits`
-    /// when any two edits intersect and `LiminalEditError.editOutOfRange`
-    /// when a range exceeds the source's byte length.
+    /// Cambium's `TextEdit` contract and must be in descending start order
+    /// and non-overlapping. Splicing runs through `CambiumSource`'s
+    /// persistent rope (`applying(_:)`), so the per-edit cost is
+    /// O(log N + edit_size) rather than the O(N) full-buffer rewrite the
+    /// previous String-backed implementation performed. Throws
+    /// `CambiumSourceEditError.unorderedOrOverlapping` on bad ordering /
+    /// overlap and `CambiumSourceEditError.editOutOfRange` when a range
+    /// exceeds the source's byte length.
     ///
     /// The `edits:` parameter on the underlying `LiminalParseSession.parse`
     /// remains inert today; this method drives a full re-parse on the new
     /// source. Phase 6 will wire incremental parsing.
     @discardableResult
     public func applyTextEdits(_ edits: [TextEdit]) throws -> LiminalParseResult {
-        let newSource = try Self.applyingEdits(edits, to: source)
+        let newSource = try source.applying(edits)
         self.source = newSource
         let result = try parseSession.parse(newSource, edits: edits)
         self.parseResult = result
@@ -97,7 +99,7 @@ public final class LiminalEditorSession {
     /// Used by undo / redo, where the target tree was captured at the
     /// transaction boundary and will be installed directly.
     public func applySourceEditsWithoutParsing(_ edits: [TextEdit]) throws {
-        source = try Self.applyingEdits(edits, to: source)
+        source = try source.applying(edits)
         parseResult = nil
     }
 
@@ -155,44 +157,13 @@ public final class LiminalEditorSession {
     }
 
     private func finalizeReplace(_ output: StructuralReplaceOutput) -> LiminalEditResult {
-        let newSource = output.tree.withRoot { $0.makeString() }
-        self.source = newSource
+        let newSourceString = output.tree.withRoot { $0.makeString() }
+        self.source = CambiumSource(newSourceString)
         self.parseResult = nil
         return LiminalEditResult(
             tree: output.tree,
-            sourceText: newSource,
+            sourceText: newSourceString,
             witness: output.witness
         )
-    }
-
-    static func applyingEdits(_ edits: [TextEdit], to source: String) throws -> String {
-        if edits.isEmpty {
-            return source
-        }
-        let sorted = edits.sorted { lhs, rhs in
-            lhs.range.start.rawValue > rhs.range.start.rawValue
-        }
-        for i in 0..<(sorted.count - 1) {
-            let later = sorted[i]
-            let earlier = sorted[i + 1]
-            if earlier.range.end.rawValue > later.range.start.rawValue {
-                throw LiminalEditError.overlappingEdits
-            }
-        }
-        var bytes = Array(source.utf8)
-        let sourceLen = bytes.count
-        for edit in sorted {
-            let start = Int(edit.range.start.rawValue)
-            let end = Int(edit.range.end.rawValue)
-            if end > sourceLen || start > end {
-                throw LiminalEditError.editOutOfRange(
-                    start: edit.range.start.rawValue,
-                    end: edit.range.end.rawValue,
-                    sourceByteLength: sourceLen
-                )
-            }
-            bytes.replaceSubrange(start..<end, with: edit.replacementUTF8)
-        }
-        return String(decoding: bytes, as: UTF8.self)
     }
 }

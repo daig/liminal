@@ -28,7 +28,7 @@ struct StructuralCSTSelectionProjectionTests {
     @Test("block quote multi-child projection strips direct quote prefix tokens")
     func blockQuoteMultiChildProjection() throws {
         let source = "> foo\n> - item\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let paragraph = try #require(
             firstBlockQuoteChildForest(in: parsed.tree, childKind: .paragraph)
         )
@@ -96,7 +96,7 @@ struct StructuralCSTSelectionProjectionTests {
             - bax
           - qux
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let offset = try byteOffset(of: "bar", in: source)
         let forest = try #require(
             listItemForest(containing: offset, in: parsed.tree)
@@ -120,7 +120,7 @@ struct StructuralCSTSelectionProjectionTests {
     @Test("root paragraph projection is identity")
     func rootParagraphProjectionIsIdentity() throws {
         let source = "One.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: parsed.tree)
         )
@@ -137,7 +137,7 @@ struct StructuralCSTSelectionProjectionTests {
     @Test("list item opening paragraph projection strips continuation prefix")
     func listItemOpeningParagraphProjection() throws {
         let source = "- foo\n  bar\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstParagraphForestInFirstListItem(in: parsed.tree)
         )
@@ -158,7 +158,7 @@ struct StructuralCSTSelectionProjectionTests {
     @Test("list item projection preserves indentation beyond content column")
     func listItemProjectionPreservesExtraContinuationIndent() throws {
         let source = "- foo\n    bar\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstParagraphForestInFirstListItem(in: parsed.tree)
         )
@@ -174,7 +174,7 @@ struct StructuralCSTSelectionProjectionTests {
     @Test("list item child list projection strips parent content column")
     func listItemChildListProjection() throws {
         let source = "- foo\n  - bar\n    - bax\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstChildListForestInFirstListItem(in: parsed.tree)
         )
@@ -192,7 +192,7 @@ struct StructuralCSTSelectionProjectionTests {
     @Test("clipboard payload round-trips raw fragment and source projection")
     func clipboardPayloadRoundTrip() throws {
         let source = "- foo\n  - bar\n    - bax\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstChildListForestInFirstListItem(in: parsed.tree)
         )
@@ -216,7 +216,7 @@ struct StructuralCSTSelectionProjectionTests {
         source: String,
         childKind: LiminalKind
     ) throws -> StructuralCSTFragment {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstBlockQuoteChildForest(in: parsed.tree, childKind: childKind)
         )
@@ -253,7 +253,7 @@ struct StructuralCSTSelectionProjectionTests {
         source: String,
         needle: String
     ) throws -> StructuralCSTFragment {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let offset = try byteOffset(of: needle, in: source)
         let forest = try #require(
             listItemForest(containing: offset, in: parsed.tree)

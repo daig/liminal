@@ -1,3 +1,4 @@
+import CambiumCore
 import Testing
 @testable import Liminal
 
@@ -90,7 +91,7 @@ struct SemanticModelTests {
     @Test("documents reference syntax trees instead of owning source text")
     func documentReferencesSyntaxTreeInsteadOfOwningSource() throws {
         let source = "# Typed documents\n"
-        let parseResult = try LiminalParser().parse(source)
+        let parseResult = try LiminalParser().parse(CambiumSource(source))
         let document = LiminalLowerer().lower(parseResult)
 
         #expect(document.sourceText == source)
@@ -103,7 +104,7 @@ struct SemanticModelTests {
     @Test("Slice 1 lowering maps surface forms to typed semantic nodes")
     func slice1LoweringMapsSurfaceFormsToTypedSemanticNodes() throws {
         let source = "# Heading with `code`\n\nSee [[Note#Heading|Alias]] and [site](https://example.org \"Title\") plus ![Alt](image.png).\n![[Embed#^block|payload]]\n"
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.blocks.count == 3)
 
@@ -147,7 +148,7 @@ struct SemanticModelTests {
     @Test("thematic breaks and autolinks lower to semantic nodes")
     func thematicBreaksAndAutolinksLowerToSemanticNodes() throws {
         let source = "See https://example.org and www.example.org and user@example.org\n\n***\n"
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.blocks.count == 2)
         let paragraph = try #require(document.blocks.first?.node)
@@ -186,7 +187,7 @@ struct SemanticModelTests {
     @Test("paragraph line breaks lower to typed SoftBreak and HardBreak inline nodes")
     func paragraphLineBreaksLowerToTypedSoftAndHardBreakInlineNodes() throws {
         let source = "Soft\nbreak.\nHard\\\nbreak.\n"
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.blocks.count == 1)
         let paragraph = try #require(document.blocks.first?.node)
@@ -216,7 +217,7 @@ struct SemanticModelTests {
     @Test("Slice 3 lowering maps block ID suffixes to semantic node IDs")
     func slice3LoweringMapsBlockIDSuffixesToSemanticNodeIDs() throws {
         let source = "# Heading ^heading-id\n\nParagraph `body` ^para-id\n"
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.blocks.count == 2)
 
@@ -245,7 +246,7 @@ struct SemanticModelTests {
               continuation ^done-id
         2. Ordered
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.blocks.count == 2)
 
@@ -291,11 +292,11 @@ struct SemanticModelTests {
 
     @Test("Slice 4 lowering maps unordered list marker families explicitly")
     func slice4LoweringMapsUnorderedListMarkerFamiliesExplicitly() throws {
-        let document = LiminalLowerer().lower(try LiminalParser().parse("""
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource("""
         - Dash
         * Star
         + Plus
-        """))
+        """)))
 
         let markers = document.blocks.compactMap(\.node).compactMap { list in
             list.fields.first { $0.name.rawValue == "marker" }?.value
@@ -311,7 +312,7 @@ struct SemanticModelTests {
     @Test("Slice 4 ordered list marker overflow stays lossless and omits start")
     func slice4OrderedListMarkerOverflowStaysLosslessAndOmitsStart() throws {
         let source = "12345678901234567890. Huge\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
 
         #expect(parsed.sourceText == source)
         #expect(parsed.diagnostics.map(\.message) == [
@@ -339,7 +340,7 @@ struct SemanticModelTests {
         > Bar
         > - Item
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         let quote = try #require(document.blocks.first?.node)
         #expect(quote.type.rawValue == "BlockQuote")
@@ -366,7 +367,7 @@ struct SemanticModelTests {
     @Test("escaped punctuation lowers without the escape backslash")
     func escapedPunctuationLowersWithoutEscapeBackslash() throws {
         let source = #"Escaped \*literal\* and \[bracket\]."#
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         let paragraph = try #require(document.blocks.first?.node)
         guard case .inline(let inlines) = paragraph.content else {
@@ -384,7 +385,7 @@ struct SemanticModelTests {
     @Test("Slice 2 lowering maps generic typed value declarations")
     func slice2LoweringMapsGenericTypedValueDeclarations() throws {
         let source = #"@Person#ada{name: "Ada", born: 1815-12-10, tags: [math, true, null], home: &people.ada, bio: @[Writes `code`], card: @{Bio paragraph.}}[Ada]"#
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.items.count == 1)
         guard case .value(let person) = document.items[0] else {
@@ -426,7 +427,7 @@ struct SemanticModelTests {
           }
         }
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         guard case .value(let doc) = document.items.first,
               case .blockLiteral(let blocks) = doc.fields.first?.value,
@@ -453,7 +454,7 @@ struct SemanticModelTests {
         !{Person}[Ada](#ada)
         Inline !{Person}[Ada](#ada) and @Badge{tone: success}[OK].
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.blocks.count == 3)
 
@@ -496,7 +497,7 @@ struct SemanticModelTests {
         <div>raw</div>
         :::
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         let math = try #require(document.blocks.first?.node)
         let html = try #require(document.blocks.dropFirst().first?.node)
@@ -524,7 +525,7 @@ struct SemanticModelTests {
 
         *em* **strong** ~~deleted~~ ==marked== ^[note] \\(x^2\\) %% hidden %% $x$
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         guard case .value(let frontmatter) = document.items.first else {
             Issue.record("expected frontmatter value item")
@@ -571,7 +572,7 @@ struct SemanticModelTests {
         ]
 
         for (source, expected) in cases {
-            let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+            let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
             let paragraph = try #require(document.blocks.first?.node)
             guard case .inline(let inlines) = paragraph.content else {
                 Issue.record("expected paragraph inline content for \(source)")
@@ -598,7 +599,7 @@ struct SemanticModelTests {
         // Spec §6.6: the `info` field carries the raw info string;
         // only `language` is trimmed. Trailing whitespace must round-trip.
         let source = "```swift   \nbody\n```\n"
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
         let code = try #require(document.blocks.first?.node)
 
         #expect(code.type.rawValue == "CodeBlock")
@@ -615,7 +616,7 @@ struct SemanticModelTests {
         | :--- | ---: | :---: |
         | [[Ada]] | 1815 | first |
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         let table = try #require(document.blocks.first?.node)
         #expect(table.type.rawValue == "Table")
@@ -680,7 +681,7 @@ struct SemanticModelTests {
         Hello ${person.name}
         :::
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         #expect(document.items.count == 3)
         #expect(document.blocks.isEmpty)
@@ -717,7 +718,7 @@ struct SemanticModelTests {
     @Test("Slice 7 lowering maps external references in values")
     func slice7LoweringMapsExternalReferencesInValues() throws {
         let source = "@Refs{local: &ada, qualified: &people.ada, external: &<./people.lim#ada>}\n"
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         guard case .value(let refs) = document.items.first else {
             Issue.record("expected value declaration")
@@ -740,7 +741,7 @@ struct SemanticModelTests {
         type Card : block = { title: str }
         :::
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         guard case .directive(let directive) = document.items.first else {
             Issue.record("expected directive document item")
@@ -776,7 +777,7 @@ struct SemanticModelTests {
         Bio
         :::
         """
-        let document = LiminalLowerer().lower(try LiminalParser().parse(source))
+        let document = LiminalLowerer().lower(try LiminalParser().parse(CambiumSource(source)))
 
         // Schema side: template-kind decl carries a structured signature;
         // value-kind decl does not.

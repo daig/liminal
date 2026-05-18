@@ -29,7 +29,7 @@ struct ClipboardInspectorTests {
     @Test("snapshot decodes structural fragment metadata")
     func structuralSnapshot() throws {
         try withSandboxPasteboard {
-            let parsed = try LiminalParser().parse("One.\n")
+            let parsed = try LiminalParser().parse(CambiumSource("One.\n"))
             let forest = try #require(
                 LiminalForest.cstVisualEntry(at: .zero, in: parsed.tree)
             )
@@ -64,7 +64,7 @@ struct ClipboardInspectorTests {
             > foo
             > bar
             """
-            let parsed = try LiminalParser().parse(source)
+            let parsed = try LiminalParser().parse(CambiumSource(source))
             let forest = try #require(
                 firstBlockQuoteParagraphForest(in: parsed.tree)
             )
@@ -98,7 +98,7 @@ struct ClipboardInspectorTests {
             | --- | --- |
             | C | D |
             """
-            let parsed = try LiminalParser().parse(source)
+            let parsed = try LiminalParser().parse(CambiumSource(source))
             let offset = try byteOffset(of: "C", in: source)
             let row = try #require(tableRowForest(containing: offset, in: parsed.tree))
             let capture = try StructuralCSTSelectionCapture.capture(

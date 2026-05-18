@@ -12,7 +12,7 @@ struct IncrementalReuseTests {
     @Test("cold-start parse makes no reuse queries")
     func coldStartZeroQueries() throws {
         let session = LiminalParseSession()
-        let result = try session.parse("Hello\n")
+        let result = try session.parse(CambiumSource("Hello\n"))
 
         #expect(result.sourceText == "Hello\n")
         #expect(session.lastReuseSummary.queries == 0)
@@ -22,8 +22,8 @@ struct IncrementalReuseTests {
     @Test("second parse from a fresh session with empty edits stays correct")
     func sourceChangeWithoutEditsStaysCorrect() throws {
         let session = LiminalParseSession()
-        let first = try session.parse("one")
-        let second = try session.parse("two")
+        let first = try session.parse(CambiumSource("one"))
+        let second = try session.parse(CambiumSource("two"))
 
         #expect(first.sourceText == "one")
         #expect(second.sourceText == "two")
@@ -40,9 +40,9 @@ struct IncrementalReuseTests {
     func noOpReparseReusesParagraphs() throws {
         let source = "A\n\nB\n\nC\n"
         let session = LiminalParseSession()
-        _ = try session.parse(source)
+        _ = try session.parse(CambiumSource(source))
 
-        let second = try session.parse(source)
+        let second = try session.parse(CambiumSource(source))
 
         #expect(second.sourceText == source)
         #expect(session.lastReuseSummary.acceptedReuses >= 3)
@@ -53,13 +53,13 @@ struct IncrementalReuseTests {
     @Test("editing one paragraph reuses the others")
     func editOneParagraphReusesOthers() throws {
         let session = LiminalParseSession()
-        _ = try session.parse("A\n\nB\n\nC\n")
+        _ = try session.parse(CambiumSource("A\n\nB\n\nC\n"))
 
         let edit = TextEdit(
             range: TextRange(start: TextSize(UInt32(3)), length: TextSize(UInt32(1))),
             replacement: "B2"
         )
-        let second = try session.parse("A\n\nB2\n\nC\n", edits: [edit])
+        let second = try session.parse(CambiumSource("A\n\nB2\n\nC\n"), edits: [edit])
 
         #expect(second.sourceText == "A\n\nB2\n\nC\n")
         #expect(session.lastReuseSummary.acceptedReuses == 2)
@@ -76,7 +76,7 @@ struct IncrementalReuseTests {
 
         """
         let session = LiminalParseSession()
-        _ = try session.parse(source)
+        _ = try session.parse(CambiumSource(source))
 
         // Replace "let x = 1" with "let y = 2" at byte offset 17 (= "Before\n```swift\n".utf8.count)
         let needle = "let x = 1"
@@ -94,7 +94,7 @@ struct IncrementalReuseTests {
             replacement: "let y = 2"
         )
         let newSource = source.replacingOccurrences(of: needle, with: "let y = 2")
-        let second = try session.parse(newSource, edits: [edit])
+        let second = try session.parse(CambiumSource(newSource), edits: [edit])
 
         #expect(second.sourceText == newSource)
         // "Before" and "After" paragraphs are reused; fenced code block is not.
@@ -114,7 +114,7 @@ struct IncrementalReuseTests {
         body without close
         """
         let session = LiminalParseSession()
-        _ = try session.parse(source)
+        _ = try session.parse(CambiumSource(source))
 
         // Edit "Before" — typed block region is untouched, sentinel filter
         // should reject reusing the unclosed typed block.
@@ -123,7 +123,7 @@ struct IncrementalReuseTests {
             replacement: "After"
         )
         let newSource = "After\n\n:::Callout{kind: warning}\nbody without close"
-        let second = try session.parse(newSource, edits: [edit])
+        let second = try session.parse(CambiumSource(newSource), edits: [edit])
 
         #expect(second.sourceText == newSource)
         // The unclosed typed block must be re-parsed (sentinel filter).
@@ -142,7 +142,7 @@ struct IncrementalReuseTests {
 
     @Test("applyTextEdits forwards edits so reuse fires")
     func applyTextEditsForwardsEdits() throws {
-        let session = LiminalEditorSession(source: "A\n\nB\n\nC\n")
+        let session = LiminalEditorSession(source: CambiumSource("A\n\nB\n\nC\n"))
         _ = try session.parse()
 
         let edit = TextEdit(
@@ -151,14 +151,14 @@ struct IncrementalReuseTests {
         )
         _ = try session.applyTextEdits([edit])
 
-        #expect(session.source == "A\n\nB2\n\nC\n")
+        #expect(session.source == CambiumSource("A\n\nB2\n\nC\n"))
     }
 
     // MARK: - replaceSubtree invalidation
 
     @Test("replaceSubtree clears reuse for the next parse")
     func replaceSubtreeInvalidatesNextReuse() throws {
-        let session = LiminalEditorSession(source: "Hello\n")
+        let session = LiminalEditorSession(source: CambiumSource("Hello\n"))
         let parsed = try session.parse()
         guard case .paragraph(let paragraph) = parsed.rootSyntax.documentItems.first else {
             Issue.record("expected paragraph")
@@ -167,12 +167,12 @@ struct IncrementalReuseTests {
 
         let replacement = try makeParagraphSnapshot(text: "World", newline: "\n")
         _ = try session.replaceSubtree(paragraph.syntax, with: replacement)
-        #expect(session.source == "World\n")
+        #expect(session.source == CambiumSource("World\n"))
 
         // Next textual parse should not pull stale subtrees from the
         // pre-replace tree. Conservative invalidation policy: edits are
         // ignored on the next parse after replaceSubtree.
-        let result = try session.replaceSource("World\n")
+        let result = try session.replaceSource(CambiumSource("World\n"))
         #expect(result.sourceText == "World\n")
     }
 
@@ -188,13 +188,13 @@ struct IncrementalReuseTests {
         // stale candidate when the new source has appended a newline
         // that the parser would now consider part of the paragraph.
         let session = LiminalParseSession()
-        _ = try session.parse("Hello")
+        _ = try session.parse(CambiumSource("Hello"))
 
         let edit1 = TextEdit(
             range: TextRange(start: TextSize(UInt32(5)), length: TextSize(UInt32(0))),
             replacement: "\n"
         )
-        let r1 = try session.parse("Hello\n", edits: [edit1])
+        let r1 = try session.parse(CambiumSource("Hello\n"), edits: [edit1])
         #expect(r1.sourceText == "Hello\n")
         #expect(r1.tree.withRoot { $0.makeString() } == "Hello\n")
 
@@ -202,7 +202,7 @@ struct IncrementalReuseTests {
             range: TextRange(start: TextSize(UInt32(6)), length: TextSize(UInt32(0))),
             replacement: "\n"
         )
-        let r2 = try session.parse("Hello\n\n", edits: [edit2])
+        let r2 = try session.parse(CambiumSource("Hello\n\n"), edits: [edit2])
         #expect(r2.sourceText == "Hello\n\n")
         #expect(r2.tree.withRoot { $0.makeString() } == "Hello\n\n")
     }
@@ -215,13 +215,13 @@ struct IncrementalReuseTests {
         // length-6 candidate would produce two paragraphs — wrong.
         // The context-sensitive boundary guard must reject.
         let session = LiminalParseSession()
-        _ = try session.parse("World\n")
+        _ = try session.parse(CambiumSource("World\n"))
 
         let edit = TextEdit(
             range: TextRange(start: TextSize(UInt32(6)), length: TextSize(UInt32(0))),
             replacement: "!"
         )
-        let result = try session.parse("World\n!", edits: [edit])
+        let result = try session.parse(CambiumSource("World\n!"), edits: [edit])
         #expect(result.sourceText == "World\n!")
         #expect(result.tree.withRoot { $0.makeString() } == "World\n!")
     }
@@ -229,7 +229,7 @@ struct IncrementalReuseTests {
     @Test("lastReuseSummary reflects the most recent parse")
     func lastReuseSummaryReflectsMostRecentParse() throws {
         let session = LiminalParseSession()
-        _ = try session.parse("Foo\n\nBar\n")
+        _ = try session.parse(CambiumSource("Foo\n\nBar\n"))
         #expect(session.lastReuseSummary.queries == 0)
         #expect(session.lastReuseSummary.acceptedReuses == 0)
 
@@ -237,7 +237,7 @@ struct IncrementalReuseTests {
             range: TextRange(start: TextSize(UInt32(5)), length: TextSize(UInt32(3))),
             replacement: "Baz"
         )
-        _ = try session.parse("Foo\n\nBaz\n", edits: [edit])
+        _ = try session.parse(CambiumSource("Foo\n\nBaz\n"), edits: [edit])
         #expect(session.lastReuseSummary.queries > 0)
         #expect(session.lastReuseSummary.acceptedReuses >= 1)
     }
@@ -256,7 +256,7 @@ struct IncrementalReuseTests {
         // separate paragraphs.
         let session = LiminalParseSession()
         let original = "A\n\nB\n\nC\n\nD\n\nE\n"
-        _ = try session.parse(original)
+        _ = try session.parse(CambiumSource(original))
 
         // Find B's start byte. Layout: "A" (1) "\n" (1) "\n" (1) → B at byte 3.
         let bStart = 3
@@ -265,7 +265,7 @@ struct IncrementalReuseTests {
             replacement: "```\n"
         )
         let newSource = "A\n\n```\nB\n\nC\n\nD\n\nE\n"
-        let result = try session.parse(newSource, edits: [edit])
+        let result = try session.parse(CambiumSource(newSource), edits: [edit])
 
         // Structural assertion: the new tree should have exactly two
         // top-level "real" blocks — paragraph A (and its trailing
@@ -308,7 +308,7 @@ struct IncrementalReuseTests {
         // sentinel-bearing opens-until-close kind.
         let session = LiminalParseSession()
         let original = "A\n\n```\nB\n\nC\n"
-        _ = try session.parse(original)
+        _ = try session.parse(CambiumSource(original))
 
         // Edit "B" → "Bx" — inside the fenced block.
         // Source layout: "A\n\n```\nB" → byte index of "B" is 7.
@@ -321,7 +321,7 @@ struct IncrementalReuseTests {
             replacement: "x"
         )
         let newSource = "A\n\n```\nBx\n\nC\n"
-        let result = try session.parse(newSource, edits: [edit])
+        let result = try session.parse(CambiumSource(newSource), edits: [edit])
 
         // Tree text matches new source.
         #expect(result.tree.withRoot { $0.makeString() } == newSource)

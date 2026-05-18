@@ -48,6 +48,10 @@ struct LiminalCSTParser {
     var diagnostics: [LiminalDiagnostic] = []
     private(set) var acceptedReuses: [LiminalAcceptedReuse] = []
 
+    // TODO(rope-phase-2-follow-up): take a `CambiumSource` and consume bytes
+    // via `source.makeChunkIterator()` instead of materializing a `String`
+    // here. Today the caller (`LiminalParser.parse`) bridges through
+    // `ParseInput.buffer.withContiguousUTF8` and hands us a `String`.
     init(
         source: String,
         baseByteOffset: Int = 0,

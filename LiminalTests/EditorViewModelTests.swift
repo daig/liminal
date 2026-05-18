@@ -73,7 +73,7 @@ struct EditorDocumentTests {
     @MainActor
     func newDocumentIsEmpty() {
         let document = LiminalSourceDocument()
-        #expect(document.session.source == "")
+        #expect(document.session.source == CambiumSource(""))
         #expect(document.diagnosticsCount == 0)
     }
 
@@ -81,7 +81,7 @@ struct EditorDocumentTests {
     @MainActor
     func snapshotReturnsSource() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("# Hello\n")
+        try document.session.replaceSource(CambiumSource("# Hello\n"))
         let snapshot = try document.snapshot(contentType: .liminalMarkup)
         #expect(snapshot == "# Hello\n")
     }
@@ -90,14 +90,14 @@ struct EditorDocumentTests {
     @MainActor
     func applyTextEditsUpdatesDocument() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("Hello\n")
+        try document.session.replaceSource(CambiumSource("Hello\n"))
         let edit = TextEdit(
             range: TextRange(start: TextSize(UInt32(0)), length: TextSize(UInt32(5))),
             replacement: "World"
         )
         document.applyTextEdits([edit])
 
-        #expect(document.session.source == "World\n")
+        #expect(document.session.source == CambiumSource("World\n"))
         #expect(document.diagnosticsCount == document.session.parseResult?.diagnostics.count ?? -1)
     }
 
@@ -105,7 +105,7 @@ struct EditorDocumentTests {
     @MainActor
     func documentSyncsReuseSummary() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("A\n\nB\n\nC\n")
+        try document.session.replaceSource(CambiumSource("A\n\nB\n\nC\n"))
         let edit = TextEdit(
             range: TextRange(start: TextSize(UInt32(3)), length: TextSize(UInt32(1))),
             replacement: "B2"

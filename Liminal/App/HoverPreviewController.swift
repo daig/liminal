@@ -333,7 +333,7 @@ final class HoverPreviewController {
             parsed = cached.parsed
         } else {
             do {
-                parsed = try LiminalParser().parse(content)
+                parsed = try LiminalParser().parse(CambiumSource(content))
                 lastParse = ParseCacheEntry(url: canonical, content: content, parsed: parsed)
             } catch {
                 return HoverPreviewSnapshot.unavailable(target: target, theme: theme)

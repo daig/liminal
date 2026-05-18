@@ -126,7 +126,7 @@ public final class CSTInspector: ObservableObject {
             displayName: kind.displayName,
             textRange: cursor.textRange,
             path: cursor.childIndexPath(),
-            structuralHash: cursor.greenHash,
+            contentHash: cursor.greenHash,
             preview: CSTPreview.format(cursor.makeString())
         )
     }

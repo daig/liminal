@@ -14,7 +14,7 @@ struct StructuralToggleTaskTests {
     @Test("unchecked task toggles to checked; source flips exactly the marker bytes")
     func toggleUnchecked() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("- [ ] task body\n")
+        try document.session.replaceSource(CambiumSource("- [ ] task body\n"))
 
         let parsed = try #require(document.session.parseResult)
         let location = try #require(
@@ -24,13 +24,13 @@ struct StructuralToggleTaskTests {
 
         #expect(document.structuralToggleTask(listItemHandle: location.listItemHandle))
 
-        #expect(document.session.source == "- [x] task body\n")
+        #expect(document.session.source == CambiumSource("- [x] task body\n"))
     }
 
     @Test("checked task toggles to unchecked")
     func toggleChecked() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("- [x] done\n")
+        try document.session.replaceSource(CambiumSource("- [x] done\n"))
 
         let parsed = try #require(document.session.parseResult)
         let location = try #require(
@@ -40,13 +40,13 @@ struct StructuralToggleTaskTests {
 
         #expect(document.structuralToggleTask(listItemHandle: location.listItemHandle))
 
-        #expect(document.session.source == "- [ ] done\n")
+        #expect(document.session.source == CambiumSource("- [ ] done\n"))
     }
 
     @Test("toggling twice round-trips back to original source")
     func toggleRoundTrip() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("- [ ] body\n")
+        try document.session.replaceSource(CambiumSource("- [ ] body\n"))
 
         let original = document.session.source
 
@@ -70,7 +70,7 @@ struct StructuralToggleTaskTests {
     @Test("inline content with emphasis/strong is preserved")
     func preservesInlineContent() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("- [ ] *italic* and **bold**\n")
+        try document.session.replaceSource(CambiumSource("- [ ] *italic* and **bold**\n"))
 
         let parsed = try #require(document.session.parseResult)
         let location = try #require(
@@ -78,13 +78,13 @@ struct StructuralToggleTaskTests {
         )
 
         #expect(document.structuralToggleTask(listItemHandle: location.listItemHandle))
-        #expect(document.session.source == "- [x] *italic* and **bold**\n")
+        #expect(document.session.source == CambiumSource("- [x] *italic* and **bold**\n"))
     }
 
     @Test("currentRootSyntax falls back to currentTree after structural edit")
     func currentRootSyntaxBridgesStructuralEdit() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("- [ ] body\n")
+        try document.session.replaceSource(CambiumSource("- [ ] body\n"))
 
         let parsed = try #require(document.session.parseResult)
         let location = try #require(
@@ -99,13 +99,13 @@ struct StructuralToggleTaskTests {
         // Round-trip through the root's syntax: the tree's source should
         // match session.source (no source-tree divergence).
         let rootSource = root.syntax.withCursor { $0.makeString() }
-        #expect(rootSource == document.session.source)
+        #expect(CambiumSource(rootSource) == document.session.source)
     }
 
     @Test("toggle preserves overall tree structure (still a list with one item)")
     func preservesTreeStructure() throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource("- [ ] only\n")
+        try document.session.replaceSource(CambiumSource("- [ ] only\n"))
 
         let parsed = try #require(document.session.parseResult)
         let location = try #require(

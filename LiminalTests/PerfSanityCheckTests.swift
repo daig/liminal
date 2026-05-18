@@ -30,7 +30,7 @@ struct PerfSanityCheckTests {
         let session = LiminalEditorSession()
 
         let coldStart = clock.now
-        try session.replaceSource(source)
+        try session.replaceSource(CambiumSource(source))
         let coldElapsed = clock.now - coldStart
         let summary = session.lastReuseSummary
         print("[sanity] cold parse: \(coldElapsed)  reuse \(summary.acceptedReuses)/\(summary.queries)")
@@ -98,7 +98,7 @@ struct PerfSanityCheckTests {
         let highlighter = LiminalHighlighter()
 
         // Prime the session.
-        try session.replaceSource(source)
+        try session.replaceSource(CambiumSource(source))
 
         // Warm one phase at a time on the cold tree so we capture
         // steady-state per-phase costs.
@@ -147,14 +147,14 @@ struct PerfSanityCheckTests {
 
             // Phase C1: full-source OffsetMap build (pre-fix cost).
             let mapFullStart = clock.now
-            let mapFull = OffsetMap(source: session.source)
+            let mapFull = OffsetMap(source: session.source.toString())
             let mapFullElapsed = clock.now - mapFullStart
 
             // Phase C2: scoped OffsetMap build over the dirty byte range.
             let scopeLower = Int(scopeByteRange.start.rawValue)
             let scopeUpper = scopeLower + Int(scopeByteRange.length.rawValue)
             let mapScopedStart = clock.now
-            let mapScoped = OffsetMap(source: session.source, byteRange: scopeLower..<scopeUpper)
+            let mapScoped = OffsetMap(source: session.source.toString(), byteRange: scopeLower..<scopeUpper)
             let mapScopedElapsed = clock.now - mapScopedStart
 
             // Phase D: iterate scoped spans and look up nsRange via the

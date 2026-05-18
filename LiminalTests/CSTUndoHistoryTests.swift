@@ -12,7 +12,7 @@ struct CSTUndoHistoryTests {
         cursor: Int = 0,
         marks: MarkRegistry = MarkRegistry()
     ) throws -> CSTUndoSnapshot {
-        let session = LiminalEditorSession(source: source)
+        let session = LiminalEditorSession(source: CambiumSource(source))
         let parsed = try session.parse()
         return CSTUndoSnapshot(
             tree: parsed.tree,
@@ -36,7 +36,7 @@ struct CSTUndoHistoryTests {
     }
 
     private func apply(_ edits: [TextEdit], to source: String) throws -> String {
-        try LiminalEditorSession.applyingEdits(edits, to: source)
+        try CambiumSource(source).applying(edits).toString()
     }
 
     @Test("a fresh history is empty")
@@ -190,14 +190,14 @@ struct CSTUndoHistoryTests {
 
     @Test("installSnapshot restores the snapshot tree without reparsing")
     func installSnapshotRoundTrip() throws {
-        let session = LiminalEditorSession(source: "abc")
+        let session = LiminalEditorSession(source: CambiumSource("abc"))
         let parsed = try session.parse()
         let snapshotTree = parsed.tree
 
         _ = try session.applyTextEdits([
             edit(start: 3, length: 0, replacement: "def")
         ])
-        #expect(session.source == "abcdef")
+        #expect(session.source == CambiumSource("abcdef"))
         #expect(session.currentTree?.treeID != snapshotTree.treeID)
 
         try session.applySourceEditsWithoutParsing([
@@ -205,7 +205,7 @@ struct CSTUndoHistoryTests {
         ])
         session.installSnapshot(tree: snapshotTree)
 
-        #expect(session.source == "abc")
+        #expect(session.source == CambiumSource("abc"))
         #expect(session.currentTree?.treeID == snapshotTree.treeID)
     }
 
@@ -213,7 +213,7 @@ struct CSTUndoHistoryTests {
     func snapshotsCarryCursorAndMarks() throws {
         let h = CSTUndoHistory()
         var marks0 = MarkRegistry()
-        let session = LiminalEditorSession(source: "abc")
+        let session = LiminalEditorSession(source: CambiumSource("abc"))
         let parsed0 = try session.parse()
         let anchorA = try #require(
             CSTAnchor.atSourceOffset(TextSize(2), in: parsed0.rootSyntax)

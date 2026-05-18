@@ -237,7 +237,7 @@ struct LiminalStructuralCategoryTests {
 
     @Test("isTaskListItem distinguishes task items from plain list items")
     func taskListItemPredicate() throws {
-        let parsed = try LiminalParser().parse("- [ ] todo\n- regular\n")
+        let parsed = try LiminalParser().parse(CambiumSource("- [ ] todo\n- regular\n"))
         let tree = parsed.tree
 
         var listItemHandles: [SyntaxNodeHandle<LiminalLanguage>] = []
@@ -263,7 +263,7 @@ struct LiminalStructuralCategoryTests {
 
     @Test("isTaskListItem returns false for non-listItem handles")
     func taskListItemPredicateRejectsOtherKinds() throws {
-        let parsed = try LiminalParser().parse("# Heading\n")
+        let parsed = try LiminalParser().parse(CambiumSource("# Heading\n"))
         let tree = parsed.tree
 
         var headingHandle: SyntaxNodeHandle<LiminalLanguage>?

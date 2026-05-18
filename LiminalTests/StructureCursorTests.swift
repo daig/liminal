@@ -10,7 +10,7 @@ struct StructureCursorTests {
     @Test("nextSibling moves from start of first paragraph to start of second")
     func nextSiblingForward() throws {
         let source = "First\n\nSecond\n\nThird\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         // Cursor at byte 0 (start of "First")
         let next = StructureCursor.nextSibling(of: 0, in: parsed.rootSyntax)
         #expect(next != nil)
@@ -26,7 +26,7 @@ struct StructureCursorTests {
     @Test("previousSibling moves from third paragraph to second")
     func previousSiblingBackward() throws {
         let source = "First\n\nSecond\n\nThird\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         // Cursor inside "Third" — find its byte offset
         let thirdOffset = source.utf8.distance(
             from: source.utf8.startIndex,
@@ -42,7 +42,7 @@ struct StructureCursorTests {
     @Test("nextSibling returns nil at the last sibling")
     func nextSiblingAtEnd() throws {
         let source = "Only\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let next = StructureCursor.nextSibling(of: 0, in: parsed.rootSyntax)
         // Single paragraph, no next sibling.
         #expect(next == nil)
@@ -51,7 +51,7 @@ struct StructureCursorTests {
     @Test("siblings skip blank lines")
     func siblingsSkipBlankLines() throws {
         let source = "A\n\n\n\nB\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let next = StructureCursor.nextSibling(of: 0, in: parsed.rootSyntax)
         // Should land at "B" — blank lines aren't counted as siblings.
         #expect(next != nil)
@@ -69,7 +69,7 @@ struct StructureCursorTests {
     @Test("taskListItem finds unchecked task")
     func taskUnchecked() throws {
         let source = "- [ ] do something\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let cursorOffset = source.utf8.distance(
             from: source.utf8.startIndex,
             to: source.range(of: "do")!.lowerBound.samePosition(in: source.utf8)!
@@ -82,7 +82,7 @@ struct StructureCursorTests {
     @Test("taskListItem finds checked task")
     func taskChecked() throws {
         let source = "- [x] done\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let cursorOffset = source.utf8.distance(
             from: source.utf8.startIndex,
             to: source.range(of: "done")!.lowerBound.samePosition(in: source.utf8)!
@@ -95,7 +95,7 @@ struct StructureCursorTests {
     @Test("taskListItem returns nil for a plain list item without a task marker")
     func nonTaskListItem() throws {
         let source = "- just a bullet\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let cursorOffset = source.utf8.distance(
             from: source.utf8.startIndex,
             to: source.range(of: "just")!.lowerBound.samePosition(in: source.utf8)!
@@ -107,7 +107,7 @@ struct StructureCursorTests {
     @Test("taskListItem returns nil outside any list")
     func notInList() throws {
         let source = "Plain paragraph.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let location = StructureCursor.taskListItem(at: 0, in: parsed.rootSyntax)
         #expect(location == nil)
     }

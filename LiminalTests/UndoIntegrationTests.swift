@@ -1,4 +1,5 @@
 import AppKit
+import CambiumCore
 import Testing
 @testable import Liminal
 
@@ -21,7 +22,7 @@ struct UndoIntegrationTests {
         fixture.coordinator.undo(count: 1)
 
         #expect(fixture.textView.string == original)
-        #expect(fixture.document.session.source == original)
+        #expect(fixture.document.session.source == CambiumSource(original))
     }
 
     @Test("paste then undo restores the original text and redo reapplies it")
@@ -41,11 +42,11 @@ struct UndoIntegrationTests {
 
         fixture.coordinator.undo(count: 1)
         #expect(fixture.textView.string == original)
-        #expect(fixture.document.session.source == original)
+        #expect(fixture.document.session.source == CambiumSource(original))
 
         fixture.coordinator.redo(count: 1)
         #expect(fixture.textView.string == pasted)
-        #expect(fixture.document.session.source == pasted)
+        #expect(fixture.document.session.source == CambiumSource(pasted))
     }
 
     @Test("change session undo restores the pre-change text")
@@ -66,7 +67,7 @@ struct UndoIntegrationTests {
         fixture.coordinator.undo(count: 1)
 
         #expect(fixture.textView.string == original)
-        #expect(fixture.document.session.source == original)
+        #expect(fixture.document.session.source == CambiumSource(original))
     }
 
     @Test("undo repaint keeps syntax highlighting from the installed CST")
@@ -105,7 +106,7 @@ private final class UndoFixture {
 
     init(source: String) throws {
         let document = LiminalSourceDocument()
-        try document.session.replaceSource(source)
+        try document.session.replaceSource(CambiumSource(source))
         self.document = document
 
         let textStorage = NSTextStorage()

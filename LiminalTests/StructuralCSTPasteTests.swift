@@ -7,7 +7,7 @@ struct StructuralCSTPasteTests {
     @Test("capturing a root paragraph wraps it in a root snapshot")
     func captureRootParagraph() throws {
         let source = "Hello.\n\nWorld.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: parsed.tree)
         )
@@ -34,7 +34,7 @@ struct StructuralCSTPasteTests {
           - qux
         - zot
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let offset = try byteOffset(of: "bar", in: source)
         let forest = try #require(
             listItemForest(containing: offset, in: parsed.tree)
@@ -51,7 +51,7 @@ struct StructuralCSTPasteTests {
     @Test("root paragraph paste inserts a blank-line separator to avoid merging")
     func rootParagraphPasteSeparatesParagraphs() throws {
         let source = "One.\n\nTwo.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: parsed.tree)
         )
@@ -65,10 +65,7 @@ struct StructuralCSTPasteTests {
         )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "\nOne.\n")
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: source
-        )
+        let newSource = try CambiumSource(source).applying([plan.edit]).toString()
         #expect(newSource == "One.\n\nOne.\n\nTwo.\n")
     }
 
@@ -76,7 +73,7 @@ struct StructuralCSTPasteTests {
     func listItemBlockPasteAfterTopLevelListSeparatesRootLists() throws {
         let fragment = try nestedBarFragment()
         let target = "- zot\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
@@ -85,10 +82,7 @@ struct StructuralCSTPasteTests {
         )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "\n- bar\n  - bax\n")
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- zot\n\n- bar\n  - bax\n")
     }
 
@@ -99,7 +93,7 @@ struct StructuralCSTPasteTests {
         - foo
           - qux
         """
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let offset = try byteOffset(of: "qux", in: target)
         let plan = try planBlock(
             fragment: fragment,
@@ -109,17 +103,14 @@ struct StructuralCSTPasteTests {
         )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "- bar\n  - bax\n\n")
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- bar\n  - bax\n\n- foo\n  - qux")
     }
 
     @Test("list block paste preserves the source marker")
     func listBlockPastePreservesSourceMarker() throws {
         let source = "* foo\n  + bar\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let sourceOffset = try byteOffset(of: "foo", in: source)
         let forest = try #require(
             listItemForest(containing: sourceOffset, in: parsedSource.tree)
@@ -127,7 +118,7 @@ struct StructuralCSTPasteTests {
         let fragment = try StructuralCSTFragment.capture(forest)
 
         let target = "- zot\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
@@ -141,7 +132,7 @@ struct StructuralCSTPasteTests {
     @Test("EOF list item block pasted before a list gets a blank boundary")
     func eofListItemBlockPastedBeforeListGetsBlankBoundary() throws {
         let source = "* foo"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let sourceOffset = try byteOffset(of: "foo", in: source)
         let forest = try #require(
             listItemForest(containing: sourceOffset, in: parsedSource.tree)
@@ -149,7 +140,7 @@ struct StructuralCSTPasteTests {
         let fragment = try StructuralCSTFragment.capture(forest)
 
         let target = "- one\n- two\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let targetOffset = try byteOffset(of: "two", in: target)
         let plan = try planBlock(
             fragment: fragment,
@@ -159,24 +150,21 @@ struct StructuralCSTPasteTests {
         )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "* foo\n\n")
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "* foo\n\n- one\n- two\n")
     }
 
     @Test("EOF paragraph pasted before a paragraph gets a blank-line boundary")
     func eofParagraphPastedBeforeParagraphGetsBlankBoundary() throws {
         let source = "One."
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: parsedSource.tree)
         )
         let fragment = try StructuralCSTFragment.capture(forest)
 
         let target = "Two.\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
@@ -185,10 +173,7 @@ struct StructuralCSTPasteTests {
         )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "One.\n\n")
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "One.\n\nTwo.\n")
     }
 
@@ -196,7 +181,7 @@ struct StructuralCSTPasteTests {
     func unorderedIntoOrderedListSpliceRefuses() throws {
         let fragment = try nestedBarFragment()
         let target = "1. zot\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let payload = StructuralCSTClipboardPayload(
             fragment: fragment,
             projection: StructuralCSTSourceProjection(fragment: fragment)
@@ -214,7 +199,7 @@ struct StructuralCSTPasteTests {
     @Test("block quote paragraph pasted at root strips continuation quote markers")
     func blockQuoteParagraphPastedAtRootStripsContinuationMarkers() throws {
         let source = "> foo\n> bar\n> baz\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstBlockQuoteChildForest(
                 in: parsedSource.tree,
@@ -226,7 +211,7 @@ struct StructuralCSTPasteTests {
         #expect(fragment.sourceText == "foo\n> bar\n> baz\n")
 
         let target = "after\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
@@ -235,17 +220,14 @@ struct StructuralCSTPasteTests {
         )
 
         #expect(String(decoding: plan.edit.replacementUTF8, as: UTF8.self) == "foo\nbar\nbaz\n\n")
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "foo\nbar\nbaz\n\nafter\n")
     }
 
     @Test("block quote multi-child paste strips direct quote prefix tokens")
     func blockQuoteMultiChildPasteStripsDirectQuotePrefixTokens() throws {
         let source = "> foo\n> - item\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let paragraph = try #require(
             firstBlockQuoteChildForest(
                 in: parsedSource.tree,
@@ -258,7 +240,7 @@ struct StructuralCSTPasteTests {
         #expect(fragment.childKinds.contains(.greaterThan))
         #expect(fragment.sourceText == "foo\n> - item\n")
 
-        let parsedTarget = try LiminalParser().parse("")
+        let parsedTarget = try LiminalParser().parse(CambiumSource(""))
         let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
@@ -275,7 +257,7 @@ struct StructuralCSTPasteTests {
         > > nested
         > after
         """
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstBlockQuoteChildForest(
                 in: parsedSource.tree,
@@ -287,7 +269,7 @@ struct StructuralCSTPasteTests {
         #expect(fragment.childKinds == [.blockQuote])
         #expect(fragment.sourceText == "> nested\n")
 
-        let parsedTarget = try LiminalParser().parse("")
+        let parsedTarget = try LiminalParser().parse(CambiumSource(""))
         let plan = try planBlock(
             fragment: fragment,
             in: parsedTarget.tree,
@@ -301,7 +283,7 @@ struct StructuralCSTPasteTests {
     @Test("list item paragraph content pastes at root as paragraph")
     func listItemParagraphContentPastesAtRoot() throws {
         let source = "- foo\n  bar\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstParagraphForestInFirstListItem(in: parsedSource.tree)
         )
@@ -310,7 +292,7 @@ struct StructuralCSTPasteTests {
             source: source
         )
         let target = "after\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
 
         let plan = try planBlock(
             payload: capture.clipboardPayload,
@@ -325,7 +307,7 @@ struct StructuralCSTPasteTests {
     @Test("list item child list content pastes at root as list")
     func listItemChildListContentPastesAtRoot() throws {
         let source = "- foo\n  - bar\n    - bax\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstChildListForestInFirstListItem(in: parsedSource.tree)
         )
@@ -333,7 +315,7 @@ struct StructuralCSTPasteTests {
             forest: forest,
             source: source
         )
-        let parsedTarget = try LiminalParser().parse("")
+        let parsedTarget = try LiminalParser().parse(CambiumSource(""))
 
         let plan = try planBlock(
             payload: capture.clipboardPayload,
@@ -351,7 +333,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n"
         )
         let target = "- foo\n  - one\n- qux\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planSplice(
@@ -361,10 +343,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - one\n- bar\n- baz\n- qux\n")
     }
 
@@ -374,7 +353,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n"
         )
         let target = "\n- foo\n- qux\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planSplice(
@@ -384,10 +363,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "\n- foo\n- bar\n- baz\n- qux\n")
     }
 
@@ -397,7 +373,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n"
         )
         let target = "- foo\n  - one\n  - two\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- one", in: target)
 
         let plan = try planSplice(
@@ -407,17 +383,14 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - one\n  - bar\n  - baz\n  - two\n")
     }
 
     @Test("explicit list item paste accepts direct list-item payload")
     func explicitListItemPasteAcceptsDirectListItemPayload() throws {
         let source = "- bar\n- baz\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             rootListItemsForest(in: parsedSource.tree)
         )
@@ -429,7 +402,7 @@ struct StructuralCSTPasteTests {
         #expect(capture.fragment.childKinds == [.listItem, .listItem])
 
         let target = "- foo\n- qux\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planSplice(
@@ -439,17 +412,14 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n- bar\n- baz\n- qux\n")
     }
 
     @Test("explicit direct list-item paste finds a target list item after a blank line")
     func explicitDirectListItemPasteFindsTargetListItemAfterBlankLine() throws {
         let source = "- bar\n- baz\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             rootListItemsForest(in: parsedSource.tree)
         )
@@ -458,7 +428,7 @@ struct StructuralCSTPasteTests {
             source: source
         )
         let target = "\n- foo\n- qux\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planSplice(
@@ -468,17 +438,14 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "\n- foo\n- bar\n- baz\n- qux\n")
     }
 
     @Test("explicit list item paste accepts list item prefix whitespace")
     func explicitListItemPasteAcceptsListItemPrefixWhitespace() throws {
         let source = "- bar\n- baz\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             rootListItemsForest(in: parsedSource.tree)
         )
@@ -488,7 +455,7 @@ struct StructuralCSTPasteTests {
         )
 
         let target = "- foo\n- qux\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: " foo", in: target)
 
         let plan = try planSplice(
@@ -498,10 +465,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n- bar\n- baz\n- qux\n")
     }
 
@@ -511,7 +475,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n"
         )
         let target = "- foo\n  - one\n  - two\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "one", in: target)
 
         #expect(throws: StructuralCSTPasteRejection.invalidTarget) {
@@ -527,7 +491,7 @@ struct StructuralCSTPasteTests {
     @Test("explicit list item paste refuses root-list-block payload")
     func explicitListItemPasteRefusesRootListBlockPayload() throws {
         let source = "- bar\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstRootForest(in: parsedSource.tree, childKind: .list)
         )
@@ -539,7 +503,7 @@ struct StructuralCSTPasteTests {
         #expect(capture.fragment.childKinds == [.list])
 
         let target = "- foo\n  - one\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
 
         #expect(throws: StructuralCSTPasteRejection.unsupportedSource) {
             _ = try planSplice(
@@ -557,7 +521,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n"
         )
         let target = "- foo\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planNest(
@@ -567,10 +531,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - bar\n  - baz\n")
     }
 
@@ -580,7 +541,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n"
         )
         let target = "- foo\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: " foo", in: target)
 
         let plan = try planNest(
@@ -590,10 +551,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - bar\n")
     }
 
@@ -603,7 +561,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n"
         )
         let target = "- foo\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "foo", in: target)
 
         #expect(throws: StructuralCSTPasteRejection.invalidTarget) {
@@ -619,7 +577,7 @@ struct StructuralCSTPasteTests {
     @Test("nested root list paste creates a child list")
     func nestedRootListPasteCreatesChildList() throws {
         let source = "* bar\n* baz\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstRootForest(in: parsedSource.tree, childKind: .list)
         )
@@ -628,7 +586,7 @@ struct StructuralCSTPasteTests {
             source: source
         )
         let target = "- foo\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planNest(
@@ -638,10 +596,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  * bar\n  * baz\n")
     }
 
@@ -651,7 +606,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n    - quoz\n"
         )
         let target = "- foo\n  - bar\n  - baz\n    - quoz\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- baz", in: target)
 
         let plan = try planNest(
@@ -661,10 +616,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - bar\n  - baz\n    - quoz\n    - bar\n    - baz\n      - quoz\n")
     }
 
@@ -674,7 +626,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  * bar\n  * baz\n"
         )
         let target = "- foo\n  + one\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planNest(
@@ -684,10 +636,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  + one\n  + bar\n  + baz\n")
     }
 
@@ -697,7 +646,7 @@ struct StructuralCSTPasteTests {
             from: "- source\n  - bar\n  - baz\n    - quoz\n"
         )
         let target = "- foo\n  - bar\n  - baz\n    - quoz\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- quoz", in: target)
 
         let plan = try planNest(
@@ -707,17 +656,14 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - bar\n  - baz\n    - quoz\n      - bar\n      - baz\n        - quoz\n")
     }
 
     @Test("nested paragraph paste wraps paragraph as child list item")
     func nestedParagraphPasteWrapsParagraphAsChildListItem() throws {
         let source = "hello\n"
-        let parsedSource = try LiminalParser().parse(source)
+        let parsedSource = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: parsedSource.tree)
         )
@@ -726,7 +672,7 @@ struct StructuralCSTPasteTests {
             source: source
         )
         let target = "- foo\n"
-        let parsedTarget = try LiminalParser().parse(target)
+        let parsedTarget = try LiminalParser().parse(CambiumSource(target))
         let cursorOffset = try byteOffset(of: "- foo", in: target)
 
         let plan = try planNest(
@@ -736,10 +682,7 @@ struct StructuralCSTPasteTests {
             after: true
         )
 
-        let newSource = try LiminalEditorSession.applyingEdits(
-            [plan.edit],
-            to: target
-        )
+        let newSource = try CambiumSource(target).applying([plan.edit]).toString()
         #expect(newSource == "- foo\n  - hello\n")
     }
 
@@ -751,7 +694,7 @@ struct StructuralCSTPasteTests {
           - qux
         - zot
         """
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let offset = try byteOffset(of: "bar", in: source)
         let forest = try #require(
             listItemForest(containing: offset, in: parsed.tree)
@@ -762,7 +705,7 @@ struct StructuralCSTPasteTests {
     private func childListCapture(
         from source: String
     ) throws -> StructuralCSTSelectionCapture {
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let forest = try #require(
             firstChildListForestInFirstListItem(in: parsed.tree)
         )

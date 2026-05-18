@@ -97,7 +97,7 @@ struct SyntaxTests {
         ]
     )
     func parserBuildsLosslessRootTree(_ expectation: ParseExpectation) throws {
-        let result = try LiminalParser().parse(expectation.source)
+        let result = try LiminalParser().parse(CambiumSource(expectation.source))
 
         #expect(result.diagnostics.isEmpty)
         #expect(result.sourceText == expectation.source)
@@ -119,7 +119,7 @@ struct SyntaxTests {
     @Test("typed root overlay wraps the parsed Cambium root")
     func typedRootOverlayWrapsParsedCambiumRoot() throws {
         let source = "# Typed documents\n\nBody with unicode: λ\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
         let byteLength = try TextSize(byteCountOf: source)
 
@@ -132,7 +132,7 @@ struct SyntaxTests {
     @Test("typed root overlay exposes Slice 1 document items")
     func typedRootOverlayExposesSlice1DocumentItems() throws {
         let source = "plain `code` and [[Target|Alias]]\n![[Embed#Heading|payload]]\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(root.documentItems.count == 2)
@@ -157,7 +157,7 @@ struct SyntaxTests {
     @Test("markdown links and images expose CST title tokens")
     func markdownLinksAndImagesExposeCSTTitleTokens() throws {
         let source = #"See [site]( https://example.org "Title" ) and ![Alt](image.png 'Caption')."#
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes,
@@ -178,7 +178,7 @@ struct SyntaxTests {
     @Test("reference target accessors expose direct CST tokens and ranges")
     func referenceTargetAccessorsExposeDirectCSTTokensAndRanges() throws {
         let source = #"See [[Target|Alias]] and [site](https://example.org "Title")."#
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes,
@@ -202,7 +202,7 @@ struct SyntaxTests {
     @Test("parser emits thematic break CST")
     func parserEmitsThematicBreakCST() throws {
         let source = "intro\n***\n_ _ _\n- - -\n   ---\noutro\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         #expect(root.documentItems.count == 6)
         guard case .paragraph = root.documentItems[0],
@@ -220,7 +220,7 @@ struct SyntaxTests {
     @Test("invalid thematic break candidates remain paragraph text")
     func invalidThematicBreakCandidatesRemainParagraphText() throws {
         let source = "--\n++++\n    ---\n---x\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         #expect(root.documentItems.count == 1)
         guard case .paragraph(let paragraph) = root.documentItems.first else {
@@ -233,7 +233,7 @@ struct SyntaxTests {
     @Test("frontmatter still takes precedence over opening thematic break")
     func frontmatterStillTakesPrecedenceOverOpeningThematicBreak() throws {
         let source = "---\ntitle: Ada\n---\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         #expect(root.documentItems.count == 1)
         guard case .frontmatter(let frontmatter) = root.documentItems.first else {
@@ -246,7 +246,7 @@ struct SyntaxTests {
     @Test("parser emits CommonMark and GFM autolink CST")
     func parserEmitsCommonMarkAndGFMAutolinkCST() throws {
         let source = "Links <https://example.org/a> <user@example.org> https://example.org/path?q=1. www.example.org user@example.org\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes
@@ -278,7 +278,7 @@ struct SyntaxTests {
     @Test("invalid autolink candidates remain paragraph text")
     func invalidAutolinkCandidatesRemainParagraphText() throws {
         let source = "<span> a@1 http://localhost www. localhost@1\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first else {
             Issue.record("expected paragraph")
@@ -291,7 +291,7 @@ struct SyntaxTests {
     @Test("GFM autolinks trim trailing punctuation and unmatched parens")
     func gfmAutolinksTrimTrailingPunctuationAndUnmatchedParens() throws {
         let source = "See https://example.org/foo). and https://example.org/a_(b)).\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes
@@ -314,7 +314,7 @@ struct SyntaxTests {
     @Test("Slice 3 parser emits block ID suffixes for paragraphs and headings")
     func slice3ParserEmitsBlockIDSuffixesForParagraphsAndHeadings() throws {
         let source = "Paragraph text ^para-id\n# Heading `code` ^heading-id ###\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -343,7 +343,7 @@ struct SyntaxTests {
     @Test("invalid block ID suffix candidates remain inline text")
     func invalidBlockIDSuffixCandidatesRemainInlineText() throws {
         let source = "Paragraph^id\n\nParagraph ^\n\nParagraph ^id extra\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
         let paragraphs = root.documentItems.compactMap { item -> ParagraphSyntax? in
             guard case .paragraph(let paragraph) = item else {
                 return nil
@@ -369,7 +369,7 @@ struct SyntaxTests {
         3. Next
         + Plus
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -410,7 +410,7 @@ struct SyntaxTests {
     @Test("Slice 4 parser accepts root lists at arbitrary indentation")
     func slice4ParserAcceptsRootListsAtArbitraryIndentation() throws {
         let source = "    - alpha\n    - beta\n      - gamma\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -434,7 +434,7 @@ struct SyntaxTests {
     @Test("Slice 4 parser treats indented list after paragraph as a new block")
     func slice4ParserTreatsIndentedListAfterParagraphAsNewBlock() throws {
         let source = "paragraph\n    - item\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         #expect(root.documentItems.count == 2)
         guard case .paragraph(let paragraph) = root.documentItems[0],
@@ -450,7 +450,7 @@ struct SyntaxTests {
     @Test("Slice 4 parser keeps deeply indented non-list openers as paragraphs")
     func slice4ParserKeepsDeeplyIndentedNonListOpenersAsParagraphs() throws {
         let source = "    # not a heading\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         #expect(root.documentItems.count == 1)
         guard case .paragraph(let paragraph) = root.documentItems[0] else {
@@ -471,7 +471,7 @@ struct SyntaxTests {
         - item
         lazy continuation
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.sourceText == source)
@@ -522,7 +522,7 @@ struct SyntaxTests {
         hidden [[Not Indexed]]
         %%
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -549,7 +549,7 @@ struct SyntaxTests {
     @Test("Slice 5 parser emits rich inline CST")
     func slice5ParserEmitsRichInlineCST() throws {
         let source = #"~~deleted [[Target]]~~ ==marked== ^[note [[Foot]]] \(x^2\) %% hidden %% $x$"#
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineContent = paragraph.inlineContent
@@ -581,7 +581,7 @@ struct SyntaxTests {
     @Test("Slice 5 parser emits emphasis and strong inline CST")
     func slice5ParserEmitsEmphasisAndStrongInlineCST() throws {
         let source = "*em [[Target]]* **strong `code`**\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes,
@@ -600,7 +600,7 @@ struct SyntaxTests {
     @Test("Slice 5 parser leaves invalid and unmatched emphasis delimiters literal")
     func slice5ParserLeavesInvalidAndUnmatchedEmphasisDelimitersLiteral() throws {
         let source = "***literal*** _under_ * spaced * *unclosed [[Wiki]] **open\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -628,7 +628,7 @@ struct SyntaxTests {
 
     @Test("Slice 5 delimiter recovery opens strikethrough and highlight for editor feedback")
     func slice5DelimiterRecoveryOpensStrikethroughAndHighlightForEditorFeedback() throws {
-        let strikeResult = try LiminalParser().parse("~~draft [[Note]]")
+        let strikeResult = try LiminalParser().parse(CambiumSource("~~draft [[Note]]"))
         #expect(strikeResult.diagnostics.map(\.message) == [
             "missing closing strikethrough delimiter"
         ])
@@ -644,7 +644,7 @@ struct SyntaxTests {
         #expect(strike.sourceText == "~~draft [[Note]]")
         #expect(strike.inlineContent?.plainText == "draft Note")
 
-        let highlightResult = try LiminalParser().parse("==marked [[Note]]")
+        let highlightResult = try LiminalParser().parse(CambiumSource("==marked [[Note]]"))
         #expect(highlightResult.diagnostics.map(\.message) == [
             "missing closing highlight delimiter"
         ])
@@ -664,7 +664,7 @@ struct SyntaxTests {
     @Test("Slice 5 delimiter scanner skips completed inline nodes while finding closers")
     func slice5DelimiterScannerSkipsCompletedInlineNodesWhileFindingClosers() throws {
         let source = #"~~a `~~` b~~ ==[label](url==still) done=="# + "\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes,
@@ -683,7 +683,7 @@ struct SyntaxTests {
     @Test("Slice 5 parser supports nested emphasis inside strong")
     func slice5ParserSupportsNestedEmphasisInsideStrong() throws {
         let source = "**bold and *em* done**\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let strongNode = paragraph.inlineContent?.inlineNodes.first,
@@ -702,7 +702,7 @@ struct SyntaxTests {
     @Test("Slice 5 parser supports nested strong inside emphasis")
     func slice5ParserSupportsNestedStrongInsideEmphasis() throws {
         let source = "*em and **strong** done*\n"
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let emphasisNode = paragraph.inlineContent?.inlineNodes.first,
@@ -721,14 +721,14 @@ struct SyntaxTests {
     @Test("Slice 5 parser recovers incomplete content blocks and rich inline")
     func slice5ParserRecoversIncompleteContentBlocksAndRichInline() throws {
         let blockSource = "```swift\nunterminated\n"
-        let blockResult = try LiminalParser().parse(blockSource)
+        let blockResult = try LiminalParser().parse(CambiumSource(blockSource))
         #expect(blockResult.sourceText == blockSource)
         #expect(blockResult.diagnostics.map(\.message) == [
             "missing closing code block fence"
         ])
 
         let inlineSource = #"%% hidden \(math ^[footnote ~~strike ==highlight"#
-        let inlineResult = try LiminalParser().parse(inlineSource)
+        let inlineResult = try LiminalParser().parse(CambiumSource(inlineSource))
         #expect(inlineResult.sourceText == inlineSource)
         #expect(inlineResult.diagnostics.map(\.message).contains("missing closing inline comment delimiter"))
     }
@@ -736,7 +736,7 @@ struct SyntaxTests {
     @Test("frontmatter parser emits leading BOM as whitespace trivia")
     func frontmatterParserEmitsLeadingBOMAsWhitespaceTrivia() throws {
         let source = "\u{FEFF}---\ntitle: Ada\n---\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -761,7 +761,7 @@ struct SyntaxTests {
         // the first `\)` (at position 5-6) as escaped and close at the
         // second `\)`. Under raw rules, it closes at position 5-6.
         let mathSource = #"\(x \\) y\)"#
-        let mathRoot = try LiminalParser().parse(mathSource).rootSyntax
+        let mathRoot = try LiminalParser().parse(CambiumSource(mathSource)).rootSyntax
         guard case .paragraph(let mathParagraph) = mathRoot.documentItems.first,
               let mathInlines = mathParagraph.inlineContent?.inlineNodes,
               case .mathInline(let math) = mathInlines.first
@@ -775,7 +775,7 @@ struct SyntaxTests {
         // Comment content is raw text per spec §7.12 — `%%` always
         // closes at the first occurrence even when preceded by `\`.
         let commentSource = #"text %%a \%% rest %%"#
-        let commentRoot = try LiminalParser().parse(commentSource).rootSyntax
+        let commentRoot = try LiminalParser().parse(CambiumSource(commentSource)).rootSyntax
         guard case .paragraph(let commentParagraph) = commentRoot.documentItems.first,
               let commentInlines = commentParagraph.inlineContent?.inlineNodes,
               case .inlineComment(let comment) = commentInlines.first
@@ -797,7 +797,7 @@ struct SyntaxTests {
         Plain | Header
         --- | ---:
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -840,7 +840,7 @@ struct SyntaxTests {
         | one |
         | two | three | extra |
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.sourceText == source)
@@ -865,7 +865,7 @@ struct SyntaxTests {
         A | B
         -- | ---
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -888,7 +888,7 @@ struct SyntaxTests {
         :::HtmlBlock
         unterminated
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.sourceText == source)
@@ -926,7 +926,7 @@ struct SyntaxTests {
         :::
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -973,7 +973,7 @@ struct SyntaxTests {
         ::use "./bibliography.lim"
         ::use ./bare-path
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         #expect(result.diagnostics.isEmpty)
         #expect(result.sourceText == source)
@@ -1015,7 +1015,7 @@ struct SyntaxTests {
     @Test("Phase 3b.2 parser preserves the slice 7 ::use bodyText contract")
     func phase3b2ParserPreservesUseDirectiveBodyText() throws {
         let source = #"::use type "./schema.lim" as schema"# + "\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         guard case .directive(let directive) = result.rootSyntax.documentItems.first else {
             Issue.record("expected directive document item")
@@ -1030,13 +1030,13 @@ struct SyntaxTests {
     func phase3b2ParserRecoversMalformedUseDirective() throws {
         // Missing closing `}` in the filter.
         let unclosedFilter = "::use \"./schema.lim\" only { Foo, Bar\n"
-        let unclosedResult = try LiminalParser().parse(unclosedFilter)
+        let unclosedResult = try LiminalParser().parse(CambiumSource(unclosedFilter))
         #expect(unclosedResult.sourceText == unclosedFilter)
         #expect(unclosedResult.diagnostics.contains { $0.message.contains("missing closing `}`") })
 
         // Missing alias identifier after `as`.
         let missingAlias = "::use \"./schema.lim\" as\n"
-        let missingAliasResult = try LiminalParser().parse(missingAlias)
+        let missingAliasResult = try LiminalParser().parse(CambiumSource(missingAlias))
         #expect(missingAliasResult.sourceText == missingAlias)
         #expect(missingAliasResult.diagnostics.contains {
             $0.message.contains("expected alias identifier")
@@ -1054,7 +1054,7 @@ struct SyntaxTests {
         type Render : template = PersonCard(p: Person) -> blocks
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -1099,7 +1099,7 @@ struct SyntaxTests {
         :::
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.sourceText == source)
@@ -1121,7 +1121,7 @@ struct SyntaxTests {
         type Card : block = {}
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains { $0.message.contains("expected `:`") })
@@ -1157,7 +1157,7 @@ struct SyntaxTests {
         ]
 
         for testCase in cases {
-            let result = try LiminalParser().parse(testCase.source)
+            let result = try LiminalParser().parse(CambiumSource(testCase.source))
             #expect(result.diagnostics.isEmpty, "diagnostics for \(testCase.source.debugDescription)")
             #expect(result.sourceText == testCase.source)
 
@@ -1173,17 +1173,17 @@ struct SyntaxTests {
             )
         }
 
-        let negativeInteger = try LiminalParser().parse("Hello ${-1}\n")
+        let negativeInteger = try LiminalParser().parse(CambiumSource("Hello ${-1}\n"))
         #expect(negativeInteger.rootSyntax.firstDescendantToken(kind: .integerLiteral)?.text == "-1")
 
-        let negativeNumber = try LiminalParser().parse("Hello ${-1.5}\n")
+        let negativeNumber = try LiminalParser().parse(CambiumSource("Hello ${-1.5}\n"))
         #expect(negativeNumber.rootSyntax.firstDescendantToken(kind: .numberLiteral)?.text == "-1.5")
     }
 
     @Test("Phase 3c.1 parenthesized expression nests inside outer wrapper")
     func phase3c1ParenthesizedExpressionNestsWrapper() throws {
         let source = "Hello ${(person.name)}\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let interpolation = try #require(firstInterpolation(in: result.rootSyntax))
         let outer = try #require(interpolation.expression)
         #expect(outer.subExpressions.count == 1)
@@ -1195,7 +1195,7 @@ struct SyntaxTests {
     func phase3c1ParserRecoversMalformedInterpolationExpression() throws {
         // Unterminated `${...` keeps the slice 7 diagnostic.
         let unterminated = "Hello ${person.name\n"
-        let unterm = try LiminalParser().parse(unterminated)
+        let unterm = try LiminalParser().parse(CambiumSource(unterminated))
         #expect(unterm.sourceText == unterminated)
         #expect(unterm.diagnostics.contains {
             $0.message == "missing closing interpolation delimiter"
@@ -1203,7 +1203,7 @@ struct SyntaxTests {
 
         // Stray `??` with no rhs.
         let danglingCoalesce = "Hello ${a ?? }\n"
-        let dangling = try LiminalParser().parse(danglingCoalesce)
+        let dangling = try LiminalParser().parse(CambiumSource(danglingCoalesce))
         #expect(dangling.sourceText == danglingCoalesce)
         #expect(dangling.diagnostics.contains {
             $0.message.contains("expected right-hand side after `??`")
@@ -1212,7 +1212,7 @@ struct SyntaxTests {
         // Unparseable garbage falls back to .interpolationText salvage so
         // the bytes round-trip without losing source content.
         let garbage = "Hello ${@@@}\n"
-        let garbageResult = try LiminalParser().parse(garbage)
+        let garbageResult = try LiminalParser().parse(CambiumSource(garbage))
         #expect(garbageResult.sourceText == garbage)
         #expect(garbageResult.diagnostics.contains {
             $0.message == "unrecognized interpolation expression token"
@@ -1221,7 +1221,7 @@ struct SyntaxTests {
         // Trailing garbage after an otherwise valid prefix also diagnoses
         // while preserving the original bytes.
         let trailingGarbage = "Hello ${person @@@}\n"
-        let trailingResult = try LiminalParser().parse(trailingGarbage)
+        let trailingResult = try LiminalParser().parse(CambiumSource(trailingGarbage))
         #expect(trailingResult.sourceText == trailingGarbage)
         #expect(trailingResult.diagnostics.contains {
             $0.message == "unrecognized interpolation expression token"
@@ -1230,7 +1230,7 @@ struct SyntaxTests {
         // The grammar allows only one `??` operator in this slice; a second
         // one is salvaged and diagnosed instead of being silently accepted.
         let repeatedCoalesce = "Hello ${a ?? b ?? c}\n"
-        let repeatedResult = try LiminalParser().parse(repeatedCoalesce)
+        let repeatedResult = try LiminalParser().parse(CambiumSource(repeatedCoalesce))
         #expect(repeatedResult.sourceText == repeatedCoalesce)
         #expect(repeatedResult.diagnostics.contains {
             $0.message == "unrecognized interpolation expression token"
@@ -1238,14 +1238,14 @@ struct SyntaxTests {
 
         // Empty expression bodies are invalid but remain lossless.
         let empty = "Hello ${}\n"
-        let emptyResult = try LiminalParser().parse(empty)
+        let emptyResult = try LiminalParser().parse(CambiumSource(empty))
         #expect(emptyResult.sourceText == empty)
         #expect(emptyResult.diagnostics.contains {
             $0.message == "expected interpolation expression"
         })
 
         let emptyParens = "Hello ${()}\n"
-        let emptyParensResult = try LiminalParser().parse(emptyParens)
+        let emptyParensResult = try LiminalParser().parse(CambiumSource(emptyParens))
         #expect(emptyParensResult.sourceText == emptyParens)
         #expect(emptyParensResult.diagnostics.contains {
             $0.message == "expected interpolation expression"
@@ -1262,7 +1262,7 @@ struct SyntaxTests {
         type Card : block = { title: str @content }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
         #expect(result.sourceText == source)
 
@@ -1308,7 +1308,7 @@ struct SyntaxTests {
         type Greeting : value = { msg: str @default("hello") }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
@@ -1328,7 +1328,7 @@ struct SyntaxTests {
         type Person : value = { name: str, age?: int }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
             Issue.record("expected schema block")
             return
@@ -1346,7 +1346,7 @@ struct SyntaxTests {
         type Bar : value = str
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.sourceText == source)
         // Foo's record never closed — diagnostic surfaces, but Bar still
         // parses cleanly. Recovery doesn't drop the next declaration.
@@ -1368,7 +1368,7 @@ struct SyntaxTests {
         type Note : value = { tag: str @deprecated("use foo()") }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
             Issue.record("expected schema block")
@@ -1400,7 +1400,7 @@ struct SyntaxTests {
         type Item : value = { name: str, tags: map<str> }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
             Issue.record("expected schema block")
@@ -1426,7 +1426,7 @@ struct SyntaxTests {
         type Item : value = { tags: map<str>? @readonly, body: ref<Block> @content }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
@@ -1455,7 +1455,7 @@ struct SyntaxTests {
         type Item : value = { a: map.Foo, b: enum.Value, c: ref.Target, d: map }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
@@ -1480,7 +1480,7 @@ struct SyntaxTests {
         type A : value = str @deprecated("old")
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         guard case .schemaBlock(let schema) = result.rootSyntax.documentItems.first else {
             Issue.record("expected schema block")
@@ -1499,7 +1499,7 @@ struct SyntaxTests {
         body
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
         #expect(result.sourceText == source)
 
@@ -1522,7 +1522,7 @@ struct SyntaxTests {
         type Render : template = Render(p: Person) -> inline
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.diagnostics.isEmpty)
         #expect(result.sourceText == source)
 
@@ -1547,7 +1547,7 @@ struct SyntaxTests {
         Bio ${person.bio}
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         guard case .templateBlock(let template) = result.rootSyntax.documentItems.first else {
             Issue.record("expected template block")
             return
@@ -1562,7 +1562,7 @@ struct SyntaxTests {
         body
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
             $0.message.contains("expected `,` between template parameters")
@@ -1587,7 +1587,7 @@ struct SyntaxTests {
         body
         :::
         """
-        let missingCloseResult = try LiminalParser().parse(missingClose)
+        let missingCloseResult = try LiminalParser().parse(CambiumSource(missingClose))
         #expect(missingCloseResult.sourceText == missingClose)
         #expect(missingCloseResult.diagnostics.contains {
             $0.message.contains("missing closing `)` in template signature")
@@ -1598,7 +1598,7 @@ struct SyntaxTests {
         body
         :::
         """
-        let missingArrowResult = try LiminalParser().parse(missingArrow)
+        let missingArrowResult = try LiminalParser().parse(CambiumSource(missingArrow))
         #expect(missingArrowResult.sourceText == missingArrow)
         #expect(missingArrowResult.diagnostics.contains {
             $0.message.contains("expected `->` in template signature")
@@ -1609,7 +1609,7 @@ struct SyntaxTests {
         body
         :::
         """
-        let unknownResultResult = try LiminalParser().parse(unknownResult)
+        let unknownResultResult = try LiminalParser().parse(CambiumSource(unknownResult))
         #expect(unknownResultResult.sourceText == unknownResult)
         #expect(unknownResultResult.diagnostics.contains {
             $0.message.contains("unknown template result 'stream'")
@@ -1623,7 +1623,7 @@ struct SyntaxTests {
         type P : value = { name: str age: int }
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
             $0.message.contains("expected `,` or newline between schema fields")
@@ -1642,7 +1642,7 @@ struct SyntaxTests {
     @Test("Phase 3.5 parser requires comma or newline between value record fields")
     func phase35ParserRequiresValueRecordFieldSeparator() throws {
         let source = #"@Person{name: "Ada" age: 36}"# + "\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
             $0.message.contains("expected `,` or newline between fields")
@@ -1660,7 +1660,7 @@ struct SyntaxTests {
     @Test("Phase 3.5 parser diagnoses chained ?? in interpolation")
     func phase35ParserDiagnosesChainedNullCoalesce() throws {
         let source = "Hello ${a ?? b ?? c}\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
             $0.message == "`??` is not chainable; parenthesize to nest"
@@ -1679,7 +1679,7 @@ struct SyntaxTests {
         type Bad : value = map<str
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         #expect(result.sourceText == source)
         #expect(result.diagnostics.contains {
             $0.message.contains("missing closing `>` in schema type")
@@ -1698,28 +1698,28 @@ struct SyntaxTests {
         :::
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let interpolation = try #require(firstInterpolation(in: result.rootSyntax))
         #expect(interpolation.expressionText == "person.bio")
     }
 
     @Test("Slice 7 parser recovers incomplete language-level syntax")
     func slice7ParserRecoversIncompleteLanguageLevelSyntax() throws {
-        let directiveResult = try LiminalParser().parse("::use\n")
+        let directiveResult = try LiminalParser().parse(CambiumSource("::use\n"))
         #expect(directiveResult.sourceText == "::use\n")
         #expect(directiveResult.diagnostics.map(\.message) == [
             "expected use directive body"
         ])
 
         let schemaSource = ":::schema prelude\nbody\n"
-        let schemaResult = try LiminalParser().parse(schemaSource)
+        let schemaResult = try LiminalParser().parse(CambiumSource(schemaSource))
         #expect(schemaResult.sourceText == schemaSource)
         #expect(schemaResult.diagnostics.map(\.message) == [
             "missing closing schema fence"
         ])
 
         let templateSource = ":::template Card() -> blocks\n${person.name\n"
-        let templateResult = try LiminalParser().parse(templateSource)
+        let templateResult = try LiminalParser().parse(CambiumSource(templateSource))
         #expect(templateResult.sourceText == templateSource)
         #expect(templateResult.diagnostics.map(\.message).contains("missing closing interpolation delimiter"))
         #expect(templateResult.diagnostics.map(\.message).contains("missing closing template fence"))
@@ -1728,7 +1728,7 @@ struct SyntaxTests {
     @Test("Slice 7 external references preserve target text without recovery")
     func slice7ExternalReferencesPreserveTargetTextWithoutRecovery() throws {
         let source = "@Refs{local: &ada, qualified: &people.ada, external: &<./people.lim#ada>}\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -1759,7 +1759,7 @@ struct SyntaxTests {
         :::
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -1798,7 +1798,7 @@ struct SyntaxTests {
         :::
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
         let root = result.rootSyntax
 
         #expect(result.diagnostics.isEmpty)
@@ -1831,7 +1831,7 @@ struct SyntaxTests {
     @Test("escaped punctuation is represented by explicit CST nodes")
     func escapedPunctuationIsRepresentedByExplicitCSTNodes() throws {
         let source = #"Escaped \*literal\* and \[bracket\]."#
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .paragraph(let paragraph) = root.documentItems.first,
               let inlineNodes = paragraph.inlineContent?.inlineNodes
@@ -1867,7 +1867,7 @@ struct SyntaxTests {
         <div>raw</div>
         :::
         """
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         #expect(result.diagnostics.isEmpty)
         #expect(result.sourceText == source)
@@ -1900,7 +1900,7 @@ struct SyntaxTests {
         :::
         !{Person}[Ada](#ada)
         """
-        let root = try LiminalParser().parse(source).rootSyntax
+        let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
 
         guard case .valueDeclaration(let declaration) = root.documentItems[0],
               let constructor = declaration.constructor
@@ -1933,7 +1933,7 @@ struct SyntaxTests {
 
     @Test("typed dispatch points accept emitted Slice 1 nodes and reject root")
     func typedDispatchPointsAcceptEmittedSlice1NodesAndRejectRoot() throws {
-        let result = try LiminalParser().parse("# Heading\n\nBody with [link](target)\n")
+        let result = try LiminalParser().parse(CambiumSource("# Heading\n\nBody with [link](target)\n"))
         let rootHandle = result.tree.rootHandle()
 
         #expect(DocumentItemSyntax(rootHandle) == nil)
@@ -1961,7 +1961,7 @@ struct SyntaxTests {
     @Test("Slice 1 parser emits recoverable diagnostics for incomplete inline constructs")
     func slice1ParserEmitsRecoverableDiagnosticsForIncompleteInlineConstructs() throws {
         let source = "Broken [[wikilink\nand `code\n"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         #expect(result.sourceText == source)
         #expect(result.diagnostics.map(\.severity) == [.error, .error])
@@ -1974,7 +1974,7 @@ struct SyntaxTests {
     @Test("Slice 2 parser recovers inside incomplete typed value syntax")
     func slice2ParserRecoversInsideIncompleteTypedValueSyntax() throws {
         let source = "@Person{name \"Ada\""
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         #expect(result.sourceText == source)
         #expect(result.diagnostics.map(\.severity).allSatisfy { $0 == .error })
@@ -1985,7 +1985,7 @@ struct SyntaxTests {
     @Test("structured syntax errors use error text instead of raw payload text")
     func structuredSyntaxErrorsUseErrorTextInsteadOfRawPayloadText() throws {
         let source = "@Person{=bad}"
-        let result = try LiminalParser().parse(source)
+        let result = try LiminalParser().parse(CambiumSource(source))
 
         #expect(result.sourceText == source)
         #expect(result.diagnostics.map(\.message).contains("expected field"))
@@ -1997,8 +1997,8 @@ struct SyntaxTests {
     func parseSessionKeepsCurrentTreeAcrossParses() throws {
         let session = LiminalParseSession()
 
-        let first = try session.parse("one")
-        let second = try session.parse("two")
+        let first = try session.parse(CambiumSource("one"))
+        let second = try session.parse(CambiumSource("two"))
 
         #expect(first.sourceText == "one")
         #expect(second.sourceText == "two")
@@ -2013,7 +2013,7 @@ private func string(for text: StaticString?) -> String? {
 }
 
 private func paragraphPlainText(_ source: String) throws -> String {
-    let root = try LiminalParser().parse(source).rootSyntax
+    let root = try LiminalParser().parse(CambiumSource(source)).rootSyntax
     guard case .paragraph(let paragraph) = root.documentItems.first,
           let inlineContent = paragraph.inlineContent
     else {

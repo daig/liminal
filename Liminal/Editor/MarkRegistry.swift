@@ -73,9 +73,8 @@ public struct MarkRegistry: Sendable, Equatable {
     }
 
     /// LSP-style position adjustment. Edits are old-source coordinates
-    /// and (per `LiminalEditorSession.applyingEdits`) non-overlapping.
-    /// Processing in ascending start order makes the cumulative shift
-    /// trivial to compute.
+    /// and (per `CambiumSource.applying`) non-overlapping. Processing in
+    /// ascending start order makes the cumulative shift trivial to compute.
     private static func adjustOffset(
         _ offset: TextSize,
         for edits: [TextEdit]

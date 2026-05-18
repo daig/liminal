@@ -110,7 +110,7 @@ struct VaultGraphTests {
         for (name, content) in notes {
             let url = dir.appendingPathComponent(name)
             try content.data(using: .utf8)!.write(to: url)
-            let parsed = try parser.parse(content)
+            let parsed = try parser.parse(CambiumSource(content))
             entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: content)
         }
         return entry

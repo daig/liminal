@@ -10,7 +10,7 @@ struct ForestMotionTests {
 
     @Test("siblingForward with .any matches Cambium's slidForward exactly")
     func siblingForwardAnyEquivalentToSlidForward() throws {
-        let parsed = try LiminalParser().parse("First.\n\nSecond.\n\nThird.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("First.\n\nSecond.\n\nThird.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let viaKernel = try #require(start.moved(by: .siblingForward(), extending: false))
@@ -21,7 +21,7 @@ struct ForestMotionTests {
     @Test("siblingBackward with .any matches Cambium's slidBackward")
     func siblingBackwardAnyEquivalentToSlidBackward() throws {
         let source = "First.\n\nSecond.\n\nThird.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let secondOffset = Self.byteOffset(of: "Second", in: source)
         let start = try #require(
@@ -34,7 +34,7 @@ struct ForestMotionTests {
 
     @Test("siblingForward with extending: true matches extendedForward")
     func siblingForwardExtendingEquivalentToExtendedForward() throws {
-        let parsed = try LiminalParser().parse("A.\n\nB.\n\nC.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("A.\n\nB.\n\nC.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let viaKernel = try #require(start.moved(by: .siblingForward(), extending: true))
@@ -44,7 +44,7 @@ struct ForestMotionTests {
 
     @Test("siblingForward with .containingAny(.heading) skips non-headings in one logical step")
     func siblingForwardSkipsToCategoryMatch() throws {
-        let parsed = try LiminalParser().parse("A.\n\nB.\n\nC.\n\n# Title\n")
+        let parsed = try LiminalParser().parse(CambiumSource("A.\n\nB.\n\nC.\n\n# Title\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -55,7 +55,7 @@ struct ForestMotionTests {
 
     @Test("siblingForward returns nil when no candidate matches the predicate")
     func siblingForwardNoMatchReturnsNil() throws {
-        let parsed = try LiminalParser().parse("A.\n\nB.\n\nC.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("A.\n\nB.\n\nC.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = start.moved(
@@ -69,7 +69,7 @@ struct ForestMotionTests {
 
     @Test("ancestor with .any returns the immediate parentForest")
     func ancestorAnyReachesImmediateParent() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let tree = parsed.tree
         // Raw position: inlineText under inlineContent (deepest navigable).
         let raw = try #require(
@@ -82,7 +82,7 @@ struct ForestMotionTests {
 
     @Test("ancestor with .excluding(.glueWrapper) skips glue ancestors in one logical step")
     func ancestorExcludingGlueReachesParagraphInOneStep() throws {
-        let parsed = try LiminalParser().parse("Hello world.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello world.\n"))
         let tree = parsed.tree
         let raw = try #require(
             LiminalForest.containing(.zero, in: tree, affinity: .downstream)
@@ -98,7 +98,7 @@ struct ForestMotionTests {
 
     @Test("ancestor with extending: true returns nil")
     func ancestorExtendingReturnsNil() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let tree = parsed.tree
         let raw = try #require(
             LiminalForest.containing(.zero, in: tree, affinity: .downstream)
@@ -108,7 +108,7 @@ struct ForestMotionTests {
 
     @Test("ancestor saturates at the outermost navigable position under root")
     func ancestorSaturatesAtRoot() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let tree = parsed.tree
         let raw = try #require(
             LiminalForest.containing(.zero, in: tree, affinity: .downstream)
@@ -128,7 +128,7 @@ struct ForestMotionTests {
 
     @Test("descendant with .any matches firstChildForest")
     func descendantAnyEquivalentToFirstChildForest() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let viaKernel = try #require(start.moved(by: .descendant(), extending: false))
@@ -138,7 +138,7 @@ struct ForestMotionTests {
 
     @Test("descendant into a fenced code block returns nil (opaque)")
     func descendantIntoOpaqueReturnsNil() throws {
-        let parsed = try LiminalParser().parse("```\nlet x = 1\n```\n")
+        let parsed = try LiminalParser().parse(CambiumSource("```\nlet x = 1\n```\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .fencedCodeBlock)
@@ -148,7 +148,7 @@ struct ForestMotionTests {
 
     @Test("descendant with extending: true returns nil")
     func descendantExtendingReturnsNil() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(start.moved(by: .descendant(), extending: true) == nil)
@@ -158,7 +158,7 @@ struct ForestMotionTests {
 
     @Test("preorder forward descends into the current head before sliding sideways")
     func preorderForwardDescendsBeforeNextSibling() throws {
-        let parsed = try LiminalParser().parse("Foo.\n\nBar.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Foo.\n\nBar.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .paragraph)
@@ -171,7 +171,7 @@ struct ForestMotionTests {
     @Test("preorder forward eventually crosses sibling boundaries")
     func preorderForwardAcrossSiblings() throws {
         let source = "Foo.\n\nBar.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         // Walk 10 preorder hops; we should certainly cross into Bar's subtree.
@@ -189,7 +189,7 @@ struct ForestMotionTests {
 
     @Test("preorder forward with heading predicate finds the next heading")
     func preorderForwardWithHeadingPredicate() throws {
-        let parsed = try LiminalParser().parse("Intro paragraph.\n\n# Section\n\nBody.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Intro paragraph.\n\n# Section\n\nBody.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .paragraph)
@@ -202,7 +202,7 @@ struct ForestMotionTests {
     @Test("preorder backward with an inline predicate descends into previous content")
     func preorderBackwardDescendsLastDescendantFirst() throws {
         let source = "- First\n- Second\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let secondOffset = Self.byteOffset(of: "Second", in: source)
         let start = try #require(
@@ -229,7 +229,7 @@ struct ForestMotionTests {
     @Test("preorder backward with heading predicate finds the previous heading")
     func preorderBackwardWithHeadingPredicate() throws {
         let source = "# H1\n\nBody paragraph.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let bodyOffset = Self.byteOffset(of: "Body", in: source)
         let start = try #require(
@@ -243,7 +243,7 @@ struct ForestMotionTests {
 
     @Test("preorder with no matching node returns nil")
     func preorderNoMatchReturnsNil() throws {
-        let parsed = try LiminalParser().parse("Just text.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Just text.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = start.moved(
@@ -257,7 +257,7 @@ struct ForestMotionTests {
 
     @Test("containingAll requires every category in the mask")
     func containingAllRequiresAllCategories() throws {
-        let parsed = try LiminalParser().parse("Foo.\n\n# Heading\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Foo.\n\n# Heading\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         // No sibling has both .heading AND .listy.
@@ -278,7 +278,7 @@ struct ForestMotionTests {
 
     @Test("kindIn matches exact LiminalKind set")
     func kindInExactMatch() throws {
-        let parsed = try LiminalParser().parse("Foo.\n\n# H\n\nBar.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Foo.\n\n# H\n\nBar.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -292,7 +292,7 @@ struct ForestMotionTests {
 
     @Test("excluding matches a candidate whose categories don't overlap the mask")
     func excludingMatchesNonExcluded() throws {
-        let parsed = try LiminalParser().parse("Foo.\n\n# Heading\n\nBar.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Foo.\n\n# Heading\n\nBar.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -315,7 +315,7 @@ struct ForestMotionTests {
         // "different from .heading").
         // Snapshot-once (the bug we're guarding): count=2 would skip the
         // blankLine after H1 (same as paragraph's []) and land on H2.
-        let parsed = try LiminalParser().parse("Para1.\n\n# H1\n\n# H2\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Para1.\n\n# H1\n\n# H2\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -333,7 +333,7 @@ struct ForestMotionTests {
 
     @Test("custom predicate is invoked for each candidate")
     func customPredicateIsConsulted() throws {
-        let parsed = try LiminalParser().parse("# Heading\n\nBody paragraph here.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("# Heading\n\nBody paragraph here.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let predicate: ForestMotion.Predicate = .custom { forest in
@@ -351,7 +351,7 @@ struct ForestMotionTests {
 
     @Test("count > available steps saturates at the last successful position")
     func repeatStepSaturatesAtLastValidPosition() throws {
-        let parsed = try LiminalParser().parse("A.\n\nB.\n\nC.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("A.\n\nB.\n\nC.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -363,7 +363,7 @@ struct ForestMotionTests {
 
     @Test("count > 0 from a position with no progress returns nil")
     func zeroProgressReturnsNil() throws {
-        let parsed = try LiminalParser().parse("A.\n\nB.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("A.\n\nB.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         // Walk to the last sibling.
@@ -378,7 +378,7 @@ struct ForestMotionTests {
 
     @Test("siblingForward extending: true preserves the anchor")
     func extendingPreservesAnchor() throws {
-        let parsed = try LiminalParser().parse("A.\n\nB.\n\nC.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("A.\n\nB.\n\nC.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(start.moved(by: .siblingForward(), extending: true))
@@ -390,7 +390,7 @@ struct ForestMotionTests {
 
     @Test("subtreePreorder forward finds the first predicate match in the subtree")
     func subtreePreorderForwardFindsFirstMatchInSubtree() throws {
-        let parsed = try LiminalParser().parse("Hello **bold** and *italic* world.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello **bold** and *italic* world.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -407,7 +407,7 @@ struct ForestMotionTests {
     func subtreePreorderForwardSkipsToFirstMatch() throws {
         // Subtree contains inlineContent + leading inlineText + wikilink + trailing inlineText.
         // .containingAny(.reference) skips inlineContent and inlineText and lands on wikilink.
-        let parsed = try LiminalParser().parse("Some text and [[wiki]] more.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Some text and [[wiki]] more.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -418,7 +418,7 @@ struct ForestMotionTests {
 
     @Test("subtreePreorder forward respects the subtree boundary and does not leak into siblings")
     func subtreePreorderForwardStopsAtSubtreeBoundary() throws {
-        let parsed = try LiminalParser().parse("First paragraph.\n\n# Heading\n")
+        let parsed = try LiminalParser().parse(CambiumSource("First paragraph.\n\n# Heading\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .paragraph)
@@ -434,7 +434,7 @@ struct ForestMotionTests {
     @Test("subtreePreorder backward returns the LAST predicate match in the subtree")
     func subtreePreorderBackwardFindsLastMatchInSubtree() throws {
         let source = "Hello **first** and **second** end.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         let result = try #require(
@@ -450,7 +450,7 @@ struct ForestMotionTests {
 
     @Test("subtreePreorder on a leaf forest returns nil for both directions")
     func subtreePreorderOnEmptySubtreeReturnsNil() throws {
-        let parsed = try LiminalParser().parse("Hello.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello.\n"))
         let tree = parsed.tree
         // The deepest navigable position — an inlineText leaf with no children.
         let leaf = try #require(
@@ -468,7 +468,7 @@ struct ForestMotionTests {
         // H1a (level 1) → ## H2a (level 2) → # H1b (level 1).
         // Forward same-level from H1a should skip H2a and land on H1b.
         let source = "# H1a\n\n## H2a\n\n# H1b\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .atxHeading)
@@ -487,7 +487,7 @@ struct ForestMotionTests {
     func headingLevelDeeperThanStart() throws {
         // # H1 → # H1b (same level — skip) → ## H2 (deeper — land).
         let source = "# H1\n\n# H1b\n\n## H2\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
 
@@ -506,7 +506,7 @@ struct ForestMotionTests {
         // From inside the body paragraph (enclosing heading is H1, level 1),
         // sameAsStart forward should land on H2 (also level 1).
         let source = "# H1\n\nBody paragraph.\n\n# H2\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let bodyOffset = Self.byteOffset(of: "Body", in: source)
         let start = try #require(
@@ -527,7 +527,7 @@ struct ForestMotionTests {
     @Test(".headingLevel returns nil when no enclosing heading exists")
     func headingLevelNilWithoutEnclosingHeading() throws {
         let source = "Just plain text.\n\nMore text.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
 
@@ -543,7 +543,7 @@ struct ForestMotionTests {
     func headingLevelShallowerThanStart() throws {
         // ## H2 → ### H3 (skip, deeper) → # H1 (shallower — land).
         let source = "## H2\n\n### H3\n\n# H1\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
 
@@ -562,7 +562,7 @@ struct ForestMotionTests {
     @Test("lastChildForest lands on the LAST navigable child (one level)")
     func lastChildForestLandsOnLastSibling() throws {
         let source = "- a\n- b\n- c\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         // cstVisualEntry lands at the listItem level (`list > listItem`);
         // ascend once to put the head on the list so `lastChildForest`
@@ -582,7 +582,7 @@ struct ForestMotionTests {
     @Test("lastChildForest returns nil for a leaf head")
     func lastChildForestNilForLeaf() throws {
         let source = "Hello.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         // Drill down to the inlineText leaf.
         let leaf = try #require(LiminalForest.containing(.zero, in: tree, affinity: .downstream))
@@ -605,7 +605,7 @@ struct ForestMotionTests {
         // wraps inline runs. `:CSTLastChild` semantics: stop at the
         // first non-glue descendant via the last-child chain.
         let source = "This is **bold** and *italic* text.\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let entry = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(entry) == .paragraph)
@@ -628,7 +628,7 @@ struct ForestMotionTests {
     @Test("descendant forward + backward are symmetric on glue-wrapped inline")
     func descendantForwardBackwardSymmetric() throws {
         let source = "alpha **beta** gamma\n"
-        let parsed = try LiminalParser().parse(source)
+        let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
         let entry = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(entry) == .paragraph)
@@ -649,7 +649,7 @@ struct ForestMotionTests {
 
     @Test("subtreePreorder with extending: true returns nil for both directions")
     func subtreePreorderExtendingReturnsNil() throws {
-        let parsed = try LiminalParser().parse("Hello **bold** world.\n")
+        let parsed = try LiminalParser().parse(CambiumSource("Hello **bold** world.\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(
