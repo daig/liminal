@@ -209,6 +209,38 @@ struct CSTUndoHistoryTests {
         #expect(session.currentTree?.treeID == snapshotTree.treeID)
     }
 
+    @Test("undo path keeps session.source byte-equal to installed tree.source")
+    func undoPathSourceConsistency() throws {
+        // The undo flow applies rope edits to session.source via
+        // `applySourceEditsWithoutParsing`, then installs a previously
+        // captured tree via `installSnapshot`. After Cambium's
+        // source-on-tree migration, the captured tree also carries its
+        // own source. The two sources should remain byte-equal — this
+        // test locks in that the manual rope splice and the captured
+        // tree.source don't diverge.
+        let session = LiminalEditorSession(source: CambiumSource("abc"))
+        let parsed = try session.parse()
+        let snapshotTree = parsed.tree
+        #expect(snapshotTree.source == CambiumSource("abc"))
+
+        _ = try session.applyTextEdits([
+            edit(start: 3, length: 0, replacement: "def")
+        ])
+
+        // Patch session.source back to "abc" and install the snapshot.
+        try session.applySourceEditsWithoutParsing([
+            edit(start: 3, length: 3, replacement: "")
+        ])
+        session.installSnapshot(tree: snapshotTree)
+
+        // Three quantities should agree byte-for-byte: session.source
+        // (rope-spliced), snapshotTree.source (captured pre-edit),
+        // and the rendered tree text.
+        #expect(session.source == snapshotTree.source!)
+        let renderedText = snapshotTree.withRoot { $0.makeString() }
+        #expect(session.source.toString() == renderedText)
+    }
+
     @Test("snapshots preserve cursor and marks across undo")
     func snapshotsCarryCursorAndMarks() throws {
         let h = CSTUndoHistory()

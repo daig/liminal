@@ -21,7 +21,7 @@ struct VaultEntryTests {
         let source = "[[Other]] and [[#Heading]]\n# Heading"
         let parsed = try LiminalParser().parse(CambiumSource(source))
 
-        entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: source)
+        entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: CambiumSource(source))
 
         #expect(entry.notes.count == 1)
         #expect(entry.notes[url]?.relativePath == "Source.lim")
@@ -50,8 +50,8 @@ struct VaultEntryTests {
         let sourceParsed = try LiminalParser().parse(CambiumSource(sourceText))
         let targetParsed = try LiminalParser().parse(CambiumSource(targetText))
 
-        entry.indexCurrentDocument(sourceURL, rootSyntax: sourceParsed.rootSyntax, content: sourceText)
-        entry.indexCurrentDocument(targetURL, rootSyntax: targetParsed.rootSyntax, content: targetText)
+        entry.indexCurrentDocument(sourceURL, rootSyntax: sourceParsed.rootSyntax, content: CambiumSource(sourceText))
+        entry.indexCurrentDocument(targetURL, rootSyntax: targetParsed.rootSyntax, content: CambiumSource(targetText))
 
         let outgoing = entry.linkIndex.outgoing(for: sourceURL)
         #expect(outgoing.count == 1)
@@ -67,7 +67,7 @@ struct VaultEntryTests {
         let entry = VaultEntry(rootURL: URL(fileURLWithPath: "/tmp/v"))
         let url = URL(fileURLWithPath: "/tmp/v/Note.lim")
         let parsed = try LiminalParser().parse(CambiumSource("# Heading"))
-        entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: "# Heading")
+        entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: CambiumSource("# Heading"))
         #expect(entry.notes[url] != nil)
 
         entry.remove(url)
@@ -83,11 +83,11 @@ struct VaultEntryTests {
         let url = URL(fileURLWithPath: "/tmp/v/Note.lim")
 
         let firstParsed = try LiminalParser().parse(CambiumSource("# A"))
-        entry.indexCurrentDocument(url, rootSyntax: firstParsed.rootSyntax, content: "# A")
+        entry.indexCurrentDocument(url, rootSyntax: firstParsed.rootSyntax, content: CambiumSource("# A"))
         #expect(entry.indexes[url]?.headings.first?.title == "A")
 
         let secondParsed = try LiminalParser().parse(CambiumSource("# B"))
-        entry.indexCurrentDocument(url, rootSyntax: secondParsed.rootSyntax, content: "# B")
+        entry.indexCurrentDocument(url, rootSyntax: secondParsed.rootSyntax, content: CambiumSource("# B"))
 
         #expect(entry.notes.count == 1)
         #expect(entry.indexes[url]?.headings.first?.title == "B")
@@ -179,7 +179,7 @@ struct VaultIndexerTests {
         entry.indexCurrentDocument(
             existingURL,
             rootSyntax: existingParsed.rootSyntax,
-            content: openContent
+            content: CambiumSource(openContent)
         )
 
         // Drop a new file on disk; rescan against the current state.
@@ -209,7 +209,7 @@ struct VaultIndexerTests {
         let docURL = root.appendingPathComponent("Doc.lim")
         let canonical = VaultRegistry.canonicalNoteURL(for: docURL)
         let parsed = try LiminalParser().parse(CambiumSource("hi"))
-        entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: "hi")
+        entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: CambiumSource("hi"))
 
         // Remove the file from disk, then refresh — the open document is
         // authoritative and must not be dropped.
@@ -287,7 +287,7 @@ struct VaultIndexerTests {
 
         let openContent = "[[OpenDocTarget]]"
         let parsed = try LiminalParser().parse(CambiumSource(openContent))
-        entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: openContent)
+        entry.indexCurrentDocument(docURL, rootSyntax: parsed.rootSyntax, content: CambiumSource(openContent))
 
         let scan = VaultIndexer.scanSync(rootURL: root)
         entry.absorb(scanResults: scan)

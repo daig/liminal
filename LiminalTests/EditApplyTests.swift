@@ -229,6 +229,96 @@ struct EditApplyTests {
             try session.applyTextEdits([edit1, edit2])
         }
     }
+
+    // MARK: - Source-on-tree lock-ins (Cambium source-on-tree migration)
+
+    @Test("parse() attaches the source rope to the returned tree")
+    func parseAttachesSourceToTree() throws {
+        let source = CambiumSource("Hello\n")
+        let session = LiminalEditorSession(source: source)
+        let result = try session.parse()
+
+        // After Cambium's source-on-tree migration, parser-produced
+        // trees carry the source they were parsed from. This is the
+        // load-bearing invariant for the auto-update path in
+        // `replacing(_:with:context:)`.
+        #expect(result.tree.source != nil)
+        #expect(result.tree.source == source)
+    }
+
+    @Test("applyTextEdits attaches the new source to the new tree")
+    func applyTextEditsAttachesNewSourceToTree() throws {
+        let session = LiminalEditorSession(source: CambiumSource("Hello\n"))
+        let edit = TextEdit(
+            range: makeByteRange(start: 0, length: 5),
+            replacement: "World"
+        )
+        let result = try session.applyTextEdits([edit])
+
+        #expect(result.tree.source != nil)
+        #expect(result.tree.source == session.source)
+        #expect(result.tree.source?.toString() == "World\n")
+    }
+
+    @Test("replaceSubtree attaches the auto-updated source to the new tree")
+    func replaceSubtreeAttachesSourceToTree() throws {
+        let session = LiminalEditorSession(source: CambiumSource("Hello\n"))
+        let parsed = try session.parse()
+        guard case .paragraph(let paragraph) = parsed.rootSyntax.documentItems.first else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let replacement = try makeParagraphSnapshot(text: "World", newline: "\n")
+        let result = try session.replaceSubtree(paragraph.syntax, with: replacement)
+
+        // Cambium's replacing(_:with:context:) computes the new source
+        // through an O(log N) rope splice; the editor reads it off the
+        // new tree instead of rebuilding from rendered text.
+        #expect(result.tree.source != nil)
+        #expect(result.tree.source == session.source)
+        #expect(result.tree.source?.toString() == "World\n")
+    }
+
+    @Test("replaceSubtree with self preserves source content equality")
+    func replaceSubtreeNoOpPreservesSourceContent() throws {
+        let session = LiminalEditorSession(source: CambiumSource("Hello\n"))
+        let parsed = try session.parse()
+        guard case .paragraph(let paragraph) = parsed.rootSyntax.documentItems.first else {
+            Issue.record("expected paragraph")
+            return
+        }
+        let oldSource = session.source
+
+        // Capture the paragraph's resolved green node and replace with
+        // itself — Cambium's tier-1 short-circuit returns the old root
+        // identity-equal, and our source helper preserves the old rope.
+        let resolved = paragraph.syntax.withCursor { $0.resolvedGreenNode() }
+        let result = try session.replaceSubtree(paragraph.syntax, with: resolved)
+
+        #expect(result.tree.source == oldSource)
+        #expect(session.source == oldSource)
+    }
+
+    @Test("replaceSubtree leaves session.source byte-equal to rendered tree text")
+    func replaceSubtreeSourceMatchesRenderedTree() throws {
+        let session = LiminalEditorSession(source: CambiumSource("Hello\n"))
+        let parsed = try session.parse()
+        guard case .paragraph(let paragraph) = parsed.rootSyntax.documentItems.first else {
+            Issue.record("expected paragraph")
+            return
+        }
+
+        let replacement = try makeParagraphSnapshot(text: "Replaced", newline: "\n")
+        let result = try session.replaceSubtree(paragraph.syntax, with: replacement)
+
+        // The invariant: source bytes equal what the tree renders.
+        // Cambium's auto-update path is supposed to maintain this; if
+        // this fails, the source-tree relationship is broken.
+        let renderedText = result.tree.withRoot { $0.makeString() }
+        #expect(session.source.toString() == renderedText)
+        #expect(result.tree.source?.toString() == renderedText)
+    }
 }
 
 // MARK: - Test helpers

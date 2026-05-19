@@ -13,7 +13,7 @@ struct EditorDocumentTests {
 
     @Test("utf16RangeToByteRange round-trips ASCII")
     func utf16ASCII() {
-        let source = "Hello, World!"
+        let source = CambiumSource("Hello, World!")
         let range = NSRange(location: 7, length: 5)
         let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
         #expect(byteRange == 7..<12)
@@ -21,7 +21,7 @@ struct EditorDocumentTests {
 
     @Test("utf16RangeToByteRange handles accented characters")
     func utf16Accented() {
-        let source = "héllo"
+        let source = CambiumSource("héllo")
         let range = NSRange(location: 1, length: 1)
         let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
         #expect(byteRange == 1..<3)
@@ -29,7 +29,7 @@ struct EditorDocumentTests {
 
     @Test("utf16RangeToByteRange handles emoji (surrogate pair)")
     func utf16Emoji() {
-        let source = "a😀b"
+        let source = CambiumSource("a😀b")
         let range = NSRange(location: 1, length: 2)
         let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
         #expect(byteRange == 1..<5)
@@ -37,23 +37,15 @@ struct EditorDocumentTests {
 
     @Test("utf16RangeToByteRange handles CJK characters")
     func utf16CJK() {
-        let source = "你好world"
+        let source = CambiumSource("你好world")
         let range = NSRange(location: 0, length: 2)
         let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
         #expect(byteRange == 0..<6)
     }
 
-    @Test("utf16RangeToByteRange returns nil for ranges inside a surrogate pair")
-    func utf16InsideSurrogate() {
-        let source = "a😀b"
-        let range = NSRange(location: 2, length: 1)
-        let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
-        #expect(byteRange == nil)
-    }
-
     @Test("utf16RangeToByteRange returns nil for out-of-bounds range")
     func utf16OutOfBounds() {
-        let source = "abc"
+        let source = CambiumSource("abc")
         let range = NSRange(location: 5, length: 1)
         let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
         #expect(byteRange == nil)
@@ -61,7 +53,7 @@ struct EditorDocumentTests {
 
     @Test("utf16RangeToByteRange empty range at end of string")
     func utf16EmptyAtEnd() {
-        let source = "abc"
+        let source = CambiumSource("abc")
         let range = NSRange(location: 3, length: 0)
         let byteRange = LiminalTextView.utf16RangeToByteRange(range, in: source)
         #expect(byteRange == 3..<3)

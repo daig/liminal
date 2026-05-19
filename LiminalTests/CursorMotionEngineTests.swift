@@ -1,3 +1,4 @@
+import CambiumCore
 import Foundation
 import Testing
 @testable import Liminal
@@ -9,19 +10,19 @@ struct CursorMotionEngineTests {
 
     @Test("left clamps at 0")
     func leftClamps() {
-        let offset = CursorMotionEngine.newOffset(for: .left, in: "abc", from: 0, count: 5)
+        let offset = CursorMotionEngine.newOffset(for: .left, source: CambiumSource("abc"), from: 0, count: 5)
         #expect(offset == 0)
     }
 
     @Test("right clamps at end of text")
     func rightClamps() {
-        let offset = CursorMotionEngine.newOffset(for: .right, in: "abc", from: 0, count: 10)
+        let offset = CursorMotionEngine.newOffset(for: .right, source: CambiumSource("abc"), from: 0, count: 10)
         #expect(offset == 3)
     }
 
     @Test("right moves count code units")
     func rightCount() {
-        let offset = CursorMotionEngine.newOffset(for: .right, in: "abc", from: 0, count: 2)
+        let offset = CursorMotionEngine.newOffset(for: .right, source: CambiumSource("abc"), from: 0, count: 2)
         #expect(offset == 2)
     }
 
@@ -29,7 +30,7 @@ struct CursorMotionEngineTests {
     func upPreservesColumn() {
         let text = "abcdef\nghi"
         // start on 'h' (index 8: 'g'=7, 'h'=8); column 1 on second line.
-        let offset = CursorMotionEngine.newOffset(for: .up, in: text, from: 8, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .up, source: CambiumSource(text), from: 8, count: 1)
         // expect column 1 on first line: 'b' (index 1)
         #expect(offset == 1)
     }
@@ -38,7 +39,7 @@ struct CursorMotionEngineTests {
     func downClampsColumn() {
         let text = "abcdef\nxy"
         // start on 'f' (index 5); column 5 on first line.
-        let offset = CursorMotionEngine.newOffset(for: .down, in: text, from: 5, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .down, source: CambiumSource(text), from: 5, count: 1)
         // next line "xy" has content length 2; clamp column → index 7 + 2 = 9 (end of 'y' content)
         #expect(offset == 9)
     }
@@ -48,41 +49,41 @@ struct CursorMotionEngineTests {
     @Test("lineStart returns start of current line")
     func lineStartReturnsLineBeginning() {
         let text = "abc\ndefgh"
-        let offset = CursorMotionEngine.newOffset(for: .lineStart, in: text, from: 7, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineStart, source: CambiumSource(text), from: 7, count: 1)
         #expect(offset == 4) // 'd'
     }
 
     @Test("lineStart on first line returns 0")
     func lineStartFirstLine() {
-        let offset = CursorMotionEngine.newOffset(for: .lineStart, in: "abc", from: 2, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineStart, source: CambiumSource("abc"), from: 2, count: 1)
         #expect(offset == 0)
     }
 
     @Test("lineFirstNonBlank skips leading spaces and tabs")
     func lineFirstNonBlankSkipsWhitespace() {
         let text = "  \t  hello"
-        let offset = CursorMotionEngine.newOffset(for: .lineFirstNonBlank, in: text, from: 8, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineFirstNonBlank, source: CambiumSource(text), from: 8, count: 1)
         #expect(offset == 5) // 'h'
     }
 
     @Test("lineFirstNonBlank on all-whitespace line returns line end (contentEnd)")
     func lineFirstNonBlankAllWhitespace() {
         let text = "   \nhello"
-        let offset = CursorMotionEngine.newOffset(for: .lineFirstNonBlank, in: text, from: 1, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineFirstNonBlank, source: CambiumSource(text), from: 1, count: 1)
         #expect(offset == 3) // past all 3 spaces, at contentEnd
     }
 
     @Test("lineEnd returns content end of current line")
     func lineEndReturnsContentEnd() {
         let text = "abc\ndefgh"
-        let offset = CursorMotionEngine.newOffset(for: .lineEnd, in: text, from: 5, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineEnd, source: CambiumSource(text), from: 5, count: 1)
         #expect(offset == 9) // after 'h', before EOF
     }
 
     @Test("lineEnd on line with trailing newline excludes the newline")
     func lineEndExcludesNewline() {
         let text = "abc\ndef"
-        let offset = CursorMotionEngine.newOffset(for: .lineEnd, in: text, from: 1, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineEnd, source: CambiumSource(text), from: 1, count: 1)
         #expect(offset == 3) // 'c' is at index 2; contentEnd = 3 (right after 'c')
     }
 
@@ -91,62 +92,62 @@ struct CursorMotionEngineTests {
     @Test("w from start of word goes to start of next word")
     func wFromWordStart() {
         let text = "foo bar baz"
-        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, in: text, from: 0, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, source: CambiumSource(text), from: 0, count: 1)
         #expect(offset == 4) // 'b' in "bar"
     }
 
     @Test("w from middle of word goes to start of next word")
     func wFromWordMiddle() {
         let text = "foo bar baz"
-        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, in: text, from: 1, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, source: CambiumSource(text), from: 1, count: 1)
         #expect(offset == 4)
     }
 
     @Test("w with count repeats")
     func wCount() {
         let text = "foo bar baz"
-        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, in: text, from: 0, count: 2)
+        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, source: CambiumSource(text), from: 0, count: 2)
         #expect(offset == 8) // 'b' in "baz"
     }
 
     @Test("w treats punctuation as a separate word")
     func wPunctuation() {
         let text = "foo, bar"
-        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, in: text, from: 0, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordForwardStart, source: CambiumSource(text), from: 0, count: 1)
         #expect(offset == 3) // ',' is its own word
     }
 
     @Test("b from start of word goes to start of previous word")
     func bFromWordStart() {
         let text = "foo bar"
-        let offset = CursorMotionEngine.newOffset(for: .wordBackward, in: text, from: 4, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordBackward, source: CambiumSource(text), from: 4, count: 1)
         #expect(offset == 0)
     }
 
     @Test("b from middle of word goes to start of current word")
     func bFromWordMiddle() {
         let text = "foo bar"
-        let offset = CursorMotionEngine.newOffset(for: .wordBackward, in: text, from: 6, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordBackward, source: CambiumSource(text), from: 6, count: 1)
         #expect(offset == 4) // 'b' in "bar"
     }
 
     @Test("b at offset 0 stays")
     func bAtStart() {
-        let offset = CursorMotionEngine.newOffset(for: .wordBackward, in: "foo", from: 0, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordBackward, source: CambiumSource("foo"), from: 0, count: 1)
         #expect(offset == 0)
     }
 
     @Test("e from word start goes to last char of word")
     func eFromWordStart() {
         let text = "foo bar"
-        let offset = CursorMotionEngine.newOffset(for: .wordForwardEnd, in: text, from: 0, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordForwardEnd, source: CambiumSource(text), from: 0, count: 1)
         #expect(offset == 2) // 'o' (last char of "foo")
     }
 
     @Test("e from end of word goes to end of next word")
     func eFromWordEnd() {
         let text = "foo bar"
-        let offset = CursorMotionEngine.newOffset(for: .wordForwardEnd, in: text, from: 2, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .wordForwardEnd, source: CambiumSource(text), from: 2, count: 1)
         #expect(offset == 6) // 'r' (last char of "bar")
     }
 
@@ -155,28 +156,28 @@ struct CursorMotionEngineTests {
     @Test("documentStart with count 1 returns offset 0")
     func documentStartDefault() {
         let text = "abc\ndef\nghi"
-        let offset = CursorMotionEngine.newOffset(for: .documentStart, in: text, from: 8, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .documentStart, source: CambiumSource(text), from: 8, count: 1)
         #expect(offset == 0)
     }
 
     @Test("documentStart with count N jumps to line N first-non-blank")
     func documentStartLineN() {
         let text = "abc\n  def\nghi"
-        let offset = CursorMotionEngine.newOffset(for: .documentStart, in: text, from: 0, count: 2)
+        let offset = CursorMotionEngine.newOffset(for: .documentStart, source: CambiumSource(text), from: 0, count: 2)
         #expect(offset == 6) // 'd' after two leading spaces
     }
 
     @Test("documentEnd with Int.max jumps to last line")
     func documentEndDefault() {
         let text = "abc\ndef\nghi"
-        let offset = CursorMotionEngine.newOffset(for: .documentEnd, in: text, from: 0, count: Int.max)
+        let offset = CursorMotionEngine.newOffset(for: .documentEnd, source: CambiumSource(text), from: 0, count: Int.max)
         #expect(offset == 8) // 'g' on line 3
     }
 
     @Test("documentEnd with count N jumps to line N")
     func documentEndLineN() {
         let text = "abc\ndef\nghi\njkl"
-        let offset = CursorMotionEngine.newOffset(for: .documentEnd, in: text, from: 0, count: 2)
+        let offset = CursorMotionEngine.newOffset(for: .documentEnd, source: CambiumSource(text), from: 0, count: 2)
         #expect(offset == 4) // 'd' on line 2
     }
 
@@ -184,16 +185,16 @@ struct CursorMotionEngineTests {
 
     @Test("empty text: all motions stay at 0")
     func emptyText() {
-        #expect(CursorMotionEngine.newOffset(for: .lineStart, in: "", from: 0, count: 1) == 0)
-        #expect(CursorMotionEngine.newOffset(for: .lineEnd, in: "", from: 0, count: 1) == 0)
-        #expect(CursorMotionEngine.newOffset(for: .wordForwardStart, in: "", from: 0, count: 1) == 0)
-        #expect(CursorMotionEngine.newOffset(for: .wordBackward, in: "", from: 0, count: 1) == 0)
-        #expect(CursorMotionEngine.newOffset(for: .documentStart, in: "", from: 0, count: 1) == 0)
+        #expect(CursorMotionEngine.newOffset(for: .lineStart, source: CambiumSource(""), from: 0, count: 1) == 0)
+        #expect(CursorMotionEngine.newOffset(for: .lineEnd, source: CambiumSource(""), from: 0, count: 1) == 0)
+        #expect(CursorMotionEngine.newOffset(for: .wordForwardStart, source: CambiumSource(""), from: 0, count: 1) == 0)
+        #expect(CursorMotionEngine.newOffset(for: .wordBackward, source: CambiumSource(""), from: 0, count: 1) == 0)
+        #expect(CursorMotionEngine.newOffset(for: .documentStart, source: CambiumSource(""), from: 0, count: 1) == 0)
     }
 
     @Test("offset past end is clamped before motion")
     func offsetClampedAtStart() {
-        let offset = CursorMotionEngine.newOffset(for: .lineStart, in: "abc", from: 100, count: 1)
+        let offset = CursorMotionEngine.newOffset(for: .lineStart, source: CambiumSource("abc"), from: 100, count: 1)
         #expect(offset == 0)
     }
 
@@ -206,7 +207,7 @@ struct CursorMotionEngineTests {
         let text = "abc\n  def\nghi"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenTop, in: text, visibleCharRange: visible, count: 1
+            for: .screenTop, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         #expect(offset == 0) // 'a'
     }
@@ -216,7 +217,7 @@ struct CursorMotionEngineTests {
         let text = "abc\n  def\nghi"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenTop, in: text, visibleCharRange: visible, count: 2
+            for: .screenTop, source: CambiumSource(text), visibleCharRange: visible, count: 2
         )
         // Line 2 is "  def" (start=4, contentEnd=9); first non-blank is 'd' at 6.
         #expect(offset == 6)
@@ -228,7 +229,7 @@ struct CursorMotionEngineTests {
         // Visible range covers only the first three lines (0..5).
         let visible = NSRange(location: 0, length: 5)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenTop, in: text, visibleCharRange: visible, count: 99
+            for: .screenTop, source: CambiumSource(text), visibleCharRange: visible, count: 99
         )
         // Line 3 is "c" at offset 4. 99H clamps to bottom of visible.
         #expect(offset == 4)
@@ -239,7 +240,7 @@ struct CursorMotionEngineTests {
         let text = "abc\ndef\n  xyz"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenBottom, in: text, visibleCharRange: visible, count: 1
+            for: .screenBottom, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         // Bottom line "  xyz" starts at 8; first non-blank is 'x' at 10.
         #expect(offset == 10)
@@ -250,7 +251,7 @@ struct CursorMotionEngineTests {
         let text = "a\nb\nc\nd"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenBottom, in: text, visibleCharRange: visible, count: 2
+            for: .screenBottom, source: CambiumSource(text), visibleCharRange: visible, count: 2
         )
         // 4 visible lines; 2L → second from bottom = line 3 ("c") at offset 4.
         #expect(offset == 4)
@@ -261,7 +262,7 @@ struct CursorMotionEngineTests {
         let text = "a\nb\nc"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenBottom, in: text, visibleCharRange: visible, count: 99
+            for: .screenBottom, source: CambiumSource(text), visibleCharRange: visible, count: 99
         )
         // 99L clamps to top of visible — 'a' at 0.
         #expect(offset == 0)
@@ -272,7 +273,7 @@ struct CursorMotionEngineTests {
         let text = "a\nb\nc\nd\ne"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let offset = CursorMotionEngine.newOffset(
-            for: .screenMiddle, in: text, visibleCharRange: visible, count: 1
+            for: .screenMiddle, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         // 5 visible lines: middle is line 3 ("c") at offset 4.
         #expect(offset == 4)
@@ -283,10 +284,10 @@ struct CursorMotionEngineTests {
         let text = "a\nb\nc\nd\ne"
         let visible = NSRange(location: 0, length: text.utf16.count)
         let withCount = CursorMotionEngine.newOffset(
-            for: .screenMiddle, in: text, visibleCharRange: visible, count: 99
+            for: .screenMiddle, source: CambiumSource(text), visibleCharRange: visible, count: 99
         )
         let withoutCount = CursorMotionEngine.newOffset(
-            for: .screenMiddle, in: text, visibleCharRange: visible, count: 1
+            for: .screenMiddle, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         #expect(withCount == withoutCount)
     }
@@ -298,15 +299,15 @@ struct CursorMotionEngineTests {
         // Line 'c' starts at 4, line 'e' ends at 9 (no trailing newline).
         let visible = NSRange(location: 4, length: 5)
         let topOffset = CursorMotionEngine.newOffset(
-            for: .screenTop, in: text, visibleCharRange: visible, count: 1
+            for: .screenTop, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         #expect(topOffset == 4) // 'c'
         let bottomOffset = CursorMotionEngine.newOffset(
-            for: .screenBottom, in: text, visibleCharRange: visible, count: 1
+            for: .screenBottom, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         #expect(bottomOffset == 8) // 'e'
         let middleOffset = CursorMotionEngine.newOffset(
-            for: .screenMiddle, in: text, visibleCharRange: visible, count: 1
+            for: .screenMiddle, source: CambiumSource(text), visibleCharRange: visible, count: 1
         )
         #expect(middleOffset == 6) // 'd'
     }
@@ -317,7 +318,7 @@ struct CursorMotionEngineTests {
         let visible = NSRange(location: 0, length: 0)
         #expect(
             CursorMotionEngine.newOffset(
-                for: .screenTop, in: text, visibleCharRange: visible, count: 1
+                for: .screenTop, source: CambiumSource(text), visibleCharRange: visible, count: 1
             ) == 0
         )
     }
@@ -327,7 +328,7 @@ struct CursorMotionEngineTests {
         let visible = NSRange(location: 0, length: 0)
         #expect(
             CursorMotionEngine.newOffset(
-                for: .screenMiddle, in: "", visibleCharRange: visible, count: 1
+                for: .screenMiddle, source: CambiumSource(""), visibleCharRange: visible, count: 1
             ) == 0
         )
     }
@@ -340,7 +341,7 @@ struct CursorMotionEngineTests {
         // Synthesize a display line covering chars 3...8 (e.g. a soft-wrap).
         let range = NSRange(location: 3, length: 6)
         let offset = CursorMotionEngine.newOffset(
-            for: .start, in: text, displayLineRange: range
+            for: .start, source: CambiumSource(text), displayLineRange: range
         )
         #expect(offset == 3)
     }
@@ -350,7 +351,7 @@ struct CursorMotionEngineTests {
         let text = "   xyz"
         let range = NSRange(location: 0, length: 6)
         let offset = CursorMotionEngine.newOffset(
-            for: .firstNonBlank, in: text, displayLineRange: range
+            for: .firstNonBlank, source: CambiumSource(text), displayLineRange: range
         )
         #expect(offset == 3) // 'x'
     }
@@ -360,7 +361,7 @@ struct CursorMotionEngineTests {
         let text = "    "
         let range = NSRange(location: 0, length: 4)
         let offset = CursorMotionEngine.newOffset(
-            for: .firstNonBlank, in: text, displayLineRange: range
+            for: .firstNonBlank, source: CambiumSource(text), displayLineRange: range
         )
         #expect(offset == 3) // last char in the row
     }
@@ -370,7 +371,7 @@ struct CursorMotionEngineTests {
         let text = "abc\n"
         let range = NSRange(location: 0, length: 4) // includes \n
         let offset = CursorMotionEngine.newOffset(
-            for: .end, in: text, displayLineRange: range
+            for: .end, source: CambiumSource(text), displayLineRange: range
         )
         #expect(offset == 2) // 'c', not the newline at 3
     }
@@ -380,7 +381,7 @@ struct CursorMotionEngineTests {
         let text = "abcdef"
         let range = NSRange(location: 0, length: 3) // soft wrap after 'c'
         let offset = CursorMotionEngine.newOffset(
-            for: .end, in: text, displayLineRange: range
+            for: .end, source: CambiumSource(text), displayLineRange: range
         )
         #expect(offset == 2) // 'c'
     }
@@ -390,7 +391,7 @@ struct CursorMotionEngineTests {
         let text = "abc"
         let range = NSRange(location: 1, length: 0)
         let offset = CursorMotionEngine.newOffset(
-            for: .start, in: text, displayLineRange: range
+            for: .start, source: CambiumSource(text), displayLineRange: range
         )
         #expect(offset == 1)
     }
@@ -400,17 +401,17 @@ struct CursorMotionEngineTests {
         let range = NSRange(location: 0, length: 0)
         #expect(
             CursorMotionEngine.newOffset(
-                for: .start, in: "", displayLineRange: range
+                for: .start, source: CambiumSource(""), displayLineRange: range
             ) == 0
         )
         #expect(
             CursorMotionEngine.newOffset(
-                for: .firstNonBlank, in: "", displayLineRange: range
+                for: .firstNonBlank, source: CambiumSource(""), displayLineRange: range
             ) == 0
         )
         #expect(
             CursorMotionEngine.newOffset(
-                for: .end, in: "", displayLineRange: range
+                for: .end, source: CambiumSource(""), displayLineRange: range
             ) == 0
         )
     }
@@ -420,7 +421,7 @@ struct CursorMotionEngineTests {
     @Test("i (atCursor): no edit, cursor unchanged")
     func insertEntryAtCursor() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .atCursor, in: "abc", cursor: 1
+            for: .atCursor, source: CambiumSource("abc"), cursor: 1
         )
         #expect(plan.edit == nil)
         #expect(plan.cursorAfter == 1)
@@ -429,7 +430,7 @@ struct CursorMotionEngineTests {
     @Test("a (afterCursor): cursor advances by one within the line")
     func insertEntryAfterCursorMid() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .afterCursor, in: "abc", cursor: 1
+            for: .afterCursor, source: CambiumSource("abc"), cursor: 1
         )
         #expect(plan.edit == nil)
         #expect(plan.cursorAfter == 2)
@@ -439,7 +440,7 @@ struct CursorMotionEngineTests {
     func insertEntryAfterCursorClamp() {
         // "abc\ndef" — cursor on 'c' (position 2). +1 = 3 = contentEnd of first line.
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .afterCursor, in: "abc\ndef", cursor: 2
+            for: .afterCursor, source: CambiumSource("abc\ndef"), cursor: 2
         )
         #expect(plan.cursorAfter == 3)
     }
@@ -449,7 +450,7 @@ struct CursorMotionEngineTests {
         // "abc\ndef" — cursor at end of 'c' (position 3, on the \n). +1 would
         // cross to next line; clamp to contentEnd = 3.
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .afterCursor, in: "abc\ndef", cursor: 3
+            for: .afterCursor, source: CambiumSource("abc\ndef"), cursor: 3
         )
         #expect(plan.cursorAfter == 3)
     }
@@ -457,7 +458,7 @@ struct CursorMotionEngineTests {
     @Test("I (atLineFirstNonBlank): skips leading whitespace on the line")
     func insertEntryFirstNonBlank() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .atLineFirstNonBlank, in: "  abc", cursor: 4
+            for: .atLineFirstNonBlank, source: CambiumSource("  abc"), cursor: 4
         )
         #expect(plan.edit == nil)
         #expect(plan.cursorAfter == 2)
@@ -466,7 +467,7 @@ struct CursorMotionEngineTests {
     @Test("A (atLineEnd): cursor lands at content end (before newline)")
     func insertEntryAtLineEnd() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .atLineEnd, in: "abc\ndef", cursor: 1
+            for: .atLineEnd, source: CambiumSource("abc\ndef"), cursor: 1
         )
         #expect(plan.edit == nil)
         #expect(plan.cursorAfter == 3)
@@ -475,7 +476,7 @@ struct CursorMotionEngineTests {
     @Test("o (openLineBelow): inserts \\n at content end; cursor on the new empty line")
     func insertEntryOpenLineBelowMidDoc() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .openLineBelow, in: "abc\ndef", cursor: 1
+            for: .openLineBelow, source: CambiumSource("abc\ndef"), cursor: 1
         )
         #expect(plan.edit?.range == NSRange(location: 3, length: 0))
         #expect(plan.edit?.replacement == "\n")
@@ -486,7 +487,7 @@ struct CursorMotionEngineTests {
     @Test("o (openLineBelow): EOF case appends \\n; cursor on the new trailing empty line")
     func insertEntryOpenLineBelowEOF() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .openLineBelow, in: "abc", cursor: 1
+            for: .openLineBelow, source: CambiumSource("abc"), cursor: 1
         )
         #expect(plan.edit?.range == NSRange(location: 3, length: 0))
         #expect(plan.edit?.replacement == "\n")
@@ -497,7 +498,7 @@ struct CursorMotionEngineTests {
     @Test("O (openLineAbove): inserts \\n at line start; cursor on the new empty line")
     func insertEntryOpenLineAboveMidDoc() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .openLineAbove, in: "abc\ndef", cursor: 5
+            for: .openLineAbove, source: CambiumSource("abc\ndef"), cursor: 5
         )
         #expect(plan.edit?.range == NSRange(location: 4, length: 0))
         #expect(plan.edit?.replacement == "\n")
@@ -508,7 +509,7 @@ struct CursorMotionEngineTests {
     @Test("O (openLineAbove): top of document inserts \\n at 0")
     func insertEntryOpenLineAboveTop() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .openLineAbove, in: "abc", cursor: 1
+            for: .openLineAbove, source: CambiumSource("abc"), cursor: 1
         )
         #expect(plan.edit?.range == NSRange(location: 0, length: 0))
         #expect(plan.edit?.replacement == "\n")
@@ -518,7 +519,7 @@ struct CursorMotionEngineTests {
     @Test("s (substituteChar): deletes one char under cursor; cursor stays")
     func insertEntrySubstituteChar() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .substituteChar, in: "abc", cursor: 1
+            for: .substituteChar, source: CambiumSource("abc"), cursor: 1
         )
         #expect(plan.edit?.range == NSRange(location: 1, length: 1))
         #expect(plan.edit?.replacement == "")
@@ -530,7 +531,7 @@ struct CursorMotionEngineTests {
         // "abc\ndef" — cursor on the \n at position 3. content end is 3,
         // so the cursor IS at content end → no deletion.
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .substituteChar, in: "abc\ndef", cursor: 3
+            for: .substituteChar, source: CambiumSource("abc\ndef"), cursor: 3
         )
         #expect(plan.edit == nil)
         #expect(plan.cursorAfter == 3)
@@ -540,7 +541,7 @@ struct CursorMotionEngineTests {
     func insertEntrySubstituteLine() {
         // "abc\ndef" cursor on 'e' (position 5). Line: start=4, contentEnd=7.
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .substituteLine, in: "abc\ndef", cursor: 5
+            for: .substituteLine, source: CambiumSource("abc\ndef"), cursor: 5
         )
         #expect(plan.edit?.range == NSRange(location: 4, length: 3))
         #expect(plan.edit?.replacement == "")
@@ -550,7 +551,7 @@ struct CursorMotionEngineTests {
     @Test("S on the only line of a single-line document leaves the line empty")
     func insertEntrySubstituteLineOnlyLine() {
         let plan = CursorMotionEngine.planInsertEntry(
-            for: .substituteLine, in: "abc", cursor: 1
+            for: .substituteLine, source: CambiumSource("abc"), cursor: 1
         )
         #expect(plan.edit?.range == NSRange(location: 0, length: 3))
         #expect(plan.cursorAfter == 0)
@@ -563,17 +564,17 @@ struct CursorMotionEngineTests {
         let range = NSRange(location: 4, length: 6) // "  xyz\n"
         #expect(
             CursorMotionEngine.newOffset(
-                for: .start, in: text, displayLineRange: range
+                for: .start, source: CambiumSource(text), displayLineRange: range
             ) == 4
         )
         #expect(
             CursorMotionEngine.newOffset(
-                for: .firstNonBlank, in: text, displayLineRange: range
+                for: .firstNonBlank, source: CambiumSource(text), displayLineRange: range
             ) == 6 // 'x'
         )
         #expect(
             CursorMotionEngine.newOffset(
-                for: .end, in: text, displayLineRange: range
+                for: .end, source: CambiumSource(text), displayLineRange: range
             ) == 8 // 'z' (skips the trailing '\n' at 9)
         )
     }

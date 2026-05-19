@@ -20,7 +20,7 @@ struct CSTInspectorTests {
         let snapshot = CSTInspector.makeSnapshot(
             byteOffset: TextSize(0),
             root: root,
-            source: source
+            source: CambiumSource(source)
         )
         let firstKind = try #require(snapshot.breadcrumb.first?.kind)
         #expect(firstKind == .root)
@@ -35,7 +35,7 @@ struct CSTInspectorTests {
         let snapshot = CSTInspector.makeSnapshot(
             byteOffset: TextSize(3),
             root: root,
-            source: source
+            source: CambiumSource(source)
         )
         let kinds = snapshot.breadcrumb.map(\.kind)
         #expect(kinds.contains(.paragraph))
@@ -48,7 +48,7 @@ struct CSTInspectorTests {
         let snapshot = CSTInspector.makeSnapshot(
             byteOffset: TextSize(0),
             root: root,
-            source: source
+            source: CambiumSource(source)
         )
         #expect(snapshot.cursor.line == 1)
         #expect(snapshot.cursor.column == 1)
@@ -62,7 +62,7 @@ struct CSTInspectorTests {
         let snapshot = CSTInspector.makeSnapshot(
             byteOffset: TextSize(4),
             root: root,
-            source: source
+            source: CambiumSource(source)
         )
         #expect(snapshot.cursor.line == 2)
         #expect(snapshot.cursor.column == 2)
@@ -76,7 +76,7 @@ struct CSTInspectorTests {
         let snapshot = CSTInspector.makeSnapshot(
             byteOffset: TextSize(3),
             root: root,
-            source: source
+            source: CambiumSource(source)
         )
         let node = try #require(snapshot.node)
         // Some non-root descendant should be the innermost.
@@ -111,7 +111,7 @@ struct CSTInspectorTests {
         inspector.refresh(
             cursorByteOffset: nil,
             root: nil,
-            source: ""
+            source: CambiumSource()
         )
         #expect(inspector.snapshot == nil)
     }

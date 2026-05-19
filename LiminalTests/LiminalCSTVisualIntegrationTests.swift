@@ -825,7 +825,7 @@ struct LiminalCSTVisualIntegrationTests {
         _ = fixture.controller.handle(.char("C"))
         let markedHead = try #require(fixture.coordinator.cstForest)
         let expectedNS = try #require(
-            LiminalTextView.byteRangeToNSRange(markedHead.byteRange, in: source)
+            LiminalTextView.byteRangeToNSRange(markedHead.byteRange, in: CambiumSource(source))
         )
 
         _ = fixture.controller.handle(.char(":"))

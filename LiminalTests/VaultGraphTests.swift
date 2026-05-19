@@ -111,7 +111,7 @@ struct VaultGraphTests {
             let url = dir.appendingPathComponent(name)
             try content.data(using: .utf8)!.write(to: url)
             let parsed = try parser.parse(CambiumSource(content))
-            entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: content)
+            entry.indexCurrentDocument(url, rootSyntax: parsed.rootSyntax, content: CambiumSource(content))
         }
         return entry
     }

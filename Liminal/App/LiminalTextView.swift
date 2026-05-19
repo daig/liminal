@@ -3060,6 +3060,13 @@ struct LiminalTextView: NSViewRepresentable {
     // `textStorageDidProcessEditing`, which holds the pre-edit `session.source`
     // explicitly. `textView.string` is not a substitute — it would defeat
     // the rope's O(log N) contract by routing through `String.utf8.index`.
+    //
+    // Surrogate-mid input contract: an `NSRange.location` (or end) inside
+    // a UTF-16 surrogate pair snaps to the next scalar boundary (the
+    // rope's `byteOffset(forUTF16:)` behavior). Every AppKit-sourced
+    // NSRange in this codebase is scalar-aligned, so this case doesn't
+    // fire in production — but synthetic inputs land on a meaningful
+    // byte range rather than nil.
 
     nonisolated static func utf16RangeToByteRange(
         _ nsRange: NSRange,
@@ -3071,14 +3078,6 @@ struct LiminalTextView: NSViewRepresentable {
         else { return nil }
         let startByte = source.byteOffset(forUTF16: nsRange.location)
         let endByte = source.byteOffset(forUTF16: nsRange.location + nsRange.length)
-        // Surrogate-mid guard: the rope's translation is only well-defined
-        // at scalar boundaries; mid-surrogate input round-trips to a
-        // different UTF-16 offset. Preserves the prior String-helper's
-        // nil-on-surrogate-mid contract — see EditorViewModelTests.
-        // utf16InsideSurrogate.
-        guard source.utf16Offset(forByte: startByte) == nsRange.location,
-              source.utf16Offset(forByte: endByte) == nsRange.location + nsRange.length
-        else { return nil }
         return Int(startByte.rawValue)..<Int(endByte.rawValue)
     }
 

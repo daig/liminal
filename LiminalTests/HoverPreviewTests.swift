@@ -11,10 +11,10 @@ struct HoverPreviewSliceTests {
         let content = "line one\nline two\nline three\nline four\n"
         // Anchor in the middle of "line two" (byte 12 — "n" of "two").
         let (start, end) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: CambiumSource(content),
             anchorByteOffset: 12
         )
-        let slice = HoverPreviewController.sliceContent(content, byteStart: start, byteEnd: end)
+        let slice = HoverPreviewController.sliceContent(CambiumSource(content), byteStart: start, byteEnd: end)
         // Start of "line two" is byte 9 — slice begins there, NOT at byte 0.
         #expect(start == 9)
         #expect(slice.hasPrefix("line two"))
@@ -27,11 +27,11 @@ struct HoverPreviewSliceTests {
         let lines = (0..<20).map { "L\($0)" }
         let content = lines.joined(separator: "\n") + "\n"
         let (start, end) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: CambiumSource(content),
             anchorByteOffset: 0,
             maxLines: 5
         )
-        let slice = HoverPreviewController.sliceContent(content, byteStart: start, byteEnd: end)
+        let slice = HoverPreviewController.sliceContent(CambiumSource(content), byteStart: start, byteEnd: end)
         // 5 newlines worth of content = 5 lines.
         let newlineCount = slice.utf8.filter { $0 == 0x0A }.count
         #expect(newlineCount == 5)
@@ -45,7 +45,7 @@ struct HoverPreviewSliceTests {
         let longLine = String(repeating: "x", count: 5000)
         let content = longLine + "\nshort\n"
         let (start, end) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: CambiumSource(content),
             anchorByteOffset: 0,
             maxLines: 12,
             maxBytes: 1024
@@ -58,7 +58,7 @@ struct HoverPreviewSliceTests {
     func anchorAtStart() {
         let content = "one\ntwo\nthree\nfour\n"
         let (start, _) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: CambiumSource(content),
             anchorByteOffset: 0,
             maxBytes: 100
         )
@@ -69,7 +69,7 @@ struct HoverPreviewSliceTests {
     func anchorAtEnd() {
         let content = "one\ntwo\nthree\nfour\n"
         let (_, end) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: CambiumSource(content),
             anchorByteOffset: content.utf8.count - 2,
             maxBytes: 100
         )
@@ -79,7 +79,7 @@ struct HoverPreviewSliceTests {
     @Test("empty content returns (0, 0)")
     func emptyContent() {
         let (start, end) = HoverPreviewController.computeSliceRange(
-            in: "",
+            in: CambiumSource(""),
             anchorByteOffset: 0,
             maxBytes: 100
         )
@@ -91,7 +91,7 @@ struct HoverPreviewSliceTests {
     func anchorPastEnd() {
         let content = "one\ntwo\n"
         let (start, end) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: CambiumSource(content),
             anchorByteOffset: 999,
             maxBytes: 100
         )
@@ -104,7 +104,7 @@ struct HoverPreviewSliceTests {
         let content = "café résumé"  // multi-byte chars
         let bytes = Array(content.utf8)
         let slice = HoverPreviewController.sliceContent(
-            content,
+            CambiumSource(content),
             byteStart: 0,
             byteEnd: bytes.count
         )

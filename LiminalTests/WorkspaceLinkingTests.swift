@@ -334,7 +334,7 @@ struct WorkspaceLinkingTests {
         let targetNote = makeNote(relativePath: "Target.md")
         let sourceIndex = try DocumentIndex.build(
             root: LiminalParser().parse(CambiumSource(sourceContent)).rootSyntax,
-            source: sourceContent
+            source: CambiumSource(sourceContent)
         )
 
         let index = VaultLinkIndex.build(

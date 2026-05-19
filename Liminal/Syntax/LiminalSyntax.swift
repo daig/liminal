@@ -577,7 +577,10 @@ public struct LiminalParser {
         var parser = LiminalCSTParser(source: source.toString())
         try parser.parse(with: &builder)
         let build = try builder.finish()
-        let tree = build.snapshot.makeSyntaxTree().intoShared()
+        // Attach source to the tree so downstream consumers (translation
+        // queries, replacing(_:with:context:) auto-source-update) don't
+        // need to thread it separately.
+        let tree = build.snapshot.makeSyntaxTree(source: source).intoShared()
         return LiminalParseResult(tree: tree, diagnostics: parser.diagnostics)
     }
 
@@ -605,7 +608,9 @@ public struct LiminalParser {
         )
         try parser.parse(with: &builder)
         let build = try builder.finish()
-        let tree = build.snapshot.makeSyntaxTree().intoShared()
+        // Attach source so finalizeReplace and tree-side translation
+        // queries don't need to re-thread it.
+        let tree = build.snapshot.makeSyntaxTree(source: source).intoShared()
         let nextContext = build.intoContext()
         return LiminalParseSessionBuildOutput(
             result: LiminalParseResult(tree: tree, diagnostics: parser.diagnostics),
@@ -953,7 +958,9 @@ public final class LiminalParseSession {
 
         try builder.finishNode()
         let build = try builder.finish()
-        let tree = build.snapshot.makeSyntaxTree().intoShared()
+        // Skip-clean transplant flow: source is the new full document; attach
+        // it to the new tree so callers don't need to thread separately.
+        let tree = build.snapshot.makeSyntaxTree(source: source).intoShared()
         self.context = build.intoContext()
         self.lastTree = tree
 

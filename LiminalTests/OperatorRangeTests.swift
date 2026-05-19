@@ -1,3 +1,4 @@
+import CambiumCore
 import Foundation
 import Testing
 @testable import Liminal
@@ -11,7 +12,7 @@ struct OperatorRangeTests {
     func dwExclusive() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.wordForwardStart),
-            in: "abc def ghi", cursor: 0, count: 1
+            in: CambiumSource("abc def ghi"), cursor: 0, count: 1
         )
         #expect(r.range == NSRange(location: 0, length: 4))
         #expect(r.kind == .characterwise)
@@ -21,7 +22,7 @@ struct OperatorRangeTests {
     func dwCount() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.wordForwardStart),
-            in: "a b c d e", cursor: 0, count: 3
+            in: CambiumSource("a b c d e"), cursor: 0, count: 3
         )
         // w from 0 jumps b->c->d (stops at 'd' at index 6).
         #expect(r.range == NSRange(location: 0, length: 6))
@@ -32,7 +33,7 @@ struct OperatorRangeTests {
     func d0() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.lineStart),
-            in: "    abc", cursor: 5, count: 1
+            in: CambiumSource("    abc"), cursor: 5, count: 1
         )
         // 0 returns 0; range = [0, 5).
         #expect(r.range == NSRange(location: 0, length: 5))
@@ -42,7 +43,7 @@ struct OperatorRangeTests {
     func dCaret() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.lineFirstNonBlank),
-            in: "    abc", cursor: 6, count: 1
+            in: CambiumSource("    abc"), cursor: 6, count: 1
         )
         // ^ returns 4; range = [4, 6).
         #expect(r.range == NSRange(location: 4, length: 2))
@@ -52,7 +53,7 @@ struct OperatorRangeTests {
     func db() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.wordBackward),
-            in: "abc def ghi", cursor: 8, count: 1
+            in: CambiumSource("abc def ghi"), cursor: 8, count: 1
         )
         // b from 8 returns 4; range = [4, 8).
         #expect(r.range == NSRange(location: 4, length: 4))
@@ -64,7 +65,7 @@ struct OperatorRangeTests {
     func deInclusive() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.wordForwardEnd),
-            in: "abc def", cursor: 0, count: 1
+            in: CambiumSource("abc def"), cursor: 0, count: 1
         )
         // e from 0 returns 2 ('c'); inclusive: range = [0, 3).
         #expect(r.range == NSRange(location: 0, length: 3))
@@ -74,7 +75,7 @@ struct OperatorRangeTests {
     func dDollar() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.lineEnd),
-            in: "abc def\nghi", cursor: 0, count: 1
+            in: CambiumSource("abc def\nghi"), cursor: 0, count: 1
         )
         // contentEnd = 7 (newline position); range = [0, 7) — keeps "\nghi".
         #expect(r.range == NSRange(location: 0, length: 7))
@@ -88,7 +89,7 @@ struct OperatorRangeTests {
     func cwAsce() {
         let r = OperatorRange.resolve(
             op: .change, target: .motion(.wordForwardEnd),
-            in: "abc def", cursor: 0, count: 1
+            in: CambiumSource("abc def"), cursor: 0, count: 1
         )
         // Same range as `de`: [0, 3). The controller will then enter insert mode.
         #expect(r.range == NSRange(location: 0, length: 3))
@@ -101,7 +102,7 @@ struct OperatorRangeTests {
     func dj() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.down),
-            in: "abc\ndef\nghi", cursor: 1, count: 1
+            in: CambiumSource("abc\ndef\nghi"), cursor: 1, count: 1
         )
         // current line: [0, 4) (incl. '\n'); next line: [4, 8) (incl. '\n').
         // Linewise range: [0, 8).
@@ -113,7 +114,7 @@ struct OperatorRangeTests {
     func dG() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.documentEnd),
-            in: "abc\ndef\nghi", cursor: 4, count: Int.max
+            in: CambiumSource("abc\ndef\nghi"), cursor: 4, count: Int.max
         )
         #expect(r.range == NSRange(location: 4, length: 7))
         #expect(r.kind == .linewise)
@@ -123,7 +124,7 @@ struct OperatorRangeTests {
     func cjPreservesLineShell() {
         let r = OperatorRange.resolve(
             op: .change, target: .motion(.down),
-            in: "abc\ndef\nghi", cursor: 1, count: 1
+            in: CambiumSource("abc\ndef\nghi"), cursor: 1, count: 1
         )
         // Still [start of first line, contentEnd of second line) = [0, 7).
         #expect(r.range == NSRange(location: 0, length: 7))
@@ -136,7 +137,7 @@ struct OperatorRangeTests {
     func dd() {
         let r = OperatorRange.resolve(
             op: .delete, target: .currentLine,
-            in: "abc\ndef\nghi", cursor: 1, count: 1
+            in: CambiumSource("abc\ndef\nghi"), cursor: 1, count: 1
         )
         #expect(r.range == NSRange(location: 0, length: 4))
         #expect(r.kind == .linewise)
@@ -146,7 +147,7 @@ struct OperatorRangeTests {
     func twoDD() {
         let r = OperatorRange.resolve(
             op: .delete, target: .currentLine,
-            in: "abc\ndef\nghi", cursor: 1, count: 2
+            in: CambiumSource("abc\ndef\nghi"), cursor: 1, count: 2
         )
         #expect(r.range == NSRange(location: 0, length: 8))
         #expect(r.kind == .linewise)
@@ -156,7 +157,7 @@ struct OperatorRangeTests {
     func cc() {
         let r = OperatorRange.resolve(
             op: .change, target: .currentLine,
-            in: "abc\ndef\nghi", cursor: 1, count: 1
+            in: CambiumSource("abc\ndef\nghi"), cursor: 1, count: 1
         )
         // Range covers "abc" only, leaves the "\ndef\nghi" intact.
         #expect(r.range == NSRange(location: 0, length: 3))
@@ -167,7 +168,7 @@ struct OperatorRangeTests {
     func yy() {
         let r = OperatorRange.resolve(
             op: .yank, target: .currentLine,
-            in: "abc\ndef\nghi", cursor: 1, count: 1
+            in: CambiumSource("abc\ndef\nghi"), cursor: 1, count: 1
         )
         #expect(r.range == NSRange(location: 0, length: 4))
         #expect(r.kind == .linewise)
@@ -177,7 +178,7 @@ struct OperatorRangeTests {
     func ddLastLineNoNewline() {
         let r = OperatorRange.resolve(
             op: .delete, target: .currentLine,
-            in: "abc\ndef", cursor: 5, count: 1
+            in: CambiumSource("abc\ndef"), cursor: 5, count: 1
         )
         // Last line: start=4, contentEnd=7, end=7. Range = [4, 7).
         #expect(r.range == NSRange(location: 4, length: 3))
@@ -188,7 +189,7 @@ struct OperatorRangeTests {
     func ddClamp() {
         let r = OperatorRange.resolve(
             op: .delete, target: .currentLine,
-            in: "abc\ndef", cursor: 1, count: 3
+            in: CambiumSource("abc\ndef"), cursor: 1, count: 3
         )
         // Two lines: [0, 4) + [4, 7) → [0, 7).
         #expect(r.range == NSRange(location: 0, length: 7))
@@ -200,7 +201,7 @@ struct OperatorRangeTests {
     func xSingle() {
         let r = OperatorRange.resolve(
             op: .delete, target: .charsAtCursor(before: false),
-            in: "hello", cursor: 1, count: 1
+            in: CambiumSource("hello"), cursor: 1, count: 1
         )
         #expect(r.range == NSRange(location: 1, length: 1))
         #expect(r.kind == .characterwise)
@@ -210,7 +211,7 @@ struct OperatorRangeTests {
     func xCount() {
         let r = OperatorRange.resolve(
             op: .delete, target: .charsAtCursor(before: false),
-            in: "hello", cursor: 1, count: 3
+            in: CambiumSource("hello"), cursor: 1, count: 3
         )
         #expect(r.range == NSRange(location: 1, length: 3))
     }
@@ -219,7 +220,7 @@ struct OperatorRangeTests {
     func xClampsAtNewline() {
         let r = OperatorRange.resolve(
             op: .delete, target: .charsAtCursor(before: false),
-            in: "abc\ndef", cursor: 2, count: 5
+            in: CambiumSource("abc\ndef"), cursor: 2, count: 5
         )
         // Line 0: contentEnd = 3. Range [2, 3) — only 'c'.
         #expect(r.range == NSRange(location: 2, length: 1))
@@ -229,7 +230,7 @@ struct OperatorRangeTests {
     func XSingle() {
         let r = OperatorRange.resolve(
             op: .delete, target: .charsAtCursor(before: true),
-            in: "hello", cursor: 4, count: 1
+            in: CambiumSource("hello"), cursor: 4, count: 1
         )
         #expect(r.range == NSRange(location: 3, length: 1))
     }
@@ -238,7 +239,7 @@ struct OperatorRangeTests {
     func XClampsAtLineStart() {
         let r = OperatorRange.resolve(
             op: .delete, target: .charsAtCursor(before: true),
-            in: "abc\ndefgh", cursor: 6, count: 10
+            in: CambiumSource("abc\ndefgh"), cursor: 6, count: 10
         )
         // Line 1: start = 4. Range [4, 6).
         #expect(r.range == NSRange(location: 4, length: 2))
@@ -250,7 +251,7 @@ struct OperatorRangeTests {
     func D() {
         let r = OperatorRange.resolve(
             op: .delete, target: .toLineEnd,
-            in: "abc def\nghi", cursor: 2, count: 1
+            in: CambiumSource("abc def\nghi"), cursor: 2, count: 1
         )
         // contentEnd = 7; range = [2, 7).
         #expect(r.range == NSRange(location: 2, length: 5))
@@ -260,7 +261,7 @@ struct OperatorRangeTests {
     func C() {
         let r = OperatorRange.resolve(
             op: .change, target: .toLineEnd,
-            in: "abc def\nghi", cursor: 2, count: 1
+            in: CambiumSource("abc def\nghi"), cursor: 2, count: 1
         )
         #expect(r.range == NSRange(location: 2, length: 5))
         #expect(r.kind == .characterwise)
@@ -272,7 +273,7 @@ struct OperatorRangeTests {
     func dwAtEOF() {
         let r = OperatorRange.resolve(
             op: .delete, target: .motion(.wordForwardStart),
-            in: "abc", cursor: 3, count: 1
+            in: CambiumSource("abc"), cursor: 3, count: 1
         )
         // wordForwardStart from end stays at end (3). Range = [3, 3).
         #expect(r.range.length == 0)
@@ -282,7 +283,7 @@ struct OperatorRangeTests {
     func ddSingleLine() {
         let r = OperatorRange.resolve(
             op: .delete, target: .currentLine,
-            in: "only line", cursor: 4, count: 1
+            in: CambiumSource("only line"), cursor: 4, count: 1
         )
         #expect(r.range == NSRange(location: 0, length: 9))
     }
@@ -291,7 +292,7 @@ struct OperatorRangeTests {
     func Y() {
         let r = OperatorRange.resolve(
             op: .yank, target: .currentLine,
-            in: "abc\ndef\n", cursor: 1, count: 1
+            in: CambiumSource("abc\ndef\n"), cursor: 1, count: 1
         )
         #expect(r.range == NSRange(location: 0, length: 4))
         #expect(r.kind == .linewise)
@@ -301,7 +302,7 @@ struct OperatorRangeTests {
     func unsupportedMotionDegrades() {
         let r = OperatorRange.resolve(
             op: .delete, target: .structuralMotion(.nextHeading),
-            in: "abc", cursor: 1, count: 1
+            in: CambiumSource("abc"), cursor: 1, count: 1
         )
         #expect(r.range.length == 0)
         #expect(r.kind == .characterwise)

@@ -4,20 +4,27 @@ import CambiumIncremental
 
 public struct LiminalEditResult: Sendable {
     public let tree: SharedSyntaxTree<LiminalLanguage>
-    public let sourceText: String
     public let witness: ReplacementWitness<LiminalLanguage>
 
     public var rootSyntax: RootSyntax {
         RootSyntax(unchecked: tree.rootHandle())
     }
 
+    /// The source bytes the tree was built against, materialized as a
+    /// Swift `String`. Computed on demand — most consumers prefer
+    /// `tree.source` (a ``CambiumSource``) for O(log N) queries instead
+    /// of paying the O(N) materialization here. Falls back to rendering
+    /// the green tree if no source is attached (shouldn't happen in
+    /// editor flows; all editor-produced trees carry source).
+    public var sourceText: String {
+        tree.source?.toString() ?? tree.withRoot { $0.makeString() }
+    }
+
     public init(
         tree: SharedSyntaxTree<LiminalLanguage>,
-        sourceText: String,
         witness: ReplacementWitness<LiminalLanguage>
     ) {
         self.tree = tree
-        self.sourceText = sourceText
         self.witness = witness
     }
 }
@@ -104,16 +111,17 @@ public final class LiminalEditorSession {
     }
 
     /// Replace the subtree at `target` with `replacement`, returning the
-    /// new tree, source, and replacement witness. The parser is NOT
-    /// re-run, so `LiminalParseResult` is not the right return shape —
-    /// any diagnostics from the previous parse are stale relative to the
-    /// new tree. Callers that want fresh diagnostics should call `parse()`
+    /// new tree and replacement witness. The parser is NOT re-run, so
+    /// `LiminalParseResult` is not the right return shape — any
+    /// diagnostics from the previous parse are stale relative to the new
+    /// tree. Callers that want fresh diagnostics should call `parse()`
     /// after.
     ///
-    /// Side effects: updates `self.source` (via `tree.makeString()`) and
-    /// clears `self.parseResult` (since its diagnostics are stale). Any
-    /// `SyntaxNodeHandle` captured before this call is invalidated by the
-    /// new `treeID`.
+    /// Side effects: updates `self.source` (read off `output.tree.source`,
+    /// which Cambium's `replacing(_:with:context:)` auto-updates via an
+    /// O(log N + edit_size) rope splice) and clears `self.parseResult`
+    /// (since its diagnostics are stale). Any `SyntaxNodeHandle`
+    /// captured before this call is invalidated by the new `treeID`.
     @discardableResult
     public func replaceSubtree(
         _ target: SyntaxNodeHandle<LiminalLanguage>,
@@ -157,12 +165,23 @@ public final class LiminalEditorSession {
     }
 
     private func finalizeReplace(_ output: StructuralReplaceOutput) -> LiminalEditResult {
-        let newSourceString = output.tree.withRoot { $0.makeString() }
-        self.source = CambiumSource(newSourceString)
+        // Cambium's `replacing(_:with:context:)` auto-updates the source
+        // rope via an O(log N + edit_size) splice when the old tree
+        // carried one. Liminal's parser always attaches source (see
+        // LiminalParser.parse and LiminalParseSession.parse), so this is
+        // unambiguously non-nil here.
+        //
+        // The previous implementation rendered the entire tree text via
+        // `makeString()` (O(N)) and rechunked it into a fresh
+        // `CambiumSource` (O(N)). Even task-marker toggles paid the
+        // full-document cost. The auto-update path is bounded by the
+        // touched subtree's size — microseconds for typical structural
+        // edits.
+        let newSource = output.tree.source!
+        self.source = newSource
         self.parseResult = nil
         return LiminalEditResult(
             tree: output.tree,
-            sourceText: newSourceString,
             witness: output.witness
         )
     }
