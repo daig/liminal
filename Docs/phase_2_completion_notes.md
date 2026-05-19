@@ -1,6 +1,6 @@
 # Phase 2 — Completion notes + lingering items
 
-Phase 2 (Cambium rope migration in Liminal) shipped across three PRs covering Steps 1–6 and all 17 hotspots from the rope plan. This doc catalogs what's left, what was closed, and what to watch for in future work. Companion to `phase_2_rope_integration.md` (the original handoff).
+Phase 2 (Cambium rope migration in Liminal) shipped across three PRs covering Steps 1–6 and all 17 hotspots from the rope plan. This doc catalogs what's left, what was closed, and what to watch for in future work.
 
 **Status as of completion:** 1009/1009 Liminal tests pass. 238/238 Cambium tests pass. Forest-mark refresh benchmark: 3.98 ms on 1.2 MB stress fixture (target was < 10 ms).
 
@@ -101,7 +101,7 @@ Phase 2 (Cambium rope migration in Liminal) shipped across three PRs covering St
 **Note for future Cambium consumers:** this is a semantic change to `byteOffset(forUTF16:)`. Calculator example tests pass (no observable impact). Any future Cambium adopter that depended on the OLD (broken) behavior would see different return values — flag at adoption time.
 
 ### 11. The 17 hotspots themselves
-All addressed. Per the table in `phase_2_rope_integration.md` §"Verification at the end" and the retrospective in our session log.
+All addressed. Per the retrospective in our session log.
 
 ---
 
