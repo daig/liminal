@@ -212,7 +212,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         entry.indexCurrentDocument(
             url,
             rootSyntax: root,
-            content: session.source.toString()
+            content: session.source
         )
         // Kick off the one-shot vault scan so Cmd-clicks to
         // not-yet-open notes can resolve. Idempotent across calls.
@@ -349,12 +349,21 @@ final class LiminalSourceDocument: ReferenceFileDocument {
                 cstInspector.refresh(
                     cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                     root: newRoot,
-                    source: session.source.toString()
+                    source: session.source
                 )
                 treeVersion &+= 1
             }
-            indexInVault()
-            writeThroughIfNeeded()
+            // During an insert session, defer disk writes and vault
+            // re-indexing to the session commit boundary. On a 10MB
+            // document, per-keystroke `writeToBackingFileIfPossible`
+            // alone (which materializes the full rope, copies to
+            // Data, and writes to disk) was producing observable
+            // beachballs. `commitInsertSession` flushes both once
+            // per typing burst.
+            if !undoHistory.insertSessionActive {
+                indexInVault()
+                writeThroughIfNeeded()
+            }
         }
         return true
     }
@@ -435,7 +444,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             cstInspector.refresh(
                 cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                 root: newRoot,
-                source: session.source.toString()
+                source: session.source
             )
             treeVersion &+= 1
         }
@@ -468,7 +477,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             cstInspector.refresh(
                 cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                 root: newRoot,
-                source: session.source.toString()
+                source: session.source
             )
             treeVersion &+= 1
         }
@@ -571,11 +580,16 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     }
 
     /// Close an insert session, recording one transaction if the
-    /// source changed during the session.
+    /// source changed during the session. Flushes the per-keystroke
+    /// work that was deferred during the session: vault re-indexing
+    /// and disk write-through. Coalescing these to one shot per typing
+    /// burst is what keeps large documents responsive in insert mode.
     @MainActor
     func commitInsertSession(at cursor: Int) {
         guard let commit = makeUndoSnapshot(cursor: cursor) else { return }
         undoHistory.commitInsertSession(after: commit)
+        indexInVault()
+        writeThroughIfNeeded()
     }
 
     @MainActor
@@ -614,7 +628,7 @@ final class LiminalSourceDocument: ReferenceFileDocument {
             cstInspector.refresh(
                 cursorByteOffset: cstInspector.snapshot.map { Int($0.cursor.byteOffset.rawValue) },
                 root: root,
-                source: session.source.toString()
+                source: session.source
             )
             treeVersion &+= 1
         }

@@ -6,16 +6,16 @@ struct DocumentIndexBuilder {
     private var headings: [HeadingAnchor] = []
     private var blocks: [BlockAnchor] = []
     private var references: [DocumentReference] = []
-    /// UTF-8 bytes of the source document. When non-empty, each emitted
-    /// `DocumentReference` carries a pre-computed `DocumentSnippet` of
-    /// context around its `sourceRange`. When empty (no source provided),
-    /// every reference's snippet is `.empty` — used by callsites that
-    /// don't yet care about backlink context (test fixtures, some
-    /// inspector / printer paths).
-    private var sourceUTF8: [UInt8] = []
+    /// Source rope. When non-nil, each emitted `DocumentReference` carries
+    /// a pre-computed `DocumentSnippet` of context around its `sourceRange`,
+    /// extracted via the rope's O(log N + window) `bytes(in:)`. When nil
+    /// (no source provided), every reference's snippet is `.empty` — used
+    /// by callsites that don't yet care about backlink context (test
+    /// fixtures, some inspector / printer paths).
+    private var source: CambiumSource?
 
-    mutating func build(root: RootSyntax, sourceUTF8: [UInt8] = []) -> DocumentIndex {
-        self.sourceUTF8 = sourceUTF8
+    mutating func build(root: RootSyntax, source: CambiumSource? = nil) -> DocumentIndex {
+        self.source = source
         for item in root.documentItems {
             appendTopLevelItem(item)
         }
@@ -28,18 +28,19 @@ struct DocumentIndexBuilder {
         )
     }
 
-    /// Build a snippet from `sourceUTF8` around the given range. The default
+    /// Build a snippet from `source` around the given range. The default
     /// context window is ±36 UTF-8 bytes on each side. The returned
     /// `text` has newlines (`\n`, `\r`) collapsed to spaces and ASCII
     /// whitespace (`0x20`, `0x09`) trimmed from both ends — but never
     /// past the reference boundary. UTF-8 codepoint boundaries are
-    /// respected so the snippet is always a valid string.
+    /// respected so the snippet is always a valid string. Materializes
+    /// only the windowed bytes via `source.bytes(in:)` — O(log N + window).
     fileprivate static func snippet(
-        in sourceUTF8: [UInt8],
+        in source: CambiumSource,
         around range: LiminalSourceRange,
         context: Int = 36
     ) -> DocumentSnippet {
-        let total = sourceUTF8.count
+        let total = source.byteCount
         let start = Int(range.start.rawValue)
         let end = Int(range.end.rawValue)
         guard total > 0, start <= total, end >= start, end <= total else {
@@ -50,15 +51,47 @@ struct DocumentIndexBuilder {
         var upper = min(total, end + context)
         // Walk left from `lower` past any UTF-8 continuation bytes so we
         // don't split a multibyte sequence at the head. Walk right from
-        // `upper` for the same reason at the tail.
-        while lower > 0, isContinuationByte(sourceUTF8[lower]) {
-            lower -= 1
+        // `upper` for the same reason at the tail. Worst case per side
+        // is 3 bytes (max UTF-8 continuation chain length); fetch one
+        // 4-byte probe per side covering the candidate boundary.
+        if lower > 0 {
+            // Probe byte AT lower and 3 bytes before. probe[probe.count - 1]
+            // is the byte at position `lower`.
+            let probeStart = max(0, lower - 3)
+            let probe = source.bytes(
+                in: TextRange(
+                    start: TextSize(UInt32(probeStart)),
+                    end: TextSize(UInt32(min(total, lower + 1)))
+                )
+            )
+            var i = probe.count - 1
+            while lower > 0, i >= 0, isContinuationByte(probe[i]) {
+                lower -= 1
+                i -= 1
+            }
         }
-        while upper < total, isContinuationByte(sourceUTF8[upper]) {
-            upper += 1
+        if upper < total {
+            // Probe byte AT upper and 3 bytes after. probe[0] is the byte
+            // at position `upper`.
+            let probe = source.bytes(
+                in: TextRange(
+                    start: TextSize(UInt32(upper)),
+                    end: TextSize(UInt32(min(total, upper + 4)))
+                )
+            )
+            var i = 0
+            while upper < total, i < probe.count, isContinuationByte(probe[i]) {
+                upper += 1
+                i += 1
+            }
         }
 
-        var bytes = Array(sourceUTF8[lower..<upper])
+        var bytes = source.bytes(
+            in: TextRange(
+                start: TextSize(UInt32(lower)),
+                end: TextSize(UInt32(upper))
+            )
+        )
         for i in 0..<bytes.count {
             if bytes[i] == 0x0A || bytes[i] == 0x0D {
                 bytes[i] = 0x20
@@ -101,8 +134,8 @@ struct DocumentIndexBuilder {
     }
 
     private func makeSnippet(around range: LiminalSourceRange) -> DocumentSnippet {
-        guard !sourceUTF8.isEmpty else { return .empty }
-        return DocumentIndexBuilder.snippet(in: sourceUTF8, around: range)
+        guard let source else { return .empty }
+        return DocumentIndexBuilder.snippet(in: source, around: range)
     }
 
     private mutating func appendTopLevelItem(_ item: DocumentItemSyntax) {

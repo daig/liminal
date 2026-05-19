@@ -1,3 +1,4 @@
+import CambiumCore
 import Foundation
 
 /// Pure logic mapping (operator, target, source, cursor, count) to the
@@ -19,12 +20,11 @@ public enum OperatorRange {
     public static func resolve(
         op: VimOperator,
         target: OperatorTarget,
-        in source: String,
+        in source: CambiumSource,
         cursor: Int,
         count: Int
     ) -> Result {
-        let nsString = source as NSString
-        let textLength = nsString.length
+        let textLength = source.utf16Count
         let safeCursor = max(0, min(cursor, textLength))
         let effectiveCount = max(1, count)
 
@@ -32,7 +32,7 @@ public enum OperatorRange {
         case .motion(let motion):
             return resolveMotion(
                 op: op, motion: motion,
-                in: nsString, cursor: safeCursor,
+                in: source, cursor: safeCursor,
                 count: effectiveCount
             )
         case .displayLineMotion, .structuralMotion, .viewportMotion:
@@ -48,17 +48,17 @@ public enum OperatorRange {
             )
         case .currentLine:
             return resolveCurrentLine(
-                op: op, in: nsString,
+                op: op, in: source,
                 cursor: safeCursor, count: effectiveCount
             )
         case .charsAtCursor(let before):
             return resolveCharsAtCursor(
-                in: nsString, cursor: safeCursor,
+                in: source, cursor: safeCursor,
                 count: effectiveCount, before: before
             )
         case .toLineEnd:
             return resolveToLineEnd(
-                op: op, in: nsString, cursor: safeCursor
+                op: op, in: source, cursor: safeCursor
             )
         }
     }
@@ -94,12 +94,12 @@ public enum OperatorRange {
     private static func resolveMotion(
         op: VimOperator,
         motion: CursorMotion,
-        in nsString: NSString,
+        in source: CambiumSource,
         cursor: Int,
         count: Int
     ) -> Result {
         let target = CursorMotionEngine.newOffset(
-            for: motion, in: nsString as String,
+            for: motion, source: source,
             from: cursor, count: count
         )
         let inc = inclusivity(motion)
@@ -107,8 +107,8 @@ public enum OperatorRange {
         if inc == .linewise {
             let lo = min(cursor, target)
             let hi = max(cursor, target)
-            let firstLine = lineInfo(at: lo, in: nsString)
-            let lastLine = lineInfo(at: hi, in: nsString)
+            let firstLine = lineInfo(at: lo, in: source)
+            let lastLine = lineInfo(at: hi, in: source)
             // Change op preserves the line shell (drops the trailing
             // newline so the line still exists, blank); delete and
             // yank operate on the full line including its terminator.
@@ -125,7 +125,7 @@ public enum OperatorRange {
         let lo = min(cursor, target)
         var hi = max(cursor, target)
         if inc == .inclusive { hi += 1 }
-        hi = min(hi, nsString.length)
+        hi = min(hi, source.utf16Count)
         return Result(
             range: NSRange(location: lo, length: max(0, hi - lo)),
             kind: .characterwise
@@ -136,16 +136,16 @@ public enum OperatorRange {
 
     private static func resolveCurrentLine(
         op: VimOperator,
-        in nsString: NSString,
+        in source: CambiumSource,
         cursor: Int,
         count: Int
     ) -> Result {
-        let firstLine = lineInfo(at: cursor, in: nsString)
+        let firstLine = lineInfo(at: cursor, in: source)
         var lastLine = firstLine
         var pos = firstLine.end
         var consumed = 1
-        while consumed < count, pos < nsString.length {
-            let info = lineInfo(at: pos, in: nsString)
+        while consumed < count, pos < source.utf16Count {
+            let info = lineInfo(at: pos, in: source)
             lastLine = info
             consumed += 1
             if info.end <= pos { break }  // safety: empty trailing line
@@ -164,12 +164,12 @@ public enum OperatorRange {
     // MARK: - charsAtCursor target (`x` / `X`)
 
     private static func resolveCharsAtCursor(
-        in nsString: NSString,
+        in source: CambiumSource,
         cursor: Int,
         count: Int,
         before: Bool
     ) -> Result {
-        let line = lineInfo(at: cursor, in: nsString)
+        let line = lineInfo(at: cursor, in: source)
         if before {
             let lo = max(line.start, cursor - count)
             return Result(
@@ -190,10 +190,10 @@ public enum OperatorRange {
 
     private static func resolveToLineEnd(
         op: VimOperator,
-        in nsString: NSString,
+        in source: CambiumSource,
         cursor: Int
     ) -> Result {
-        let line = lineInfo(at: cursor, in: nsString)
+        let line = lineInfo(at: cursor, in: source)
         return Result(
             range: NSRange(
                 location: cursor,
@@ -203,20 +203,54 @@ public enum OperatorRange {
         )
     }
 
-    // MARK: - Line helper
+    // MARK: - Line helper (rope-native)
 
+    /// (start, contentEnd, end) UTF-16 offsets for the line containing
+    /// `location`. Recognizes `\n` and `\r\n`; bare `\r` and exotic
+    /// separators (U+2028 etc.) are treated as content. Matches the
+    /// `lineInfo` shape in CursorMotionEngine.
     private static func lineInfo(
         at location: Int,
-        in nsString: NSString
+        in source: CambiumSource
     ) -> (start: Int, contentEnd: Int, end: Int) {
-        var start = 0
-        var contentEnd = 0
-        var end = 0
-        let safe = max(0, min(location, nsString.length))
-        nsString.getLineStart(
-            &start, end: &end, contentsEnd: &contentEnd,
-            for: NSRange(location: safe, length: 0)
-        )
-        return (start, contentEnd, end)
+        let totalUTF16 = source.utf16Count
+        let totalBytes = source.byteCount
+        if totalBytes == 0 { return (0, 0, 0) }
+        let safeOffset = max(0, min(location, totalUTF16))
+        let byteOffset = source.byteOffset(forUTF16: safeOffset)
+        let (line1, _) = source.lineColumn(forByte: byteOffset)
+
+        let startByte = Int((source.byteOffset(forLine: line1, column: 1) ?? TextSize(0)).rawValue)
+        let endByte: Int
+        if let nextStart = source.byteOffset(forLine: line1 + 1, column: 1) {
+            endByte = Int(nextStart.rawValue)
+        } else {
+            endByte = totalBytes
+        }
+
+        let startUTF16 = source.utf16Offset(forByte: TextSize(UInt32(startByte)))
+        let endUTF16 = source.utf16Offset(forByte: TextSize(UInt32(endByte)))
+
+        let contentEndUTF16: Int
+        if endByte > startByte {
+            let probeStart = max(startByte, endByte - 2)
+            let probe = source.bytes(in: CambiumCore.TextRange(
+                start: TextSize(UInt32(probeStart)),
+                end: TextSize(UInt32(endByte))
+            ))
+            if let last = probe.last, last == 0x0A {
+                if probe.count >= 2, probe[probe.count - 2] == 0x0D {
+                    contentEndUTF16 = endUTF16 - 2  // CRLF
+                } else {
+                    contentEndUTF16 = endUTF16 - 1  // LF only
+                }
+            } else {
+                contentEndUTF16 = endUTF16
+            }
+        } else {
+            contentEndUTF16 = endUTF16
+        }
+
+        return (startUTF16, contentEndUTF16, endUTF16)
     }
 }

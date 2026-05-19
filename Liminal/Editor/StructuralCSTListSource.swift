@@ -245,43 +245,33 @@ enum StructuralCSTListSource {
         precondition(selectedStartByte <= selectedEndByte)
         precondition(selectedEndByte <= source.utf8.count)
 
-        let selectedStart = source.utf8.index(
-            source.startIndex,
-            offsetBy: selectedStartByte
-        )
-        let selectedEnd = source.utf8.index(
-            source.startIndex,
-            offsetBy: selectedEndByte
-        )
-
-        var lineStart = physicalLineStart(containing: selectedStart, in: source)
+        // Hotspot #17: pre-rewrite this function used `utf8.index(offsetBy:)`
+        // walks to convert byte offsets → String.Index, then walked the
+        // resulting String character-by-character. Each conversion was
+        // O(N) per the Swift String API contract. Now we materialize the
+        // bytes once and operate in byte-space throughout via the
+        // byte-typed helpers below.
+        let bytes = Array(source.utf8)
+        var lineStart = physicalLineStartByte(containing: selectedStartByte, in: bytes)
         var removals: [CambiumCore.TextRange] = []
 
-        while lineStart < selectedEnd {
+        while lineStart < selectedEndByte {
             var lineEnd = lineStart
-            while lineEnd < source.endIndex,
-                  source[lineEnd] != "\n",
-                  source[lineEnd] != "\r"
+            while lineEnd < bytes.count,
+                  bytes[lineEnd] != 0x0A,
+                  bytes[lineEnd] != 0x0D
             {
-                lineEnd = source.index(after: lineEnd)
+                lineEnd += 1
             }
 
-            if let contentStart = contentStart(
+            if let contentStartByte = contentStartByte(
                 after: contentColumn,
-                in: source,
-                lineStart: lineStart,
-                lineEnd: lineEnd
+                in: bytes,
+                lineStartByte: lineStart,
+                lineEndByte: lineEnd
             ) {
-                let prefixStartByte = source.utf8.distance(
-                    from: source.startIndex,
-                    to: lineStart
-                )
-                let prefixEndByte = source.utf8.distance(
-                    from: source.startIndex,
-                    to: contentStart
-                )
-                let removalStart = max(prefixStartByte, selectedStartByte)
-                let removalEnd = min(prefixEndByte, selectedEndByte)
+                let removalStart = max(lineStart, selectedStartByte)
+                let removalEnd = min(contentStartByte, selectedEndByte)
                 if removalEnd > removalStart {
                     removals.append(CambiumCore.TextRange(
                         start: TextSize(UInt32(removalStart - selectedStartByte)),
@@ -290,10 +280,84 @@ enum StructuralCSTListSource {
                 }
             }
 
-            lineStart = nextLineStart(afterLineEndingAt: lineEnd, in: source)
+            lineStart = nextLineStartByte(afterLineEndingAt: lineEnd, in: bytes)
         }
 
         return removals
+    }
+
+    /// Byte-space variant of `physicalLineStart`. Walks backward through
+    /// `bytes` from `offset` to the byte just after the most recent
+    /// `\n` or `\r`.
+    private static func physicalLineStartByte(
+        containing offset: Int,
+        in bytes: [UInt8]
+    ) -> Int {
+        var cursor = offset
+        while cursor > 0 {
+            let previous = cursor - 1
+            if bytes[previous] == 0x0A || bytes[previous] == 0x0D {
+                return cursor
+            }
+            cursor = previous
+        }
+        return 0
+    }
+
+    /// Byte-space variant of `nextLineStart`. Returns the byte offset
+    /// of the line following the one ending at `lineEndByte`.
+    private static func nextLineStartByte(
+        afterLineEndingAt lineEndByte: Int,
+        in bytes: [UInt8]
+    ) -> Int {
+        guard lineEndByte < bytes.count else { return lineEndByte }
+        if bytes[lineEndByte] == 0x0D {
+            let afterCR = lineEndByte + 1
+            if afterCR < bytes.count, bytes[afterCR] == 0x0A {
+                return afterCR + 1
+            }
+            return afterCR
+        }
+        return lineEndByte + 1
+    }
+
+    /// Byte-space variant of `contentStart`. Walks through horizontal
+    /// whitespace (ASCII space + tab) at the start of the line,
+    /// computing the visual column. Returns the byte offset where
+    /// content begins after consuming `targetColumn` columns.
+    private static func contentStartByte(
+        after targetColumn: Int,
+        in bytes: [UInt8],
+        lineStartByte: Int,
+        lineEndByte: Int
+    ) -> Int? {
+        var cursor = lineStartByte
+        var column = 0
+        while cursor < lineEndByte {
+            let byte = bytes[cursor]
+            // Only ASCII space (0x20) and tab (0x09) are horizontal
+            // whitespace per the existing `isHorizontalWhitespace`
+            // semantics; anything else (incl. multi-byte UTF-8 chars)
+            // is non-whitespace and stops the walk.
+            guard byte == 0x20 || byte == 0x09 else { break }
+            let nextColumn = column + indentationByteWidth(of: byte, atColumn: column)
+            guard nextColumn <= targetColumn else { return cursor }
+            column = nextColumn
+            cursor += 1
+            if column == targetColumn { return cursor }
+        }
+        return column >= targetColumn ? cursor : nil
+    }
+
+    /// Byte-space variant of `indentationWidth`. Space = 1 column, tab
+    /// = expand to next tab stop (multiples of 4 per the existing
+    /// `indentationWidth` semantics).
+    private static func indentationByteWidth(of byte: UInt8, atColumn column: Int) -> Int {
+        switch byte {
+        case 0x20: return 1
+        case 0x09: return 4 - (column % 4)
+        default:   return 0
+        }
     }
 
     static func highlightRanges(

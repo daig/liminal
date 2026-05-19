@@ -135,9 +135,13 @@ struct LiminalTextView: NSViewRepresentable {
         }
 
         private struct HighlightPaintScope {
+            /// Optional byte-range scope for span filtering. `nil` means
+            /// "paint the whole tree" (full-document repaint).
             let byteRange: CambiumCore.TextRange?
+            /// Pre-computed UTF-16 range corresponding to `byteRange` (or
+            /// the entire storage for full-document scopes). Used to
+            /// reset the base attribute set before painting.
             let nsRange: NSRange
-            let offsetMap: OffsetMap
         }
 
         /// Cmd+hover popover lifetime is tied to this Coordinator —
@@ -364,7 +368,7 @@ struct LiminalTextView: NSViewRepresentable {
                 textView.markPositions = []
                 return
             }
-            let source = textView.string
+            let source = document.session.source
             let indicators: [VimTextView.MarkIndicator] = document
                 .vimController
                 .marks
@@ -407,7 +411,7 @@ struct LiminalTextView: NSViewRepresentable {
                 textView.forestMarkOverlays = []
                 return
             }
-            let source = textView.string
+            let source = document.session.source
             let overlays: [VimTextView.ForestMarkOverlay] = document
                 .vimController
                 .forestMarks
@@ -482,7 +486,7 @@ struct LiminalTextView: NSViewRepresentable {
                 document.cstInspector.refresh(
                     cursorByteOffset: nil,
                     root: nil,
-                    source: ""
+                    source: CambiumSource()
                 )
                 return
             }
@@ -490,7 +494,7 @@ struct LiminalTextView: NSViewRepresentable {
             document.cstInspector.refresh(
                 cursorByteOffset: offset,
                 root: document.currentRootSyntax,
-                source: textView.string
+                source: document.session.source
             )
         }
 
@@ -513,7 +517,7 @@ struct LiminalTextView: NSViewRepresentable {
                     location: editedRange.location,
                     length: editedRange.length - delta
                 )
-                let preEditSource = document.session.source.toString()
+                let preEditSource = document.session.source
                 guard let byteRange = LiminalTextView.utf16RangeToByteRange(
                     preEditRange,
                     in: preEditSource
@@ -547,7 +551,7 @@ struct LiminalTextView: NSViewRepresentable {
             let currentLocation = currentMotionCursorUTF16()
             let newLocation = CursorMotionEngine.newOffset(
                 for: motion,
-                in: textView.string,
+                source: document.session.source,
                 from: currentLocation,
                 count: count
             )
@@ -766,7 +770,7 @@ struct LiminalTextView: NSViewRepresentable {
             )
             let target = CursorMotionEngine.newOffset(
                 for: motion,
-                in: textView.string,
+                source: document.session.source,
                 visibleCharRange: charRange,
                 count: count
             )
@@ -794,7 +798,7 @@ struct LiminalTextView: NSViewRepresentable {
                 ) else { return }
                 let target = CursorMotionEngine.newOffset(
                     for: motion,
-                    in: textView.string,
+                    source: document.session.source,
                     displayLineRange: lineRange
                 )
                 setCursorAt(utf16Location: target)
@@ -925,7 +929,7 @@ struct LiminalTextView: NSViewRepresentable {
 
             guard let nsRange = LiminalTextView.byteRangeToNSRange(
                 location.markerByteRange,
-                in: textView.string
+                in: document.session.source
             ) else { return }
 
             // Step 1: structural CST edit. `session.lastTree` advances;
@@ -1026,7 +1030,7 @@ struct LiminalTextView: NSViewRepresentable {
             guard let textView,
                   let byteRange = LiminalTextView.utf16RangeToByteRange(
                       NSRange(location: utf16Index, length: 0),
-                      in: textView.string
+                      in: document.session.source
                   )
             else { return false }
             return activateReference(
@@ -1104,7 +1108,7 @@ struct LiminalTextView: NSViewRepresentable {
             document.beginInsertSession(at: cursor)
             let plan = CursorMotionEngine.planInsertEntry(
                 for: position,
-                in: textView.string,
+                source: document.session.source,
                 cursor: cursor
             )
             if let edit = plan.edit,
@@ -1177,10 +1181,9 @@ struct LiminalTextView: NSViewRepresentable {
                 // source-side projection that structural paste also
                 // adapts from.
                 guard ensureForestIsLive(), let forest = cstForest else { return nil }
-                let map = OffsetMap(source: textView.string)
-                guard let r = map.nsRange(
-                    forByteStart: forest.byteRange.start.rawValue,
-                    length: forest.byteRange.length.rawValue
+                guard let r = LiminalTextView.byteRangeToNSRange(
+                    forest.byteRange,
+                    in: document.session.source
                 ), r.length > 0 else { return nil }
                 guard let capture = try? StructuralCSTSelectionCapture.capture(
                     forest: forest,
@@ -1281,7 +1284,7 @@ struct LiminalTextView: NSViewRepresentable {
             for edit in edits {
                 guard let nsRange = LiminalTextView.byteRangeToNSRange(
                     edit.range,
-                    in: textView.string
+                    in: document.session.source
                 ) else {
                     preconditionFailure("Undo patch range could not be mapped into NSTextView text")
                 }
@@ -1338,7 +1341,7 @@ struct LiminalTextView: NSViewRepresentable {
             structuralPayloadData: Data? = nil
         ) -> [TextEdit] {
             guard let textView, !ranges.isEmpty else { return [] }
-            let sourceBefore = textView.string
+            let sourceBefore = document.session.source
             let edits = ranges
                 .filter { $0.length > 0 }
                 .map { textEdit(for: $0, replacement: "", in: sourceBefore) }
@@ -1362,7 +1365,7 @@ struct LiminalTextView: NSViewRepresentable {
         private func textEdit(
             for range: NSRange,
             replacement: String,
-            in source: String
+            in source: CambiumSource
         ) -> TextEdit {
             guard let byteRange = LiminalTextView.utf16RangeToByteRange(
                 range,
@@ -1392,7 +1395,7 @@ struct LiminalTextView: NSViewRepresentable {
             let cursor = textView.selectedRange().location
             let result = OperatorRange.resolve(
                 op: op, target: target,
-                in: textView.string,
+                in: document.session.source,
                 cursor: cursor,
                 count: count
             )
@@ -1481,7 +1484,7 @@ struct LiminalTextView: NSViewRepresentable {
             let edit = textEdit(
                 for: plan.range,
                 replacement: plan.replacement,
-                in: textView.string
+                in: document.session.source
             )
             if textView.shouldChangeText(
                 in: plan.range,
@@ -1540,7 +1543,7 @@ struct LiminalTextView: NSViewRepresentable {
             }
             let cursor = textView.selectedRange().location
             guard let before = document.makeUndoSnapshot(cursor: cursor) else { return }
-            let oldSource = textView.string
+            let oldSource = document.session.source
             let cursorByteOffset = TextSize(UInt32(cursorByte))
             let targetScope: StructuralCSTPasteTargetScope = switch mode {
             case .block:
@@ -1828,7 +1831,7 @@ struct LiminalTextView: NSViewRepresentable {
                 start: TextSize(UInt32(max(0, byteOffset))),
                 length: TextSize(0)
             )
-            guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: textView.string)
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: document.session.source)
             else { return }
             setCursorAt(utf16Location: nsRange.location)
             textView.scrollRangeToVisible(NSRange(location: nsRange.location, length: 0))
@@ -1847,7 +1850,7 @@ struct LiminalTextView: NSViewRepresentable {
             let cursorNSRange = NSRange(location: utf16, length: 0)
             return LiminalTextView.utf16RangeToByteRange(
                 cursorNSRange,
-                in: textView.string
+                in: document.session.source
             )?.lowerBound
         }
 
@@ -1857,7 +1860,7 @@ struct LiminalTextView: NSViewRepresentable {
                 start: TextSize(UInt32(max(0, byteOffset))),
                 length: TextSize(UInt32(0))
             )
-            guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: textView.string)
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: document.session.source)
             else { return }
             setCursorAt(utf16Location: nsRange.location)
         }
@@ -1920,7 +1923,7 @@ struct LiminalTextView: NSViewRepresentable {
             case .blockwise:
                 let (line, column) = lineAndColumn(
                     forUTF16: cursor,
-                    in: textView.string as NSString
+                    in: document.session.source
                 )
                 visualBlockAnchor = (line, column)
                 visualAnchorUTF16 = nil
@@ -1965,7 +1968,7 @@ struct LiminalTextView: NSViewRepresentable {
             let nsString = textView.string as NSString
             let clampedHead = max(0, min(head, nsString.length))
             visualHeadUTF16 = clampedHead
-            let (headLine, headCol) = lineAndColumn(forUTF16: clampedHead, in: nsString)
+            let (headLine, headCol) = lineAndColumn(forUTF16: clampedHead, in: document.session.source)
             let minLine = min(anchor.line, headLine)
             let maxLine = max(anchor.line, headLine)
             let minCol = min(anchor.column, headCol)
@@ -2006,8 +2009,7 @@ struct LiminalTextView: NSViewRepresentable {
                 return
             }
             let utf16Cursor = textView.selectedRange().location
-            let source = textView.string
-            let byte = byteOffset(forUTF16: utf16Cursor, in: source)
+            let byte = Int(document.session.source.byteOffset(forUTF16: utf16Cursor).rawValue)
             guard let forest = LiminalForest.cstVisualEntry(
                 at: TextSize(UInt32(byte)),
                 in: tree
@@ -2759,7 +2761,7 @@ struct LiminalTextView: NSViewRepresentable {
         /// convention where the cursor sits on the moving end.
         private func mirrorCSTSelection() {
             guard let textView, let forest = cstForest else { return }
-            let map = OffsetMap(source: textView.string)
+            let source = document.session.source
             let byteRange = forest.byteRange
             let relativeRanges: [CambiumCore.TextRange]
             if let capture = try? StructuralCSTSelectionCapture.capture(
@@ -2773,16 +2775,16 @@ struct LiminalTextView: NSViewRepresentable {
                 ]
             }
 
-            let nsRanges = relativeRanges.compactMap { relativeRange in
-                let absoluteStart = byteRange.start + relativeRange.start
-                return map.nsRange(
-                    forByteStart: absoluteStart.rawValue,
-                    length: relativeRange.length.rawValue
+            let nsRanges = relativeRanges.compactMap { relativeRange -> NSRange? in
+                let absoluteRange = CambiumCore.TextRange(
+                    start: byteRange.start + relativeRange.start,
+                    length: relativeRange.length
                 )
+                return LiminalTextView.byteRangeToNSRange(absoluteRange, in: source)
             }
             textView.cstSelectionRanges = nsRanges
 
-            let headEdge = computeCSTHeadEdge(forest: forest, map: map)
+            let headEdge = computeCSTHeadEdge(forest: forest, source: source)
             textView.cstHeadEdge = headEdge
 
             // Park caret at the head edge so the blinking insertion
@@ -2810,33 +2812,19 @@ struct LiminalTextView: NSViewRepresentable {
         /// head's child UTF-16 range plus which side to draw on.
         private func computeCSTHeadEdge(
             forest: LiminalForest,
-            map: OffsetMap
+            source: CambiumSource
         ) -> VimTextView.CSTHeadEdge? {
             guard !forest.isSingleton else { return nil }
             let headChildRange = forest.parent.withCursor { cursor in
                 cursor.childTextRange(at: forest.headChildIndex)
             }
-            guard let nsHeadRange = map.nsRange(
-                forByteStart: headChildRange.start.rawValue,
-                length: headChildRange.length.rawValue
-            ) else { return nil }
+            guard let nsHeadRange = LiminalTextView.byteRangeToNSRange(headChildRange, in: source)
+            else { return nil }
             let edge: VimTextView.CSTHeadEdge.Edge =
                 forest.headChildIndex < forest.anchorChildIndex
                     ? .leading
                     : .trailing
             return VimTextView.CSTHeadEdge(headRange: nsHeadRange, edge: edge)
-        }
-
-        /// Convert a UTF-16 cursor location to a UTF-8 byte offset by
-        /// walking the source's UTF-8 view. Called once per CST entry,
-        /// so the O(cursor position) walk is acceptable; if a hot path
-        /// ever needs this, fold it into `OffsetMap` as the reverse
-        /// direction.
-        private func byteOffset(forUTF16 utf16Cursor: Int, in source: String) -> Int {
-            let utf16View = source.utf16
-            let clamped = max(0, min(utf16Cursor, utf16View.count))
-            let idx16 = utf16View.index(utf16View.startIndex, offsetBy: clamped)
-            return source.utf8.distance(from: source.utf8.startIndex, to: idx16)
         }
 
         // MARK: - Line geometry helpers (UTF-16, NSString-based)
@@ -2858,30 +2846,29 @@ struct LiminalTextView: NSViewRepresentable {
 
         /// (line index, column) for a UTF-16 offset. Line index is
         /// 0-based; column is 0-based UTF-16 offset within the line.
+        /// 0-based line + UTF-16 column from a UTF-16 offset. Used by
+        /// visual-block selection (anchor / head row + col). Pre-rope,
+        /// this walked `nsString.getLineStart` once per line up to the
+        /// target — O(line_count) per call (~10k AppKit calls to enter
+        /// visualBlock on a 10k-line doc). Rope queries collapse the
+        /// walk to O(log N) via chunk-level newline aggregates.
+        ///
+        /// Line semantics: rope counts `\n` byte breaks (matching the
+        /// editor's storage). NSString.getLineStart additionally
+        /// recognizes U+2028 / U+2029 / NEL as line breaks; for typical
+        /// markdown content the answers agree, but exotic line
+        /// separators may differ by 1.
         private func lineAndColumn(
             forUTF16 utf16Location: Int,
-            in nsString: NSString
+            in source: CambiumSource
         ) -> (line: Int, column: Int) {
-            let safe = max(0, min(utf16Location, nsString.length))
-            var line = 0
-            var cursor = 0
-            while cursor < safe {
-                var s = 0, e = 0
-                nsString.getLineStart(
-                    &s, end: &e, contentsEnd: nil,
-                    for: NSRange(location: cursor, length: 0)
-                )
-                if e <= cursor || e > safe { break }
-                cursor = e
-                line += 1
-            }
-            // Column: distance from this line's start.
-            var lineStart = 0
-            nsString.getLineStart(
-                &lineStart, end: nil, contentsEnd: nil,
-                for: NSRange(location: safe, length: 0)
-            )
-            return (line, safe - lineStart)
+            let safeUTF16 = max(0, min(utf16Location, source.utf16Count))
+            let byteOffset = source.byteOffset(forUTF16: safeUTF16)
+            let (line1Based, _) = source.lineColumn(forByte: byteOffset)
+            let line = line1Based - 1
+            let lineStartByte = source.byteOffset(forLine: line1Based, column: 1) ?? TextSize(0)
+            let lineStartUTF16 = source.utf16Offset(forByte: lineStartByte)
+            return (line, safeUTF16 - lineStartUTF16)
         }
 
         /// Walk to the Nth line from the start of the document and
@@ -2944,7 +2931,7 @@ struct LiminalTextView: NSViewRepresentable {
             else { return }
 
             let storageLen = storage.length
-            let source = storage.string
+            let source = document.session.source
             let parsed = document.session.parseResult
             let root = document.currentRootSyntax
 
@@ -2954,36 +2941,29 @@ struct LiminalTextView: NSViewRepresentable {
                 paintScopes = [
                     HighlightPaintScope(
                         byteRange: nil,
-                        nsRange: NSRange(location: 0, length: storageLen),
-                        offsetMap: OffsetMap(source: source)
+                        nsRange: NSRange(location: 0, length: storageLen)
                     )
                 ]
             case .parserDirtyRange:
                 if let changed = parsed?.changedByteRange,
-                   let paintScope = Self.makeHighlightPaintScope(
-                    source: source,
-                    byteRange: changed
-                   )
+                   let nsRange = LiminalTextView.byteRangeToNSRange(changed, in: source)
                 {
-                    paintScopes = [paintScope]
+                    paintScopes = [HighlightPaintScope(byteRange: changed, nsRange: nsRange)]
                 } else {
                     paintScopes = [
                         HighlightPaintScope(
                             byteRange: nil,
-                            nsRange: NSRange(location: 0, length: storageLen),
-                            offsetMap: OffsetMap(source: source)
+                            nsRange: NSRange(location: 0, length: storageLen)
                         )
                     ]
                 }
             case .explicitByteRanges(let ranges):
                 paintScopes = ranges.map { range in
-                    guard let paintScope = Self.makeHighlightPaintScope(
-                        source: source,
-                        byteRange: range
-                    ) else {
+                    guard let nsRange = LiminalTextView.byteRangeToNSRange(range, in: source)
+                    else {
                         preconditionFailure("Explicit highlight repaint range is outside the text storage")
                     }
-                    return paintScope
+                    return HighlightPaintScope(byteRange: range, nsRange: nsRange)
                 }
             }
             guard !paintScopes.isEmpty else {
@@ -3007,10 +2987,8 @@ struct LiminalTextView: NSViewRepresentable {
                     highlighter.spans(for: root, in: $0)
                 } ?? highlighter.spans(for: root)
                 for span in spans {
-                    guard let nsRange = paintScope.offsetMap.nsRange(
-                        forByteStart: span.range.start.rawValue,
-                        length: span.range.length.rawValue
-                    ) else { continue }
+                    guard let nsRange = LiminalTextView.byteRangeToNSRange(span.range, in: source)
+                    else { continue }
                     let attrs = theme.attributes(
                         for: span.category,
                         modifiers: span.modifiers
@@ -3023,39 +3001,6 @@ struct LiminalTextView: NSViewRepresentable {
             isApplyingProgrammaticEdit = false
 
             textView.typingAttributes = theme.defaultAttributes
-        }
-
-        private static func makeHighlightPaintScope(
-            source: String,
-            byteRange: CambiumCore.TextRange
-        ) -> HighlightPaintScope? {
-            guard let map = makeScopedOffsetMap(source: source, byteRange: byteRange),
-                  let nsRange = map.nsRange(
-                    forByteStart: byteRange.start.rawValue,
-                    length: byteRange.length.rawValue
-                  )
-            else { return nil }
-            return HighlightPaintScope(
-                byteRange: byteRange,
-                nsRange: nsRange,
-                offsetMap: map
-            )
-        }
-
-        /// Build a scope-local OffsetMap covering exactly `byteRange`.
-        /// Returns `nil` when `byteRange` is degenerate or falls outside
-        /// the source's UTF-8 byte count — in which case
-        /// ``applyHighlights(in:)`` falls back to a full-document map.
-        private static func makeScopedOffsetMap(
-            source: String,
-            byteRange: CambiumCore.TextRange
-        ) -> OffsetMap? {
-            let lower = Int(byteRange.start.rawValue)
-            let upper = lower + Int(byteRange.length.rawValue)
-            guard lower >= 0, upper >= lower, upper <= source.utf8.count else {
-                return nil
-            }
-            return OffsetMap(source: source, byteRange: lower..<upper)
         }
 
         /// Expand an NSRange to the line(s) it touches, plus one full
@@ -3107,53 +3052,47 @@ struct LiminalTextView: NSViewRepresentable {
     }
 
     // MARK: - Byte ↔ UTF-16 range conversion
+    //
+    // Both helpers query the rope (`CambiumSource`) directly via
+    // `byteOffset(forUTF16:)` / `utf16Offset(forByte:)`, which are O(log N)
+    // per call. Pass `document.session.source` at every observation point
+    // post-`applyTextEdits`; the only pre-edit-window caller is
+    // `textStorageDidProcessEditing`, which holds the pre-edit `session.source`
+    // explicitly. `textView.string` is not a substitute — it would defeat
+    // the rope's O(log N) contract by routing through `String.utf8.index`.
 
     nonisolated static func utf16RangeToByteRange(
         _ nsRange: NSRange,
-        in source: String
+        in source: CambiumSource
     ) -> Range<Int>? {
-        let utf16 = source.utf16
         guard nsRange.location >= 0,
               nsRange.length >= 0,
-              nsRange.location <= utf16.count,
-              nsRange.location + nsRange.length <= utf16.count
+              nsRange.location + nsRange.length <= source.utf16Count
         else { return nil }
-
-        let startUTF16 = utf16.index(utf16.startIndex, offsetBy: nsRange.location)
-        let endUTF16 = utf16.index(startUTF16, offsetBy: nsRange.length)
-        guard let startStr = String.Index(startUTF16, within: source),
-              let endStr = String.Index(endUTF16, within: source)
+        let startByte = source.byteOffset(forUTF16: nsRange.location)
+        let endByte = source.byteOffset(forUTF16: nsRange.location + nsRange.length)
+        // Surrogate-mid guard: the rope's translation is only well-defined
+        // at scalar boundaries; mid-surrogate input round-trips to a
+        // different UTF-16 offset. Preserves the prior String-helper's
+        // nil-on-surrogate-mid contract — see EditorViewModelTests.
+        // utf16InsideSurrogate.
+        guard source.utf16Offset(forByte: startByte) == nsRange.location,
+              source.utf16Offset(forByte: endByte) == nsRange.location + nsRange.length
         else { return nil }
-
-        let startByte = source.utf8.distance(from: source.utf8.startIndex, to: startStr)
-        let endByte = source.utf8.distance(from: source.utf8.startIndex, to: endStr)
-        return startByte..<endByte
+        return Int(startByte.rawValue)..<Int(endByte.rawValue)
     }
 
     nonisolated static func byteRangeToNSRange(
         _ range: CambiumCore.TextRange,
-        in source: String
+        in source: CambiumSource
     ) -> NSRange? {
         let startByte = Int(range.start.rawValue)
         let endByte = startByte + Int(range.length.rawValue)
-        let utf8 = source.utf8
-        guard startByte >= 0, endByte >= startByte, endByte <= utf8.count else {
+        guard startByte >= 0, endByte >= startByte, endByte <= source.byteCount else {
             return nil
         }
-
-        let startUTF8 = utf8.index(utf8.startIndex, offsetBy: startByte)
-        let endUTF8 = utf8.index(utf8.startIndex, offsetBy: endByte)
-        guard let startStr = startUTF8.samePosition(in: source),
-              let endStr = endUTF8.samePosition(in: source)
-        else { return nil }
-
-        let utf16 = source.utf16
-        guard let startUTF16Idx = startStr.samePosition(in: utf16),
-              let endUTF16Idx = endStr.samePosition(in: utf16)
-        else { return nil }
-
-        let startUTF16 = utf16.distance(from: utf16.startIndex, to: startUTF16Idx)
-        let endUTF16 = utf16.distance(from: utf16.startIndex, to: endUTF16Idx)
+        let startUTF16 = source.utf16Offset(forByte: range.start)
+        let endUTF16 = source.utf16Offset(forByte: TextSize(UInt32(endByte)))
         return NSRange(location: startUTF16, length: endUTF16 - startUTF16)
     }
 }

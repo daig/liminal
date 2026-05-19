@@ -760,11 +760,21 @@ enum StructuralCSTPastePlanner {
         into source: String,
         atRelativeByteOffset relativeByteOffset: Int
     ) -> String {
-        let index = source.utf8.index(
-            source.startIndex,
-            offsetBy: relativeByteOffset
-        )
-        return String(source[..<index]) + insertion + String(source[index...])
+        // Hotspot #16: replace O(N) `utf8.index(offsetBy:)` walk with
+        // direct byte-buffer slice via `withContiguousStorageIfAvailable`.
+        // The fast path is O(1) for the byte-offset → buffer-index
+        // conversion; the slice+concat work is inherent to building the
+        // returned string and unchanged.
+        return source.utf8.withContiguousStorageIfAvailable { buffer -> String in
+            let prefix = String(decoding: UnsafeBufferPointer(rebasing: buffer[..<relativeByteOffset]), as: UTF8.self)
+            let suffix = String(decoding: UnsafeBufferPointer(rebasing: buffer[relativeByteOffset...]), as: UTF8.self)
+            return prefix + insertion + suffix
+        } ?? {
+            let bytes = Array(source.utf8)
+            let prefix = String(decoding: bytes[..<relativeByteOffset], as: UTF8.self)
+            let suffix = String(decoding: bytes[relativeByteOffset...], as: UTF8.self)
+            return prefix + insertion + suffix
+        }()
     }
 
     private static func needsLeadingLineBreak(
@@ -772,11 +782,22 @@ enum StructuralCSTPastePlanner {
         atRelativeByteOffset relativeByteOffset: Int
     ) -> Bool {
         guard relativeByteOffset > 0 else { return false }
-        let index = source.utf8.index(
-            source.startIndex,
-            offsetBy: relativeByteOffset
-        )
-        return !endsWithLineBreak(String(source[..<index]))
+        // Hotspot #16: same contiguous-storage trick. We only need the
+        // last byte before the offset to decide line-break-ness, so the
+        // slice is tiny — but the original `utf8.index(offsetBy:)` walked
+        // the full prefix to land there.
+        return source.utf8.withContiguousStorageIfAvailable { buffer -> Bool in
+            let lastByte = buffer[relativeByteOffset - 1]
+            return lastByte != 0x0A && lastByte != 0x0D
+        } ?? {
+            var iter = source.utf8.makeIterator()
+            var last: UInt8 = 0
+            for _ in 0..<relativeByteOffset {
+                guard let b = iter.next() else { break }
+                last = b
+            }
+            return last != 0x0A && last != 0x0D
+        }()
     }
 
     private static func listMarkerText(

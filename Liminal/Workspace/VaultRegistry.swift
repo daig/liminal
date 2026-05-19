@@ -512,7 +512,7 @@ public final class VaultEntry: ObservableObject {
     public func indexCurrentDocument(
         _ url: URL,
         rootSyntax: RootSyntax,
-        content: String
+        content: CambiumSource
     ) {
         let canonical = VaultRegistry.canonicalNoteURL(for: url)
         let fileMtime: Date
@@ -526,7 +526,9 @@ public final class VaultEntry: ObservableObject {
             let (mtime, byteSize) = VaultIndexer.diskFingerprint(at: canonical)
             fileMtime = mtime
             fileByteSize = byteSize
-            contentHash = VaultCacheFormat.contentHash(Array(content.utf8))
+            contentHash = content.withContiguousUTF8 {
+                VaultCacheFormat.contentHash(Array($0))
+            }
         }
         let metadata = LiminalNoteMetadata(
             url: canonical,

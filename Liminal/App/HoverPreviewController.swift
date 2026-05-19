@@ -155,7 +155,7 @@ final class HoverPreviewController {
         let nsRange = NSRange(location: clamped, length: 0)
         guard let byteRange = LiminalTextView.utf16RangeToByteRange(
             nsRange,
-            in: textView.string
+            in: document.session.source
         ) else { return nil }
 
         let byteOffset = TextSize(UInt32(byteRange.lowerBound))
@@ -173,7 +173,7 @@ final class HoverPreviewController {
             in: entry.linkIndex
         ) else { return nil }
 
-        let rect = referenceRect(for: reference, in: textView)
+        let rect = referenceRect(for: reference, in: textView, source: document.session.source)
         return ResolvedHover(target: target, anchorRect: rect)
     }
 
@@ -212,12 +212,12 @@ final class HoverPreviewController {
         }
     }
 
-    private func referenceRect(for reference: DocumentReference, in textView: NSTextView) -> NSRect {
+    private func referenceRect(for reference: DocumentReference, in textView: NSTextView, source: CambiumSource) -> NSRect {
         guard let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer,
               let nsRange = LiminalTextView.byteRangeToNSRange(
                   reference.sourceRange,
-                  in: textView.string
+                  in: source
               )
         else { return .zero }
         let glyphRange = layoutManager.glyphRange(
@@ -328,12 +328,13 @@ final class HoverPreviewController {
             return HoverPreviewSnapshot.unavailable(target: target, theme: theme)
         }
 
+        let contentSource = CambiumSource(content)
         let parsed: LiminalParseResult
         if let cached = lastParse, cached.url == canonical, cached.content == content {
             parsed = cached.parsed
         } else {
             do {
-                parsed = try LiminalParser().parse(CambiumSource(content))
+                parsed = try LiminalParser().parse(contentSource)
                 lastParse = ParseCacheEntry(url: canonical, content: content, parsed: parsed)
             } catch {
                 return HoverPreviewSnapshot.unavailable(target: target, theme: theme)
@@ -352,11 +353,11 @@ final class HoverPreviewController {
         }
 
         let (sliceStart, sliceEnd) = HoverPreviewController.computeSliceRange(
-            in: content,
+            in: contentSource,
             anchorByteOffset: anchorByteOffset
         )
         let sliceText = HoverPreviewController.sliceContent(
-            content,
+            contentSource,
             byteStart: sliceStart,
             byteEnd: sliceEnd
         )
@@ -413,50 +414,50 @@ final class HoverPreviewController {
     /// shown above the anchor and the anchor would be buried in
     /// the middle).
     nonisolated static func computeSliceRange(
-        in content: String,
+        in source: CambiumSource,
         anchorByteOffset: Int,
         maxLines: Int = 12,
         maxBytes: Int = 2048
     ) -> (Int, Int) {
-        let bytes = Array(content.utf8)
-        let total = bytes.count
+        let total = source.byteCount
         guard total > 0 else { return (0, 0) }
         let anchor = max(0, min(anchorByteOffset, total))
 
-        let start = lineStartByte(in: bytes, atOrBefore: anchor)
+        // Walk back from anchor to its line start. lineColumn returns
+        // 1-based (line, byte-column-within-line); the line-start byte
+        // is `anchor - (column - 1)`.
+        let (anchorLine, anchorColumn) = source.lineColumn(
+            forByte: TextSize(UInt32(anchor))
+        )
+        let start = anchor - (anchorColumn - 1)
 
-        var end = start
-        var linesSeen = 0
-        while end < total {
-            if bytes[end] == 0x0A {
-                linesSeen += 1
-                end += 1
-                if linesSeen >= maxLines { break }
-            } else {
-                end += 1
-            }
-            if (end - start) >= maxBytes { break }
+        // Walk forward up to maxLines line breaks or maxBytes bytes
+        // (whichever first). lineCount = number of `\n` bytes; valid
+        // line indices are 1...lineCount+1.
+        let totalLines = source.lineCount + 1
+        let targetLine = min(anchorLine + maxLines, totalLines + 1)
+        let lineLimitByte: Int
+        if let nextLineStart = source.byteOffset(forLine: targetLine, column: 1) {
+            lineLimitByte = Int(nextLineStart.rawValue)
+        } else {
+            lineLimitByte = total
         }
+        let byteLimit = min(start + maxBytes, total)
+        let end = min(lineLimitByte, byteLimit)
         return (start, end)
     }
 
-    nonisolated private static func lineStartByte(in bytes: [UInt8], atOrBefore offset: Int) -> Int {
-        var i = min(offset, bytes.count)
-        while i > 0 && bytes[i - 1] != 0x0A { i -= 1 }
-        return i
-    }
-
-    nonisolated private static func lineEndByte(in bytes: [UInt8], atOrAfter offset: Int) -> Int {
-        var i = min(offset, bytes.count)
-        while i < bytes.count && bytes[i] != 0x0A { i += 1 }
-        return i
-    }
-
-    nonisolated static func sliceContent(_ content: String, byteStart: Int, byteEnd: Int) -> String {
-        let bytes = Array(content.utf8)
-        let clampedStart = max(0, min(byteStart, bytes.count))
-        let clampedEnd = max(clampedStart, min(byteEnd, bytes.count))
-        return String(decoding: bytes[clampedStart..<clampedEnd], as: UTF8.self)
+    nonisolated static func sliceContent(_ source: CambiumSource, byteStart: Int, byteEnd: Int) -> String {
+        let total = source.byteCount
+        let clampedStart = max(0, min(byteStart, total))
+        let clampedEnd = max(clampedStart, min(byteEnd, total))
+        guard clampedEnd > clampedStart else { return "" }
+        return source.substring(
+            in: TextRange(
+                start: TextSize(UInt32(clampedStart)),
+                end: TextSize(UInt32(clampedEnd))
+            )
+        )
     }
 
     nonisolated static func buildAttributedString(
@@ -469,15 +470,19 @@ final class HoverPreviewController {
         let fullRange = NSRange(location: 0, length: (sliceText as NSString).length)
         attr.setAttributes(theme.defaultAttributes, range: fullRange)
 
-        let offsetMap = OffsetMap(source: sliceText)
+        // Build a transient rope over the slice (typically paragraph-sized,
+        // so construction is microseconds) and translate each span via the
+        // rope's O(log N) queries.
+        let sliceSource = CambiumSource(sliceText)
         for span in spans {
             let localStartByte = Int(span.range.start.rawValue) - sliceByteStart
             let localLengthByte = Int(span.range.length.rawValue)
-            guard localStartByte >= 0,
-                  let nsRange = offsetMap.nsRange(
-                      forByteStart: UInt32(localStartByte),
-                      length: UInt32(localLengthByte)
-                  )
+            guard localStartByte >= 0 else { continue }
+            let localRange = CambiumCore.TextRange(
+                start: TextSize(UInt32(localStartByte)),
+                length: TextSize(UInt32(localLengthByte))
+            )
+            guard let nsRange = LiminalTextView.byteRangeToNSRange(localRange, in: sliceSource)
             else { continue }
             let attributes = theme.attributes(
                 for: span.category,

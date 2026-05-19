@@ -20,7 +20,7 @@ public final class CSTInspector: ObservableObject {
     public func refresh(
         cursorByteOffset: Int?,
         root: RootSyntax?,
-        source: String
+        source: CambiumSource
     ) {
         guard let offset = cursorByteOffset, let root else {
             if snapshot != nil { snapshot = nil }
@@ -39,7 +39,7 @@ public final class CSTInspector: ObservableObject {
     public static func makeSnapshot(
         byteOffset: TextSize,
         root: RootSyntax,
-        source: String
+        source: CambiumSource
     ) -> CSTInspectionSnapshot {
         let position = makeCursorPosition(byteOffset: byteOffset, in: source)
         var breadcrumb: [CSTBreadcrumbStep] = []
@@ -135,25 +135,15 @@ public final class CSTInspector: ObservableObject {
 
     /// Compute 1-based (line, column) from a UTF-8 byte offset in
     /// `source`. Tabs aren't expanded; column counts bytes within the
-    /// line — fine for diagnostic display.
+    /// line — fine for diagnostic display. Delegates to the rope's
+    /// O(log N) `lineColumn(forByte:)` query, which uses chunk-level
+    /// line aggregates rather than walking from byte 0.
     private static func makeCursorPosition(
         byteOffset: TextSize,
-        in source: String
+        in source: CambiumSource
     ) -> CSTCursorPosition {
-        let utf8 = source.utf8
-        let target = Int(byteOffset.rawValue)
-        var line = 1
-        var lastLineStart = 0
-        var byteIndex = 0
-        for byte in utf8 {
-            if byteIndex >= target { break }
-            if byte == 0x0A { // '\n'
-                line += 1
-                lastLineStart = byteIndex + 1
-            }
-            byteIndex += 1
-        }
-        let column = max(1, byteIndex - lastLineStart + 1)
+        let clamped = TextSize(UInt32(min(Int(byteOffset.rawValue), source.byteCount)))
+        let (line, column) = source.lineColumn(forByte: clamped)
         return CSTCursorPosition(
             byteOffset: byteOffset,
             line: line,

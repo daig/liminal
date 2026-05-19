@@ -150,6 +150,11 @@ struct StructuralCSTSourceProjection: Equatable {
     func logicalText(from source: String) -> String {
         guard !source.isEmpty, !removalRanges.isEmpty else { return source }
 
+        // Build the rope once and slice via `substring(in:)` for each
+        // surviving range. Amortizes the O(source.byteCount) build over
+        // M+1 slices, replacing M+1 O(source.byteCount) `utf8.index`
+        // walks. Hotspot #15.
+        let rope = CambiumSource(source)
         var output = ""
         var cursorByte = 0
         for removal in removalRanges {
@@ -157,7 +162,7 @@ struct StructuralCSTSourceProjection: Equatable {
             let endByte = Int(removal.end.rawValue)
             precondition(cursorByte <= startByte)
             Self.appendBytes(
-                source,
+                rope,
                 startByte: cursorByte,
                 endByte: startByte,
                 to: &output
@@ -165,7 +170,7 @@ struct StructuralCSTSourceProjection: Equatable {
             cursorByte = endByte
         }
         Self.appendBytes(
-            source,
+            rope,
             startByte: cursorByte,
             endByte: source.utf8.count,
             to: &output
@@ -281,17 +286,18 @@ struct StructuralCSTSourceProjection: Equatable {
     }
 
     private static func appendBytes(
-        _ source: String,
+        _ source: CambiumSource,
         startByte: Int,
         endByte: Int,
         to output: inout String
     ) {
         guard endByte > startByte else { return }
         precondition(startByte >= 0)
-        precondition(endByte <= source.utf8.count)
-        let start = source.utf8.index(source.startIndex, offsetBy: startByte)
-        let end = source.utf8.index(source.startIndex, offsetBy: endByte)
-        output += String(source[start..<end])
+        precondition(endByte <= source.byteCount)
+        output += source.substring(in: CambiumCore.TextRange(
+            start: TextSize(UInt32(startByte)),
+            end: TextSize(UInt32(endByte))
+        ))
     }
 
     private static func blockQuotePrefixRemovalRanges(

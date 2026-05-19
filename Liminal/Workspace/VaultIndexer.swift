@@ -98,8 +98,9 @@ enum VaultIndexer {
                 continue
             }
             do {
-                let parsed = try parser.parse(CambiumSource(content))
-                let index = DocumentIndex.build(root: parsed.rootSyntax, source: content)
+                let source = CambiumSource(content)
+                let parsed = try parser.parse(source)
+                let index = DocumentIndex.build(root: parsed.rootSyntax, source: source)
                 results.append(ScanResult(
                     url: url,
                     fileMtime: mtime,

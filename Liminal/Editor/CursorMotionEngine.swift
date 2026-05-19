@@ -1,17 +1,22 @@
+import CambiumCore
 import Foundation
 
-/// Pure cursor-motion math. Given a text + UTF-16 offset, returns the
-/// new offset after applying a `CursorMotion`. AppKit-free so unit tests
-/// can exercise every motion without spinning up an NSTextView.
+/// Pure cursor-motion math. Given a `CambiumSource` rope + a UTF-16
+/// offset, returns the new offset after applying a `CursorMotion`.
+/// AppKit-free so unit tests can exercise every motion without spinning
+/// up an NSTextView.
 ///
 /// UTF-16 offsets are the lingua franca with NSTextView/NSString. The
-/// engine bridges to NSString for line-boundary work where that's the
-/// natural primitive, and walks the UTF-16 view directly for character
-/// categorization in word motions.
-/// Computed action for entering insert mode at a particular
-/// position. The Coordinator applies the optional pre-edit (via
-/// `replaceCharacters`, which fires the textStorage delegate so
-/// the parser stays in sync) and then sets the cursor.
+/// engine queries the rope's line aggregates for line motions (O(log N))
+/// and walks `UTF16Cursor` for character categorization in word/line
+/// motions (O(1) per step within a chunk, amortized cheap across
+/// chunk boundaries).
+///
+/// Line-break semantics: the rope counts only `\n`. `\r\n` is detected
+/// via a byte probe in `lineInfo`; bare `\r` is treated as content (no
+/// line break). Exotic separators (U+2028, U+2029, NEL) are not
+/// recognized — pasted content using them will see subtly different
+/// line motion than NSString-based AppKit text.
 public struct InsertEntryPlan: Equatable, Sendable {
     public let edit: Edit?
     /// Cursor's UTF-16 position after `edit` (if any) is applied.
@@ -26,14 +31,14 @@ public struct InsertEntryPlan: Equatable, Sendable {
 
 enum CursorMotionEngine {
 
+    /// Resolve a vim-style motion to a UTF-16 offset.
     static func newOffset(
         for motion: CursorMotion,
-        in text: String,
+        source: CambiumSource,
         from offset: Int,
         count: Int = 1
     ) -> Int {
-        let nsString = text as NSString
-        let textLength = nsString.length
+        let textLength = source.utf16Count
         let clampedStart = max(0, min(offset, textLength))
         let steps = max(1, count)
 
@@ -44,56 +49,51 @@ enum CursorMotionEngine {
             return min(textLength, clampedStart + steps)
         case .up:
             return verticalMove(from: clampedStart, direction: .up,
-                                count: steps, in: nsString)
+                                count: steps, in: source)
         case .down:
             return verticalMove(from: clampedStart, direction: .down,
-                                count: steps, in: nsString)
+                                count: steps, in: source)
         case .lineStart:
-            return lineInfo(at: clampedStart, in: nsString).start
+            return lineInfo(at: clampedStart, in: source).start
         case .lineFirstNonBlank:
-            return lineFirstNonBlank(at: clampedStart, in: nsString)
+            return lineFirstNonBlank(at: clampedStart, in: source)
         case .lineEnd:
-            return lineInfo(at: clampedStart, in: nsString).contentEnd
+            return lineInfo(at: clampedStart, in: source).contentEnd
         case .wordForwardStart:
             return repeatedly(steps) { current in
-                wordForwardStart(from: current, in: nsString)
+                wordForwardStart(from: current, in: source)
             }(clampedStart)
         case .wordBackward:
             return repeatedly(steps) { current in
-                wordBackward(from: current, in: nsString)
+                wordBackward(from: current, in: source)
             }(clampedStart)
         case .wordForwardEnd:
             return repeatedly(steps) { current in
-                wordForwardEnd(from: current, in: nsString)
+                wordForwardEnd(from: current, in: source)
             }(clampedStart)
         case .documentStart:
             // count == 1 (the default after vim's `gg`) targets line 1;
             // a higher count targets that absolute line number.
             let targetLine = count > 0 ? count : 1
-            let lineStart = offsetForLine(targetLine, in: nsString)
-            return lineFirstNonBlank(at: lineStart, in: nsString)
+            let lineStartOffset = offsetForLine(targetLine, in: source)
+            return lineFirstNonBlank(at: lineStartOffset, in: source)
         case .documentEnd:
             // `G` with no count targets the last line; `<N>G` targets N.
-            // Disambiguate via the controller passing `count = 0` when no
-            // count was typed — but our binding factories never pass 0, so
-            // we rely on a sentinel: count == 1 means "no explicit count"
-            // here, since `G` alone matches that. Cleaner alternative: use
-            // a separate motion case for "go to last". Pragmatic compromise
-            // for now: callers pass `count = Int.max` to mean "last line".
+            // Sentinel: count == Int.max means "last line".
             let targetLineStart: Int
             if count == Int.max {
-                targetLineStart = lineInfo(at: textLength, in: nsString).start
+                targetLineStart = lineInfo(at: textLength, in: source).start
             } else {
-                targetLineStart = offsetForLine(count, in: nsString)
+                targetLineStart = offsetForLine(count, in: source)
             }
-            return lineFirstNonBlank(at: targetLineStart, in: nsString)
+            return lineFirstNonBlank(at: targetLineStart, in: source)
         }
     }
 
-    /// Resolve a viewport-relative motion to a UTF-16 offset. The
-    /// caller hands us the visible character range from
-    /// `NSLayoutManager` and we translate to a target line, then
-    /// land on its first non-blank (vim's convention for `H`/`M`/`L`).
+    /// Resolve a viewport-relative motion (H/M/L) to a UTF-16 offset.
+    /// The caller hands us the visible character range from
+    /// `NSLayoutManager`; we translate to a target line, then land on
+    /// its first non-blank.
     ///
     /// `count`:
     ///   - `screenTop`: line `count - 1` below the top visible line.
@@ -102,23 +102,23 @@ enum CursorMotionEngine {
     ///   - `screenMiddle`: ignored (vim semantics).
     static func newOffset(
         for motion: ViewportMotion,
-        in text: String,
+        source: CambiumSource,
         visibleCharRange: NSRange,
         count: Int = 1
     ) -> Int {
-        let nsString = text as NSString
-        guard nsString.length > 0 else { return 0 }
+        let textLength = source.utf16Count
+        guard textLength > 0 else { return 0 }
         guard visibleCharRange.length > 0 else { return 0 }
 
-        let firstVisible = max(0, min(visibleCharRange.location, nsString.length - 1))
+        let firstVisible = max(0, min(visibleCharRange.location, textLength - 1))
         let lastVisible = max(
             firstVisible,
             min(visibleCharRange.location + visibleCharRange.length - 1,
-                nsString.length - 1)
+                textLength - 1)
         )
 
-        let firstLineStart = lineInfo(at: firstVisible, in: nsString).start
-        let lastLineStart = lineInfo(at: lastVisible, in: nsString).start
+        let firstLineStart = lineInfo(at: firstVisible, in: source).start
+        let lastLineStart = lineInfo(at: lastVisible, in: source).start
 
         let targetLineStart: Int
         switch motion {
@@ -128,7 +128,7 @@ enum CursorMotionEngine {
                 lines: max(0, count - 1),
                 direction: .down,
                 limitLineStart: lastLineStart,
-                in: nsString
+                in: source
             )
         case .screenBottom:
             targetLineStart = lineStart(
@@ -136,66 +136,63 @@ enum CursorMotionEngine {
                 lines: max(0, count - 1),
                 direction: .up,
                 limitLineStart: firstLineStart,
-                in: nsString
+                in: source
             )
         case .screenMiddle:
             targetLineStart = midpointLineStart(
                 between: firstLineStart,
                 and: lastLineStart,
-                in: nsString
+                in: source
             )
         }
 
-        return lineFirstNonBlank(at: targetLineStart, in: nsString)
+        return lineFirstNonBlank(at: targetLineStart, in: source)
     }
 
-    /// Resolve a display-line edge motion (`g0` / `g^` / `g$`) over
-    /// a display line whose character range the caller has already
-    /// extracted from `NSLayoutManager`. Pure logic; the layout
-    /// query lives in the Coordinator since it can't be cleanly
-    /// mocked.
+    /// Resolve a display-line edge motion (`g0` / `g^` / `g$`) over a
+    /// display line whose character range the caller has already
+    /// extracted from `NSLayoutManager`. Pure logic; the layout query
+    /// lives in the Coordinator since it can't be cleanly mocked.
     ///
     /// `down` and `up` cannot be resolved without layout metrics
-    /// (preferred-x in the destination line fragment), so this
-    /// helper traps them — the Coordinator handles those directly.
+    /// (preferred-x in the destination line fragment), so this helper
+    /// returns the start of the input range — the Coordinator handles
+    /// those motions directly.
     static func newOffset(
         for motion: DisplayLineMotion,
-        in text: String,
+        source: CambiumSource,
         displayLineRange: NSRange
     ) -> Int {
-        let nsString = text as NSString
-        let textLength = nsString.length
+        let textLength = source.utf16Count
         guard textLength > 0 else { return 0 }
         guard displayLineRange.length > 0 else { return displayLineRange.location }
 
-        let lineStart = displayLineRange.location
-        let lineEndOpen = min(lineStart + displayLineRange.length, textLength)
+        let lineStartOffset = displayLineRange.location
+        let lineEndOpen = min(lineStartOffset + displayLineRange.length, textLength)
 
         switch motion {
         case .start:
-            return lineStart
+            return lineStartOffset
         case .firstNonBlank:
-            var i = lineStart
-            while i < lineEndOpen {
-                let ch = nsString.character(at: i)
-                if !isWhitespace(ch) { break }
+            var cursor = source.utf16Cursor(at: lineStartOffset)
+            var i = lineStartOffset
+            while i < lineEndOpen, let ch = cursor.current, isWhitespace(ch) {
+                cursor.advance()
                 i += 1
             }
-            // All-whitespace display row: land at the row's end so
-            // the cursor stays on the row instead of at its start.
-            if i == lineEndOpen { return max(lineStart, lineEndOpen - 1) }
+            // All-whitespace display row: land at the row's end so the
+            // cursor stays on the row instead of at its start.
+            if i == lineEndOpen { return max(lineStartOffset, lineEndOpen - 1) }
             return i
         case .end:
-            // Land on the last *visible* character of the row. If
-            // the row terminates with a newline (a hard-wrap, not a
-            // soft one), back over it so the cursor sits on
-            // content, matching vim's `$` semantics.
+            // Land on the last visible character of the row. If the row
+            // terminates with a newline (a hard wrap), back over it.
             var end = lineEndOpen - 1
-            if end >= lineStart, end < textLength,
-               nsString.character(at: end) == 0x0A {
-                end -= 1
+            if end >= lineStartOffset, end < textLength {
+                let last = source.utf16Unit(atOffset: end)
+                if last == 0x0A { end -= 1 }
             }
-            return max(lineStart, end)
+            return max(lineStartOffset, end)
         case .down, .up:
             // Layout-bound; caller routes these through the
             // NSLayoutManager-driven path.
@@ -204,8 +201,7 @@ enum CursorMotionEngine {
     }
 
     /// Walk `lines` lines from `start` toward `direction`, but never
-    /// past `limitLineStart`. Returns the start of the resulting
-    /// line.
+    /// past `limitLineStart`. Returns the start of the resulting line.
     private enum WalkDirection { case up, down }
 
     private static func lineStart(
@@ -213,20 +209,20 @@ enum CursorMotionEngine {
         lines: Int,
         direction: WalkDirection,
         limitLineStart: Int,
-        in nsString: NSString
+        in source: CambiumSource
     ) -> Int {
         var current = start
         for _ in 0..<lines {
-            let info = lineInfo(at: current, in: nsString)
+            let info = lineInfo(at: current, in: source)
             switch direction {
             case .down:
-                guard info.end < nsString.length else { return current }
-                let nextStart = lineInfo(at: info.end, in: nsString).start
+                guard info.end < source.utf16Count else { return current }
+                let nextStart = lineInfo(at: info.end, in: source).start
                 if nextStart > limitLineStart { return current }
                 current = nextStart
             case .up:
                 guard info.start > 0 else { return current }
-                let prevStart = lineInfo(at: info.start - 1, in: nsString).start
+                let prevStart = lineInfo(at: info.start - 1, in: source).start
                 if prevStart < limitLineStart { return current }
                 current = prevStart
             }
@@ -235,21 +231,20 @@ enum CursorMotionEngine {
     }
 
     /// The line whose start offset is closest to the midpoint of
-    /// `firstLineStart` and `lastLineStart`. Walks line-by-line
-    /// from the top — exact line counts beat byte-midpoint math
-    /// because lines vary in length.
+    /// `firstLineStart` and `lastLineStart`. Walks line-by-line from
+    /// the top — exact line counts beat byte-midpoint math because
+    /// lines vary in length.
     private static func midpointLineStart(
         between firstLineStart: Int,
         and lastLineStart: Int,
-        in nsString: NSString
+        in source: CambiumSource
     ) -> Int {
         guard firstLineStart != lastLineStart else { return firstLineStart }
-        // Count total lines in the visible band.
         var lineStarts: [Int] = [firstLineStart]
         var current = firstLineStart
         while current < lastLineStart {
-            let info = lineInfo(at: current, in: nsString)
-            guard info.end < nsString.length else { break }
+            let info = lineInfo(at: current, in: source)
+            guard info.end < source.utf16Count else { break }
             current = info.end
             lineStarts.append(current)
             if current >= lastLineStart { break }
@@ -259,29 +254,27 @@ enum CursorMotionEngine {
 
     // MARK: - Insert-mode entry plans
 
-    /// Compute what the editor needs to do to enter insert mode at
-    /// the requested position: an optional pre-edit (for `o`, `O`,
-    /// `s`, `S`) and the cursor's UTF-16 position after the edit.
-    /// Pure logic; the Coordinator applies the plan against the
-    /// live `NSTextView`.
+    /// Compute what the editor needs to do to enter insert mode at the
+    /// requested position: an optional pre-edit (for `o`, `O`, `s`, `S`)
+    /// and the cursor's UTF-16 position after the edit. Pure logic;
+    /// the Coordinator applies the plan against the live `NSTextView`.
     static func planInsertEntry(
         for position: InsertPosition,
-        in text: String,
+        source: CambiumSource,
         cursor: Int
     ) -> InsertEntryPlan {
-        let nsString = text as NSString
-        let textLength = nsString.length
+        let textLength = source.utf16Count
         let safeCursor = max(0, min(cursor, textLength))
-        let info = lineInfo(at: safeCursor, in: nsString)
+        let info = lineInfo(at: safeCursor, in: source)
 
         switch position {
         case .atCursor:
             return InsertEntryPlan(edit: nil, cursorAfter: safeCursor)
 
         case .afterCursor:
-            // Vim `a` lands one cell past the cursor, but never
-            // past end-of-line content (the trailing `\n` is not
-            // an editable column).
+            // Vim `a` lands one cell past the cursor, but never past
+            // end-of-line content (the trailing `\n` is not an
+            // editable column).
             return InsertEntryPlan(
                 edit: nil,
                 cursorAfter: min(safeCursor + 1, info.contentEnd)
@@ -290,18 +283,13 @@ enum CursorMotionEngine {
         case .atLineFirstNonBlank:
             return InsertEntryPlan(
                 edit: nil,
-                cursorAfter: lineFirstNonBlank(at: safeCursor, in: nsString)
+                cursorAfter: lineFirstNonBlank(at: safeCursor, in: source)
             )
 
         case .atLineEnd:
             return InsertEntryPlan(edit: nil, cursorAfter: info.contentEnd)
 
         case .openLineBelow:
-            // Insert "\n" right after the current line's content.
-            // Whether the original line had a terminator or not,
-            // cursor lands `contentEnd + 1` so it sits on the
-            // brand-new empty line — the inserted `\n` ends that
-            // empty line in mid-doc, or trails it at EOF.
             return InsertEntryPlan(
                 edit: InsertEntryPlan.Edit(
                     range: NSRange(location: info.contentEnd, length: 0),
@@ -311,9 +299,6 @@ enum CursorMotionEngine {
             )
 
         case .openLineAbove:
-            // Insert "\n" at the start of the current line; cursor
-            // stays at that position, which is now the start of a
-            // brand-new empty line above the original.
             return InsertEntryPlan(
                 edit: InsertEntryPlan.Edit(
                     range: NSRange(location: info.start, length: 0),
@@ -323,11 +308,9 @@ enum CursorMotionEngine {
             )
 
         case .substituteChar:
-            // `s` deletes the char under cursor and enters insert
-            // mode in its place. Bounded by the line's content end
-            // — vim's `s` doesn't eat the trailing `\n`. On an
-            // empty line / past content end, this degenerates to
-            // a plain `i`.
+            // `s` deletes the char under cursor and enters insert mode.
+            // Bounded by the line's content end — vim's `s` doesn't eat
+            // the trailing `\n`.
             guard safeCursor < info.contentEnd else {
                 return InsertEntryPlan(edit: nil, cursorAfter: safeCursor)
             }
@@ -341,8 +324,8 @@ enum CursorMotionEngine {
 
         case .substituteLine:
             // `S` deletes the entire line content (preserving the
-            // line's existence — the `\n` terminator stays) and
-            // enters insert mode at the line start.
+            // line's existence — the `\n` terminator stays) and enters
+            // insert mode at the line start.
             return InsertEntryPlan(
                 edit: InsertEntryPlan.Edit(
                     range: NSRange(
@@ -356,82 +339,148 @@ enum CursorMotionEngine {
         }
     }
 
-    // MARK: - Line helpers
+    // MARK: - Line helpers (rope-native)
 
+    /// Compute (start, contentEnd, end) UTF-16 offsets for the line
+    /// containing `offset`. `contentEnd` is the position of the line
+    /// terminator (or end of doc for the last line); `end` is the
+    /// position past the terminator (i.e., start of next line, or end
+    /// of doc).
+    ///
+    /// Recognizes `\n` and `\r\n` line terminators via a byte probe at
+    /// the line end. Other separators (bare `\r`, U+2028, etc.) are
+    /// treated as content.
     private static func lineInfo(
-        at location: Int,
-        in nsString: NSString
+        at offset: Int,
+        in source: CambiumSource
     ) -> (start: Int, contentEnd: Int, end: Int) {
-        var start = 0
-        var end = 0
-        var contentEnd = 0
-        let safeLocation = max(0, min(location, nsString.length))
-        nsString.getLineStart(
-            &start,
-            end: &end,
-            contentsEnd: &contentEnd,
-            for: NSRange(location: safeLocation, length: 0)
-        )
-        return (start, contentEnd, end)
+        let totalUTF16 = source.utf16Count
+        let totalBytes = source.byteCount
+        if totalBytes == 0 { return (0, 0, 0) }
+        let safeOffset = max(0, min(offset, totalUTF16))
+        let byteOffset = source.byteOffset(forUTF16: safeOffset)
+        let (line1, _) = source.lineColumn(forByte: byteOffset)
+
+        let startByte = Int((source.byteOffset(forLine: line1, column: 1) ?? TextSize(0)).rawValue)
+        let endByte: Int
+        if let nextStart = source.byteOffset(forLine: line1 + 1, column: 1) {
+            endByte = Int(nextStart.rawValue)
+        } else {
+            endByte = totalBytes
+        }
+
+        let startUTF16 = source.utf16Offset(forByte: TextSize(UInt32(startByte)))
+        let endUTF16 = source.utf16Offset(forByte: TextSize(UInt32(endByte)))
+
+        // Detect \r\n vs \n vs no-terminator at the end of the line.
+        let contentEndUTF16: Int
+        if endByte > startByte {
+            // Fetch up to 2 bytes preceding endByte to detect terminator.
+            let probeStart = max(startByte, endByte - 2)
+            let probe = source.bytes(in: CambiumCore.TextRange(
+                start: TextSize(UInt32(probeStart)),
+                end: TextSize(UInt32(endByte))
+            ))
+            if let last = probe.last, last == 0x0A {
+                // Line ends with \n. Check for preceding \r.
+                if probe.count >= 2, probe[probe.count - 2] == 0x0D {
+                    // CRLF: \r\n is one UTF-16 unit each (both BMP),
+                    // so subtract 2.
+                    contentEndUTF16 = endUTF16 - 2
+                } else {
+                    // LF only.
+                    contentEndUTF16 = endUTF16 - 1
+                }
+            } else {
+                // No \n terminator (last line in non-newline-terminated
+                // doc, or rope reached doc end).
+                contentEndUTF16 = endUTF16
+            }
+        } else {
+            contentEndUTF16 = endUTF16
+        }
+
+        return (startUTF16, contentEndUTF16, endUTF16)
     }
 
-    private static func lineFirstNonBlank(at location: Int, in nsString: NSString) -> Int {
-        let info = lineInfo(at: location, in: nsString)
+    /// First non-whitespace UTF-16 offset on the line containing `location`,
+    /// or `info.contentEnd` if the line is all whitespace.
+    private static func lineFirstNonBlank(at location: Int, in source: CambiumSource) -> Int {
+        let info = lineInfo(at: location, in: source)
+        guard info.start < info.contentEnd else { return info.start }
+        var cursor = source.utf16Cursor(at: info.start)
         var i = info.start
-        while i < info.contentEnd {
-            let ch = nsString.character(at: i)
-            if !isWhitespace(ch) { break }
+        while i < info.contentEnd, let ch = cursor.current, isWhitespace(ch) {
+            cursor.advance()
             i += 1
         }
         return i
     }
 
-    private static func offsetForLine(_ targetLine: Int, in nsString: NSString) -> Int {
-        let textLength = nsString.length
-        guard targetLine > 0, textLength > 0 else { return 0 }
-        var currentOffset = 0
-        var lineNum = 1
-        while currentOffset < textLength && lineNum < targetLine {
-            let info = lineInfo(at: currentOffset, in: nsString)
-            // `info.end` includes the line terminator; the next line begins there.
-            if info.end <= currentOffset { break } // guard against zero-length step
-            currentOffset = info.end
-            lineNum += 1
-        }
-        return min(currentOffset, textLength)
+    /// UTF-16 offset of the start of `targetLine` (1-based). O(log N).
+    private static func offsetForLine(_ targetLine: Int, in source: CambiumSource) -> Int {
+        guard targetLine > 0, source.byteCount > 0 else { return 0 }
+        let cappedLine = min(targetLine, source.lineCount + 1)
+        guard let byteOffset = source.byteOffset(forLine: cappedLine, column: 1)
+        else { return 0 }
+        return source.utf16Offset(forByte: byteOffset)
     }
 
     // MARK: - Vertical (h/j/k/l up/down)
 
     private enum VerticalDirection { case up, down }
 
+    /// Move the cursor up/down by `count` lines, preserving the UTF-16
+    /// column offset within each line (clamped to that line's content
+    /// length).
     private static func verticalMove(
         from location: Int,
         direction: VerticalDirection,
         count: Int,
-        in nsString: NSString
+        in source: CambiumSource
     ) -> Int {
         var current = location
+        let totalUTF16 = source.utf16Count
         for _ in 0..<count {
-            let cur = lineInfo(at: current, in: nsString)
-            let column = current - cur.start
+            let curUTF16 = max(0, min(current, totalUTF16))
+            let curByte = source.byteOffset(forUTF16: curUTF16)
+            let (curLine1, _) = source.lineColumn(forByte: curByte)
+            let curLineStartByte = source.byteOffset(forLine: curLine1, column: 1)
+                ?? TextSize(0)
+            let curLineStartUTF16 = source.utf16Offset(forByte: curLineStartByte)
+            let column = current - curLineStartUTF16
+
+            let targetLine1: Int
             switch direction {
             case .up:
-                guard cur.start > 0 else { return current }
-                let prev = lineInfo(at: cur.start - 1, in: nsString)
-                let prevContentLen = prev.contentEnd - prev.start
-                current = prev.start + min(column, prevContentLen)
+                guard curLine1 > 1 else { return current }
+                targetLine1 = curLine1 - 1
             case .down:
-                guard cur.end < nsString.length else { return current }
-                let next = lineInfo(at: cur.end, in: nsString)
-                let nextContentLen = next.contentEnd - next.start
-                current = next.start + min(column, nextContentLen)
+                guard source.byteOffset(forLine: curLine1 + 1, column: 1) != nil
+                else { return current }
+                targetLine1 = curLine1 + 1
             }
+
+            guard let targetStartByte = source.byteOffset(forLine: targetLine1, column: 1)
+            else { return current }
+            let targetStartUTF16 = source.utf16Offset(forByte: targetStartByte)
+
+            // Content-end UTF-16 = either (next line start - \n's UTF-16 units)
+            // or doc end if target is the last line.
+            let targetContentLenUTF16: Int
+            if let nextStartByte = source.byteOffset(forLine: targetLine1 + 1, column: 1) {
+                let nextStartUTF16 = source.utf16Offset(forByte: nextStartByte)
+                targetContentLenUTF16 = max(0, nextStartUTF16 - targetStartUTF16 - 1)
+            } else {
+                targetContentLenUTF16 = max(0, totalUTF16 - targetStartUTF16)
+            }
+
+            current = targetStartUTF16 + min(column, targetContentLenUTF16)
         }
         return current
     }
 
-    // MARK: - Word motions
+    // MARK: - Word motions (cursor-based)
 
     private enum CharCategory: Equatable {
         case keyword     // letters, digits, underscore
@@ -446,8 +495,6 @@ enum CursorMotionEngine {
     }
 
     private static func isWhitespace(_ ch: unichar) -> Bool {
-        // Treat space, tab, line terminators, and the no-break space group
-        // as whitespace. unicode scalars give us \r \n \t \v \f and \u{0020}.
         switch ch {
         case 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20:
             return true
@@ -457,8 +504,6 @@ enum CursorMotionEngine {
     }
 
     private static func isKeyword(_ ch: unichar) -> Bool {
-        // ASCII letter/digit/underscore. Matches vim's default 'iskeyword'
-        // for English text. Unicode word handling can be layered later.
         switch ch {
         case 0x30...0x39: return true            // 0-9
         case 0x41...0x5A: return true            // A-Z
@@ -469,59 +514,75 @@ enum CursorMotionEngine {
     }
 
     /// `w` — start of next word.
-    private static func wordForwardStart(from offset: Int, in nsString: NSString) -> Int {
-        let end = nsString.length
+    private static func wordForwardStart(from offset: Int, in source: CambiumSource) -> Int {
+        let end = source.utf16Count
         guard offset < end else { return offset }
-
+        var cursor = source.utf16Cursor(at: offset)
         var i = offset
-        let startCat = category(nsString.character(at: i))
+        guard let firstUnit = cursor.current else { return offset }
+        let startCat = category(firstUnit)
         // Advance through the current word/non-word run.
         if startCat != .whitespace {
-            while i < end && category(nsString.character(at: i)) == startCat {
+            while i < end, let ch = cursor.current, category(ch) == startCat {
+                cursor.advance()
                 i += 1
             }
         }
         // Skip whitespace to land on the next word's first char.
-        while i < end && category(nsString.character(at: i)) == .whitespace {
+        while i < end, let ch = cursor.current, category(ch) == .whitespace {
+            cursor.advance()
             i += 1
         }
         return i
     }
 
     /// `b` — start of previous word.
-    private static func wordBackward(from offset: Int, in nsString: NSString) -> Int {
+    private static func wordBackward(from offset: Int, in source: CambiumSource) -> Int {
         guard offset > 0 else { return 0 }
+        var cursor = source.utf16Cursor(at: offset - 1)
         var i = offset - 1
         // Skip whitespace going backward.
-        while i > 0 && category(nsString.character(at: i)) == .whitespace {
+        while i > 0, let ch = cursor.current, category(ch) == .whitespace {
+            cursor.retreat()
             i -= 1
         }
-        if category(nsString.character(at: i)) == .whitespace {
-            return 0
-        }
+        guard let unitAtI = cursor.current else { return 0 }
+        if category(unitAtI) == .whitespace { return 0 }
         // Walk back through the current word/non-word run to its start.
-        let cat = category(nsString.character(at: i))
-        while i > 0 && category(nsString.character(at: i - 1)) == cat {
+        let cat = category(unitAtI)
+        // Peek prev; if same category, retreat and continue.
+        while i > 0 {
+            var probe = cursor
+            probe.retreat()
+            guard let prev = probe.current, category(prev) == cat else { break }
+            cursor = probe
             i -= 1
         }
         return i
     }
 
     /// `e` — end (last char) of current or next word.
-    private static func wordForwardEnd(from offset: Int, in nsString: NSString) -> Int {
-        let end = nsString.length
+    private static func wordForwardEnd(from offset: Int, in source: CambiumSource) -> Int {
+        let end = source.utf16Count
         guard end > 0 else { return 0 }
         guard offset < end - 1 else { return min(offset, end - 1) }
 
+        var cursor = source.utf16Cursor(at: offset + 1)
         var i = offset + 1
         // Skip whitespace forward.
-        while i < end && category(nsString.character(at: i)) == .whitespace {
+        while i < end, let ch = cursor.current, category(ch) == .whitespace {
+            cursor.advance()
             i += 1
         }
         if i >= end { return min(offset, end - 1) }
+        guard let unitAtI = cursor.current else { return min(offset, end - 1) }
         // Walk forward to the last char of the current word/non-word run.
-        let cat = category(nsString.character(at: i))
-        while i + 1 < end && category(nsString.character(at: i + 1)) == cat {
+        let cat = category(unitAtI)
+        while i + 1 < end {
+            var probe = cursor
+            probe.advance()
+            guard let nextUnit = probe.current, category(nextUnit) == cat else { break }
+            cursor = probe
             i += 1
         }
         return i

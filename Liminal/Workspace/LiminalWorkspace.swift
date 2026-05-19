@@ -192,10 +192,12 @@ public struct DocumentIndex: Equatable, Sendable {
     /// Source-bearing variant: each reference also carries a pre-computed
     /// `DocumentSnippet` of context around its source range. Used by the
     /// open-doc reindex path and the cold-start scan so backlinks display
-    /// works without re-reading source bytes.
-    public static func build(root: RootSyntax, source: String) -> DocumentIndex {
+    /// works without re-reading source bytes. The rope is queried via
+    /// `bytes(in:)` for each snippet window — O(log N + window size) per
+    /// reference; no full-source materialization.
+    public static func build(root: RootSyntax, source: CambiumSource) -> DocumentIndex {
         var builder = DocumentIndexBuilder()
-        return builder.build(root: root, sourceUTF8: Array(source.utf8))
+        return builder.build(root: root, source: source)
     }
 
     public func reference(containing offset: TextSize) -> DocumentReference? {
