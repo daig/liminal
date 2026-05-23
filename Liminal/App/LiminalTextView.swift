@@ -48,6 +48,7 @@ struct LiminalTextView: NSViewRepresentable {
         // Mirror initial mode into the layout manager's cursor style and
         // start watching for changes.
         context.coordinator.installModeObservers(on: document.vimController)
+        context.coordinator.installViewportHighlightObserver()
         context.coordinator.refreshCursorStyle()
 
         DispatchQueue.main.async { [weak textView, weak coordinator = context.coordinator] in
@@ -129,7 +130,18 @@ struct LiminalTextView: NSViewRepresentable {
         let theme = LiminalHighlightTheme.default
 
         private enum HighlightRepaintScope {
+            /// Full-range reset to base attributes. Reached only when
+            /// highlighting is toggled OFF — the span walk is skipped
+            /// (see the `highlightingEnabled` guard), so this is a single
+            /// cheap `setAttributes` over the whole storage with no
+            /// per-token work.
             case fullDocument
+            /// Paint the visible viewport (plus a one-screen buffer each
+            /// way). Cold boot, document load / content replace,
+            /// highlight-toggle ON, scroll, and the parser-dirty-range
+            /// fallback all route here so a 1 MB document never emits and
+            /// paints ~233K spans up front — only what's on screen.
+            case visibleViewport
             case parserDirtyRange
             case explicitByteRanges([CambiumCore.TextRange])
         }
@@ -154,6 +166,13 @@ struct LiminalTextView: NSViewRepresentable {
         private var marksObservation: AnyCancellable?
         private var forestMarksObservation: AnyCancellable?
         private var externalChangeObservation: AnyCancellable?
+        /// Repaints the visible viewport as the user scrolls new regions
+        /// into view (cold boot only paints what's initially on screen).
+        /// Cancelled automatically when the Coordinator is released.
+        private var viewportObservation: AnyCancellable?
+        /// Set while a coalesced viewport repaint is pending on the next
+        /// runloop tick; collapses momentum-scroll bounds spam to one paint.
+        private var highlightRepaintScheduled = false
 
         /// True while the reload/conflict sheet is on screen. Prevents
         /// stacking when `presentedItemDidChange` and
@@ -296,9 +315,13 @@ struct LiminalTextView: NSViewRepresentable {
             preferencesObservation = EditorPreferences.shared
                 .$highlightingEnabled
                 .dropFirst() // already in correct state at init
-                .sink { [weak self] _ in
+                .sink { [weak self] enabled in
                     Task { @MainActor [weak self] in
-                        self?.applyHighlights()
+                        // ON: paint the visible viewport (scroll fills the
+                        // rest). OFF: reset the whole document to base
+                        // attributes — the span walk is skipped, so the
+                        // full-range reset is cheap.
+                        self?.applyHighlights(scope: enabled ? .visibleViewport : .fullDocument)
                     }
                 }
             // Track the document's URL through the navigation router
@@ -308,6 +331,25 @@ struct LiminalTextView: NSViewRepresentable {
             fileURLObservation = document.$fileURL.sink { [weak self] newURL in
                 Task { @MainActor [weak self] in
                     self?.updateRouterSubscription(to: newURL)
+                }
+            }
+        }
+
+        /// Re-highlight the visible viewport as the user scrolls new
+        /// regions into view — cold boot only paints what's initially on
+        /// screen. Combine-based, so it tears down with the Coordinator
+        /// (no manual `removeObserver`). The clip view's first bounds
+        /// change at initial layout also paints the first screen if the
+        /// cold-boot `applyHighlights` ran before `visibleRect` was sized.
+        func installViewportHighlightObserver() {
+            guard let clipView = textView?.enclosingScrollView?.contentView else { return }
+            clipView.postsBoundsChangedNotifications = true
+            viewportObservation = NotificationCenter.default.publisher(
+                for: NSView.boundsDidChangeNotification,
+                object: clipView
+            ).sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.scheduleVisibleHighlightRepaint()
                 }
             }
         }
@@ -2903,26 +2945,79 @@ struct LiminalTextView: NSViewRepresentable {
             return nil
         }
 
-        /// Re-apply highlights to the entire text storage from the current
-        /// parse result. Called after every user edit, on initial display,
-        /// and when the source is replaced externally (document load).
         /// Repaint syntax highlights. When `editedRange` is non-nil the
-        /// pass is scoped to the line(s) around the edit (plus one line
-        /// of buffer on each side) — typing into a paragraph in a
-        /// 1.2 MB doc no longer rewrites attributes across the whole
-        /// document. With `editedRange == nil` (initial load, preference
-        /// toggle, programmatic source replace) we still highlight the
-        /// full range.
+        /// pass is scoped to the parser's dirty span — typing into a
+        /// paragraph in a 1.2 MB doc no longer rewrites attributes across
+        /// the whole document. With `editedRange == nil` (initial load,
+        /// programmatic source replace) we paint the visible viewport and
+        /// let the scroll observer fill the rest in as it's revealed,
+        /// rather than walking and painting the entire tree up front.
         func applyHighlights(in editedRange: NSRange? = nil) {
             if editedRange != nil {
                 applyHighlights(scope: .parserDirtyRange)
             } else {
-                applyHighlights(scope: .fullDocument)
+                // Cold boot and document-load / content-replace land here
+                // (no edited range). Paint only the visible viewport; the
+                // scroll observer fills regions in as they are revealed.
+                applyHighlights(scope: .visibleViewport)
             }
         }
 
         private func applyHighlights(inTargetByteRanges ranges: [CambiumCore.TextRange]) {
             applyHighlights(scope: .explicitByteRanges(ranges))
+        }
+
+        /// The on-screen byte range to paint, expanded by one viewport
+        /// height in each direction so a short scroll doesn't immediately
+        /// reveal unpainted lines. Returns `nil` before first layout
+        /// (`visibleRect` has zero height) — the scroll/bounds observer
+        /// repaints once layout yields a non-empty rect.
+        ///
+        /// Uses the same `glyphRange(forBoundingRect:)` → `characterRange`
+        /// path as `viewportMotion`; querying the glyph range forces
+        /// TextKit to lay out only the visible rect, not the whole document.
+        private func visiblePaintScope() -> HighlightPaintScope? {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer
+            else { return nil }
+            let visible = textView.visibleRect
+            guard visible.height > 0 else { return nil }
+            let buffered = visible.insetBy(dx: 0, dy: -visible.height)
+            let glyphRange = layoutManager.glyphRange(
+                forBoundingRect: buffered,
+                in: textContainer
+            )
+            let charRange = layoutManager.characterRange(
+                forGlyphRange: glyphRange,
+                actualGlyphRange: nil
+            )
+            guard charRange.length > 0,
+                  let byteRange = LiminalTextView.utf16RangeToByteRange(
+                    charRange,
+                    in: document.session.source
+                  )
+            else { return nil }
+            let textRange = TextRange(
+                start: TextSize(UInt32(byteRange.lowerBound)),
+                end: TextSize(UInt32(byteRange.upperBound))
+            )
+            return HighlightPaintScope(byteRange: textRange, nsRange: charRange)
+        }
+
+        /// Coalesce a flurry of clip-view bounds changes (momentum scroll
+        /// fires many per second) into a single viewport repaint on the
+        /// next runloop tick.
+        private func scheduleVisibleHighlightRepaint() {
+            guard EditorPreferences.shared.highlightingEnabled,
+                  !highlightRepaintScheduled
+            else { return }
+            highlightRepaintScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.highlightRepaintScheduled = false
+                self.applyHighlights(scope: .visibleViewport)
+            }
         }
 
         private func applyHighlights(scope: HighlightRepaintScope) {
@@ -2944,18 +3039,21 @@ struct LiminalTextView: NSViewRepresentable {
                         nsRange: NSRange(location: 0, length: storageLen)
                     )
                 ]
+            case .visibleViewport:
+                // Empty → not laid out yet (or nothing on screen). Skip;
+                // the bounds observer repaints once layout settles.
+                paintScopes = visiblePaintScope().map { [$0] } ?? []
             case .parserDirtyRange:
                 if let changed = parsed?.changedByteRange,
                    let nsRange = LiminalTextView.byteRangeToNSRange(changed, in: source)
                 {
                     paintScopes = [HighlightPaintScope(byteRange: changed, nsRange: nsRange)]
                 } else {
-                    paintScopes = [
-                        HighlightPaintScope(
-                            byteRange: nil,
-                            nsRange: NSRange(location: 0, length: storageLen)
-                        )
-                    ]
+                    // Skip-clean bailed (no dirty span) — the whole document
+                    // may have shifted highlighting. Repaint the visible
+                    // viewport from the current tree (correct on-screen);
+                    // off-screen self-heals on scroll.
+                    paintScopes = visiblePaintScope().map { [$0] } ?? []
                 }
             case .explicitByteRanges(let ranges):
                 paintScopes = ranges.map { range in
