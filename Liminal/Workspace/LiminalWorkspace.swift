@@ -186,18 +186,29 @@ public struct DocumentIndex: Equatable, Sendable {
     /// overload below.
     public static func build(root: RootSyntax) -> DocumentIndex {
         var builder = DocumentIndexBuilder()
-        return builder.build(root: root)
+        return builder.build(root: root).index
     }
 
     /// Source-bearing variant: each reference also carries a pre-computed
-    /// `DocumentSnippet` of context around its source range. Used by the
-    /// open-doc reindex path and the cold-start scan so backlinks display
-    /// works without re-reading source bytes. The rope is queried via
-    /// `bytes(in:)` for each snippet window — O(log N + window size) per
-    /// reference; no full-source materialization.
+    /// `DocumentSnippet` (the text of its nearest enclosing block-level node).
+    /// Used by the open-doc reindex path and the cold-start scan so backlinks
+    /// display works without re-reading source bytes.
     public static func build(root: RootSyntax, source: CambiumSource) -> DocumentIndex {
-        var builder = DocumentIndexBuilder()
-        return builder.build(root: root, source: source)
+        var builder = DocumentIndexBuilder(source: source)
+        return builder.build(root: root).index
+    }
+
+    /// Incremental variant: reuse `previousMemo` for subtrees whose content is
+    /// unchanged (skipping their descent + snippet extraction) and return the
+    /// refreshed memo to carry into the next reparse. The result is identical
+    /// to a fresh `build(root:source:)`; only the work differs.
+    static func build(
+        root: RootSyntax,
+        source: CambiumSource,
+        reusing previousMemo: DocumentIndexMemo?
+    ) -> (index: DocumentIndex, memo: DocumentIndexMemo) {
+        var builder = DocumentIndexBuilder(source: source, previousMemo: previousMemo)
+        return builder.build(root: root)
     }
 
     public func reference(containing offset: TextSize) -> DocumentReference? {

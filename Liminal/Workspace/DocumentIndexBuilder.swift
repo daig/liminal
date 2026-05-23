@@ -1,478 +1,459 @@
 import CambiumCore
 import Foundation
 
-struct DocumentIndexBuilder {
-    private var blockOffsets: [TextSize] = []
-    private var headings: [HeadingAnchor] = []
-    private var blocks: [BlockAnchor] = []
-    private var references: [DocumentReference] = []
-    /// Source rope. When non-nil, each emitted `DocumentReference` carries
-    /// a pre-computed `DocumentSnippet` of context around its `sourceRange`,
-    /// extracted via the rope's O(log N + window) `bytes(in:)`. When nil
-    /// (no source provided), every reference's snippet is `.empty` — used
-    /// by callsites that don't yet care about backlink context (test
-    /// fixtures, some inspector / printer paths).
-    private var source: CambiumSource?
+/// One CST node's contribution to the `DocumentIndex`, in coordinates
+/// **relative to the node's own start** when stored in the memo, and absolute
+/// while a fold is in flight. Snippets are position-independent (the
+/// reference's offset is relative to its enclosing block's text), so they are
+/// never shifted.
+struct DocumentIndexContribution: Sendable {
+    var blocks: [BlockAnchor] = []
+    var references: [DocumentReference] = []
 
-    mutating func build(root: RootSyntax, source: CambiumSource? = nil) -> DocumentIndex {
+    static let empty = DocumentIndexContribution()
+
+    mutating func merge(_ other: DocumentIndexContribution) {
+        blocks.append(contentsOf: other.blocks)
+        references.append(contentsOf: other.references)
+    }
+
+    func shifted(by delta: Int) -> DocumentIndexContribution {
+        guard delta != 0 else { return self }
+        return DocumentIndexContribution(
+            blocks: blocks.map {
+                BlockAnchor(
+                    blockID: $0.blockID,
+                    sourceOffset: TextSize(UInt32(Int($0.sourceOffset.rawValue) + delta))
+                )
+            },
+            references: references.map {
+                DocumentReference(
+                    kind: $0.kind,
+                    target: $0.target,
+                    alias: $0.alias,
+                    sourceRange: DocumentIndexBuilder.shift($0.sourceRange, by: delta),
+                    targetRange: $0.targetRange.map { DocumentIndexBuilder.shift($0, by: delta) },
+                    snippet: $0.snippet
+                )
+            }
+        )
+    }
+}
+
+/// Memo carried across reparses: each substantial subtree's contribution keyed
+/// by its content hash. Because `ContentHash` is content-determined (not
+/// identity-based), an unchanged subtree hits even when the parser rebuilt it
+/// from scratch — so the index reuses exactly what the tree leaves unchanged,
+/// at whatever granularity the tree provides. Double-buffered: a build reads
+/// the previous memo and returns a fresh one populated as it folds.
+typealias DocumentIndexMemo = [ContentHash: DocumentIndexContribution]
+
+/// Builds a `DocumentIndex` as a memoized bottom-up fold over the CST. On a
+/// reparse, subtrees whose content is unchanged reuse their cached
+/// contribution (skipping the descent and snippet extraction); only the
+/// changed region is re-walked.
+struct DocumentIndexBuilder {
+    private let source: CambiumSource?
+    private let previousMemo: DocumentIndexMemo
+    private var newMemo: DocumentIndexMemo = [:]
+
+    /// Reuse instrumentation (read by tests / debug). A hit means a subtree's
+    /// contribution was reused from `previousMemo` without descending.
+    private(set) var reuseHits = 0
+    private(set) var reuseMisses = 0
+
+    init(source: CambiumSource? = nil, previousMemo: DocumentIndexMemo? = nil) {
         self.source = source
+        self.previousMemo = previousMemo ?? [:]
+    }
+
+    /// Fold the document. `blockOffsets` and the document-outline `headings`
+    /// are top-level-only, so they are gathered in this O(#top-level-children)
+    /// root pass; `blocks` and `references` come from the per-node fold.
+    mutating func build(root: RootSyntax) -> (index: DocumentIndex, memo: DocumentIndexMemo) {
+        var blockOffsets: [TextSize] = []
+        var headings: [HeadingAnchor] = []
+        var blocks: [BlockAnchor] = []
+        var references: [DocumentReference] = []
+
         for item in root.documentItems {
-            appendTopLevelItem(item)
+            if case .blankLine = item { continue }
+            blockOffsets.append(item.range.start)
+
+            // Only top-level headings populate the outline. Nested headings
+            // (inside typed block bodies, block literals, etc.) are content;
+            // anchor inside those via a block ID instead.
+            if case .atxHeading(let heading) = item {
+                let title = heading.inlineContent?.plainText ?? ""
+                if !WikiLinkNormalizer.headingLookupKey(title).isEmpty {
+                    headings.append(HeadingAnchor(
+                        title: title,
+                        sourceOffset: heading.range.start,
+                        level: heading.level
+                    ))
+                }
+            }
+
+            let contribution = foldNode(item.syntax)
+            blocks.append(contentsOf: contribution.blocks)
+            references.append(contentsOf: contribution.references)
         }
 
-        return DocumentIndex(
+        let index = DocumentIndex(
             blockOffsets: blockOffsets,
             headings: headings,
             blocks: blocks,
             references: references
         )
+        return (index, newMemo)
     }
 
-    /// Build a snippet from `source` around the given range. The default
-    /// context window is ±36 UTF-8 bytes on each side. The returned
-    /// `text` has newlines (`\n`, `\r`) collapsed to spaces and ASCII
-    /// whitespace (`0x20`, `0x09`) trimmed from both ends — but never
-    /// past the reference boundary. UTF-8 codepoint boundaries are
-    /// respected so the snippet is always a valid string. Materializes
-    /// only the windowed bytes via `source.bytes(in:)` — O(log N + window).
-    fileprivate static func snippet(
-        in source: CambiumSource,
-        around range: LiminalSourceRange,
-        context: Int = 36
-    ) -> DocumentSnippet {
-        let total = source.byteCount
+    // MARK: - Memoized fold
+
+    private mutating func foldNode(
+        _ handle: SyntaxNodeHandle<LiminalLanguage>
+    ) -> DocumentIndexContribution {
+        let (hash, range) = handle.withCursor { ($0.greenHash, $0.textRange) }
         let start = Int(range.start.rawValue)
-        let end = Int(range.end.rawValue)
-        guard total > 0, start <= total, end >= start, end <= total else {
-            return .empty
+
+        if let cached = previousMemo[hash] {
+            // Reused subtree: carry the (relative) contribution forward and
+            // rebase it to this node's current absolute position. Skips the
+            // descent entirely.
+            reuseHits += 1
+            newMemo[hash] = cached
+            return cached.shifted(by: start)
         }
 
-        var lower = max(0, start - context)
-        var upper = min(total, end + context)
-        // Walk left from `lower` past any UTF-8 continuation bytes so we
-        // don't split a multibyte sequence at the head. Walk right from
-        // `upper` for the same reason at the tail. Worst case per side
-        // is 3 bytes (max UTF-8 continuation chain length); fetch one
-        // 4-byte probe per side covering the candidate boundary.
-        if lower > 0 {
-            // Probe byte AT lower and 3 bytes before. probe[probe.count - 1]
-            // is the byte at position `lower`.
-            let probeStart = max(0, lower - 3)
-            let probe = source.bytes(
-                in: TextRange(
-                    start: TextSize(UInt32(probeStart)),
-                    end: TextSize(UInt32(min(total, lower + 1)))
-                )
-            )
-            var i = probe.count - 1
-            while lower > 0, i >= 0, isContinuationByte(probe[i]) {
-                lower -= 1
-                i -= 1
-            }
+        reuseMisses += 1
+        let contribution = computeNode(handle)
+        // Memoize exactly the nodes whose reuse saves real work: those that
+        // produced index entries (a hit skips the snippet extraction /
+        // `WikiTarget.parse` / descent that built them). Entry-less subtrees
+        // re-fold by cheap traversal alone — and any *entry-bearing* ancestor
+        // is itself memoized (its contribution carries the descendant
+        // entries), so an unchanged region above a reference is still skipped
+        // wholesale on a hit. No size heuristic needed.
+        if !contribution.references.isEmpty || !contribution.blocks.isEmpty {
+            newMemo[hash] = contribution.shifted(by: -start)
         }
-        if upper < total {
-            // Probe byte AT upper and 3 bytes after. probe[0] is the byte
-            // at position `upper`.
-            let probe = source.bytes(
-                in: TextRange(
-                    start: TextSize(UInt32(upper)),
-                    end: TextSize(UInt32(min(total, upper + 4)))
-                )
-            )
-            var i = 0
-            while upper < total, i < probe.count, isContinuationByte(probe[i]) {
-                upper += 1
-                i += 1
-            }
-        }
-
-        var bytes = source.bytes(
-            in: TextRange(
-                start: TextSize(UInt32(lower)),
-                end: TextSize(UInt32(upper))
-            )
-        )
-        for i in 0..<bytes.count {
-            if bytes[i] == 0x0A || bytes[i] == 0x0D {
-                bytes[i] = 0x20
-            }
-        }
-
-        let initialOffset = start - lower
-        let initialLength = end - start
-        let refEnd = initialOffset + initialLength
-
-        var leading = 0
-        while leading < bytes.count, leading < initialOffset, isAsciiWhitespace(bytes[leading]) {
-            leading += 1
-        }
-        var trailing = 0
-        while trailing < bytes.count - leading,
-              bytes.count - trailing > refEnd,
-              isAsciiWhitespace(bytes[bytes.count - trailing - 1])
-        {
-            trailing += 1
-        }
-
-        let slice = Array(bytes[leading..<(bytes.count - trailing)])
-        let text = String(decoding: slice, as: UTF8.self)
-        let finalOffset = max(0, initialOffset - leading)
-        let finalLength = min(initialLength, max(0, slice.count - finalOffset))
-        return DocumentSnippet(
-            text: text,
-            referenceOffset: UInt32(finalOffset),
-            referenceLength: UInt32(finalLength)
-        )
+        return contribution
     }
 
-    private static func isContinuationByte(_ byte: UInt8) -> Bool {
-        (byte & 0xC0) == 0x80
-    }
-
-    private static func isAsciiWhitespace(_ byte: UInt8) -> Bool {
-        byte == 0x20 || byte == 0x09
-    }
-
-    private func makeSnippet(around range: LiminalSourceRange) -> DocumentSnippet {
-        guard let source else { return .empty }
-        return DocumentIndexBuilder.snippet(in: source, around: range)
-    }
-
-    private mutating func appendTopLevelItem(_ item: DocumentItemSyntax) {
-        if case .blankLine = item {
-            return
+    /// Dispatch a node to its kind-specific fold. Mirrors the typed structure
+    /// so recursion stays *selective* (e.g. a wikilink's alias text is read
+    /// for the alias string but not descended for references).
+    private mutating func computeNode(
+        _ handle: SyntaxNodeHandle<LiminalLanguage>
+    ) -> DocumentIndexContribution {
+        if let item = DocumentItemSyntax(handle) {
+            return computeItem(item)
         }
-
-        blockOffsets.append(item.range.start)
-
-        // Heading anchors are the document outline: only top-level headings
-        // populate the heading anchor space. Nested headings inside typed
-        // block bodies, block literal values, etc. are content; the spec'd
-        // way to anchor inside those constructs is a block ID (^id, slice 3).
-        if case .atxHeading(let heading) = item {
-            let title = heading.inlineContent?.plainText ?? ""
-            if !WikiLinkNormalizer.headingLookupKey(title).isEmpty {
-                headings.append(HeadingAnchor(
-                    title: title,
-                    sourceOffset: heading.range.start,
-                    level: heading.level
-                ))
-            }
+        if let inline = InlineSyntax(handle) {
+            return computeInline(inline)
         }
-
-        walkItemForReferences(item)
+        if let value = ValueSyntax(handle) {
+            return computeValue(value)
+        }
+        switch LiminalLanguage.kind(for: handle.rawKind) {
+        case .listItem:
+            return computeListItem(ListItemSyntax(unchecked: handle))
+        case .inlineContent:
+            return computeInlineContent(InlineContentSyntax(unchecked: handle))
+        case .fields:
+            return computeFields(FieldsSyntax(unchecked: handle))
+        case .field:
+            return computeValueNode(FieldSyntax(unchecked: handle).value)
+        case .value:
+            return computeValueNode(ValueNodeSyntax(unchecked: handle))
+        default:
+            return computeGenericChildren(handle)
+        }
     }
 
-    private mutating func walkItemForReferences(_ item: DocumentItemSyntax) {
+    private mutating func computeItem(_ item: DocumentItemSyntax) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
         switch item {
-        case .blankLine, .frontmatter, .directive, .schemaBlock:
+        case .blankLine, .frontmatter, .directive, .schemaBlock,
+             .thematicBreak, .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock:
             break
         case .templateBlock(let template):
-            for item in template.documentItems {
-                walkItemForReferences(item)
+            for child in template.documentItems {
+                c.merge(foldNode(child.syntax))
             }
         case .paragraph(let paragraph):
-            appendBlockIDAnchor(token: paragraph.blockIdToken, sourceOffset: paragraph.range.start)
-            walkInlineContent(paragraph.inlineContent)
+            appendBlockID(&c, token: paragraph.blockIdToken, at: paragraph.range.start)
+            if let content = paragraph.inlineContent {
+                c.merge(foldNode(content.syntax))
+            }
+            stamp(&c, scope: paragraph.range)
         case .atxHeading(let heading):
-            appendBlockIDAnchor(token: heading.blockIdToken, sourceOffset: heading.range.start)
-            walkInlineContent(heading.inlineContent)
+            appendBlockID(&c, token: heading.blockIdToken, at: heading.range.start)
+            if let content = heading.inlineContent {
+                c.merge(foldNode(content.syntax))
+            }
+            stamp(&c, scope: heading.range)
         case .wikiEmbedBlock(let embed):
-            appendWikiEmbedReference(
+            appendReference(
+                &c,
+                kind: .embed,
                 targetToken: embed.targetTextToken,
                 alias: embed.payloadToken?.text,
                 sourceRange: embed.range
             )
+            stamp(&c, scope: embed.range)
         case .structuredEmbedBlock(let embed):
-            // Phase 4.5: emit a reference from the structured embed's
-            // target token before recursing into the fallback content.
-            // Block-level structured embeds use kind: .embed, matching
-            // their wiki-embed siblings.
-            appendDestinationReference(
-                targetToken: embed.targetTextToken,
+            appendDestination(
+                &c,
                 kind: .embed,
+                targetToken: embed.targetTextToken,
                 sourceRange: embed.range
             )
-            walkInlineContent(embed.fallbackContent)
+            if let fallback = embed.fallbackContent {
+                c.merge(foldNode(fallback.syntax))
+            }
+            stamp(&c, scope: embed.range)
         case .list(let list):
-            for item in list.items {
-                walkListItem(item)
+            for listItem in list.items {
+                c.merge(foldNode(listItem.syntax))
             }
         case .blockQuote(let quote):
-            for item in quote.documentItems {
-                walkItemForReferences(item)
+            for child in quote.documentItems {
+                c.merge(foldNode(child.syntax))
             }
         case .pipeTable(let table):
-            walkPipeTable(table)
+            c.merge(computePipeTable(table))
         case .valueDeclaration(let declaration):
             if let constructor = declaration.constructor {
-                walkSyntaxChildren(of: constructor.syntax)
+                c.merge(computeGenericChildren(constructor.syntax))
             }
         case .typedBlock(let block):
-            walkSyntaxChildren(of: block.syntax)
-        case .thematicBreak, .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock:
-            break
+            c.merge(computeGenericChildren(block.syntax))
         }
+        return c
     }
 
-    private mutating func walkPipeTable(_ table: PipeTableSyntax) {
+    private mutating func computePipeTable(_ table: PipeTableSyntax) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
         for cell in table.headerCells {
-            walkInlineContent(cell.inlineContent)
+            c.merge(computeCell(cell.inlineContent))
         }
         for row in table.bodyRows {
             for cell in row {
-                walkInlineContent(cell.inlineContent)
+                c.merge(computeCell(cell.inlineContent))
             }
         }
+        return c
     }
 
-    private mutating func walkListItem(_ item: ListItemSyntax) {
-        appendBlockIDAnchor(token: item.blockIdToken, sourceOffset: item.range.start)
+    private mutating func computeCell(_ content: InlineContentSyntax?) -> DocumentIndexContribution {
+        guard let content else { return .empty }
+        var c = foldNode(content.syntax)
+        stamp(&c, scope: content.range)
+        return c
+    }
+
+    private mutating func computeListItem(_ item: ListItemSyntax) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
+        appendBlockID(&c, token: item.blockIdToken, at: item.range.start)
         for child in item.documentItems {
-            walkItemForReferences(child)
+            c.merge(foldNode(child.syntax))
         }
+        return c
     }
 
-    private mutating func walkInlineContent(_ content: InlineContentSyntax?) {
-        guard let content else {
-            return
-        }
-
+    private mutating func computeInlineContent(
+        _ content: InlineContentSyntax
+    ) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
         for inline in content.inlineNodes {
-            walkInline(inline)
+            c.merge(foldNode(inline.syntax))
         }
+        return c
     }
 
-    private mutating func walkInline(_ inline: InlineSyntax) {
+    private mutating func computeInline(_ inline: InlineSyntax) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
         switch inline {
+        case .codeSpan, .escapedPunctuation, .mathInline, .interpolation, .inlineComment:
+            break
         case .wikilink(let wikilink):
-            appendWikiReference(
+            appendReference(
+                &c,
+                kind: .link,
                 targetToken: wikilink.targetTextToken,
                 alias: wikilink.aliasContent?.plainText,
                 sourceRange: wikilink.range
             )
         case .wikiEmbed(let embed):
-            appendWikiEmbedReference(
+            appendReference(
+                &c,
+                kind: .embed,
                 targetToken: embed.targetTextToken,
                 alias: embed.payloadToken?.text,
                 sourceRange: embed.range
             )
         case .structuredEmbed(let embed):
-            // Phase 4.5: inline structured embed gets the same reference
-            // emission as the block form before recursing into fallback.
-            appendDestinationReference(
-                targetToken: embed.targetTextToken,
+            appendDestination(
+                &c,
                 kind: .embed,
+                targetToken: embed.targetTextToken,
                 sourceRange: embed.range
             )
-            walkInlineContent(embed.fallbackContent)
+            if let fallback = embed.fallbackContent {
+                c.merge(foldNode(fallback.syntax))
+            }
         case .typedInline(let typedInline):
             if let constructor = typedInline.constructor {
-                walkSyntaxChildren(of: constructor.syntax)
+                c.merge(computeGenericChildren(constructor.syntax))
             }
         case .emphasis(let emphasis):
-            walkInlineContent(emphasis.inlineContent)
+            if let content = emphasis.inlineContent { c.merge(foldNode(content.syntax)) }
         case .strong(let strong):
-            walkInlineContent(strong.inlineContent)
+            if let content = strong.inlineContent { c.merge(foldNode(content.syntax)) }
         case .strikethrough(let strikethrough):
-            walkInlineContent(strikethrough.inlineContent)
+            if let content = strikethrough.inlineContent { c.merge(foldNode(content.syntax)) }
         case .highlight(let highlight):
-            walkInlineContent(highlight.inlineContent)
+            if let content = highlight.inlineContent { c.merge(foldNode(content.syntax)) }
         case .footnoteInline(let footnote):
-            walkInlineContent(footnote.inlineContent)
+            if let content = footnote.inlineContent { c.merge(foldNode(content.syntax)) }
         case .mdLink(let link):
-            // Phase 4.5: emit a reference for the link destination so
-            // Cmd-click and backlink indexing see it. External URIs
-            // (e.g. `https://...`) route through `WikiTarget.parse` to
-            // the external-URI policy; vault-relative paths stay on
-            // the existing resolution path.
-            appendDestinationReference(
-                targetToken: link.destinationTextToken,
+            appendDestination(
+                &c,
                 kind: .link,
+                targetToken: link.destinationTextToken,
                 sourceRange: link.range,
                 alias: link.labelContent?.plainText
             )
-            walkInlineContent(link.labelContent)
+            if let label = link.labelContent { c.merge(foldNode(label.syntax)) }
         case .autolink(let autolink):
-            appendDestinationReference(
-                targetToken: autolink.targetTextToken,
+            appendDestination(
+                &c,
                 kind: .link,
+                targetToken: autolink.targetTextToken,
                 sourceRange: autolink.range,
                 alias: autolink.targetText,
                 targetText: autolink.hrefText
             )
         case .mdImage(let image):
-            // Phase 4.5: markdown images are an asset embed in surface
-            // semantics — they substitute a rendered asset for the
-            // alt text in the document flow. Emit with kind: .embed so
-            // backlinks reflect that semantic (mirrors wikiEmbed).
-            appendDestinationReference(
-                targetToken: image.destinationTextToken,
+            appendDestination(
+                &c,
                 kind: .embed,
+                targetToken: image.destinationTextToken,
                 sourceRange: image.range,
                 alias: image.altContent?.plainText
             )
-            walkInlineContent(image.altContent)
-        case .codeSpan, .escapedPunctuation, .mathInline, .interpolation, .inlineComment:
-            break
+            if let alt = image.altContent { c.merge(foldNode(alt.syntax)) }
         }
+        return c
     }
 
-    private mutating func walkValueNode(_ value: ValueNodeSyntax?) {
-        guard let payload = value?.payload else {
-            return
-        }
-        walkValue(payload)
+    private mutating func computeValueNode(_ value: ValueNodeSyntax?) -> DocumentIndexContribution {
+        guard let payload = value?.payload else { return .empty }
+        return computeValue(payload)
     }
 
-    private mutating func walkValue(_ value: ValueSyntax) {
+    private mutating func computeValue(_ value: ValueSyntax) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
         switch value {
         case .scalar, .reference:
             break
         case .list(let list):
             for nested in list.values {
-                walkValueNode(nested)
+                c.merge(computeValueNode(nested))
             }
         case .record(let record):
-            walkFields(record.fields)
+            c.merge(computeFields(record.fields))
         case .typedConstructor(let constructor):
-            walkSyntaxChildren(of: constructor.syntax)
+            c.merge(computeGenericChildren(constructor.syntax))
         case .inlineLiteral(let literal):
-            walkInlineContent(literal.inlineContent)
+            if let content = literal.inlineContent {
+                c.merge(foldNode(content.syntax))
+                stamp(&c, scope: content.range)
+            }
         case .blockLiteral(let literal):
             for item in literal.documentItems {
-                walkItemForReferences(item)
+                c.merge(foldNode(item.syntax))
             }
         case .structuredEmbedValue(let embed):
-            walkInlineContent(embed.fallbackContent)
-        }
-    }
-
-    private mutating func walkFields(_ fields: FieldsSyntax?) {
-        for field in fields?.fields ?? [] {
-            walkValueNode(field.value)
-        }
-    }
-
-    private mutating func walkSyntaxChildren(of syntax: SyntaxNodeHandle<LiminalLanguage>) {
-        let children = syntax.withCursor { node in
-            var result: [SyntaxNodeHandle<LiminalLanguage>] = []
-            node.forEachChild { child in
-                result.append(child.makeHandle())
+            if let fallback = embed.fallbackContent {
+                c.merge(foldNode(fallback.syntax))
+                stamp(&c, scope: fallback.range)
             }
-            return result
         }
-
-        for child in children {
-            walkSyntaxNode(child)
-        }
+        return c
     }
 
-    private mutating func walkSyntaxNode(_ syntax: SyntaxNodeHandle<LiminalLanguage>) {
-        if let item = DocumentItemSyntax(syntax) {
-            walkItemForReferences(item)
-            return
+    private mutating func computeFields(_ fields: FieldsSyntax?) -> DocumentIndexContribution {
+        var c = DocumentIndexContribution.empty
+        for field in fields?.fields ?? [] {
+            c.merge(computeValueNode(field.value))
         }
-
-        if let inline = InlineSyntax(syntax) {
-            walkInline(inline)
-            return
-        }
-
-        if let value = ValueSyntax(syntax) {
-            walkValue(value)
-            return
-        }
-
-        switch LiminalLanguage.kind(for: syntax.rawKind) {
-        case .listItem:
-            walkListItem(ListItemSyntax(unchecked: syntax))
-        case .inlineContent:
-            walkInlineContent(InlineContentSyntax(unchecked: syntax))
-        case .fields:
-            walkFields(FieldsSyntax(unchecked: syntax))
-        case .field:
-            walkValueNode(FieldSyntax(unchecked: syntax).value)
-        case .value:
-            walkValueNode(ValueNodeSyntax(unchecked: syntax))
-        default:
-            walkSyntaxChildren(of: syntax)
-        }
+        return c
     }
 
-    private mutating func appendWikiReference(
-        targetToken: LiminalTokenSyntax?,
-        alias: String?,
-        sourceRange: LiminalSourceRange
-    ) {
-        guard let targetToken else {
-            return
+    private mutating func computeGenericChildren(
+        _ handle: SyntaxNodeHandle<LiminalLanguage>
+    ) -> DocumentIndexContribution {
+        var childHandles: [SyntaxNodeHandle<LiminalLanguage>] = []
+        handle.withCursor { node in
+            node.forEachChild { childHandles.append($0.makeHandle()) }
         }
-
-        references.append(DocumentReference(
-            kind: .link,
-            target: WikiTarget.parse(targetToken.text),
-            alias: alias,
-            sourceRange: sourceRange,
-            targetRange: targetToken.range,
-            snippet: makeSnippet(around: sourceRange)
-        ))
+        var c = DocumentIndexContribution.empty
+        for child in childHandles {
+            c.merge(foldNode(child))
+        }
+        return c
     }
 
-    private mutating func appendWikiEmbedReference(
-        targetToken: LiminalTokenSyntax?,
-        alias: String?,
-        sourceRange: LiminalSourceRange
-    ) {
-        guard let targetToken else {
-            return
-        }
+    // MARK: - Entry emission (absolute, snippet stamped later)
 
-        references.append(DocumentReference(
-            kind: .embed,
-            target: WikiTarget.parse(targetToken.text),
-            alias: alias,
-            sourceRange: sourceRange,
-            targetRange: targetToken.range,
-            snippet: makeSnippet(around: sourceRange)
-        ))
-    }
-
-    private mutating func appendBlockIDAnchor(
+    private func appendBlockID(
+        _ c: inout DocumentIndexContribution,
         token: LiminalTokenSyntax?,
-        sourceOffset: TextSize
+        at sourceOffset: TextSize
     ) {
-        guard let token else {
-            return
-        }
-
-        blocks.append(BlockAnchor(blockID: token.text, sourceOffset: sourceOffset))
+        guard let token else { return }
+        c.blocks.append(BlockAnchor(blockID: token.text, sourceOffset: sourceOffset))
     }
 
-    /// Phase 4.5: shared emission for markdown link/image destinations and
-    /// structured embed targets. `WikiTarget.parse` routes external URIs
-    /// (`https://`, `mailto:`, etc.) into the external case; everything
-    /// else parses as a vault target. Empty destinations are dropped so
-    /// we don't emit references for `[label]()` or `![alt]()`.
-    private mutating func appendDestinationReference(
-        targetToken: LiminalTokenSyntax?,
+    private func appendReference(
+        _ c: inout DocumentIndexContribution,
         kind: ReferenceKind,
+        targetToken: LiminalTokenSyntax?,
+        alias: String?,
+        sourceRange: LiminalSourceRange
+    ) {
+        guard let targetToken else { return }
+        c.references.append(DocumentReference(
+            kind: kind,
+            target: WikiTarget.parse(targetToken.text),
+            alias: alias,
+            sourceRange: sourceRange,
+            targetRange: targetToken.range,
+            snippet: .empty
+        ))
+    }
+
+    /// Markdown link/image destinations and structured embed targets.
+    /// `WikiTarget.parse` routes external URIs into the external case;
+    /// everything else parses as a vault target. Empty destinations are
+    /// dropped so `[label]()` / `![alt]()` don't pollute the index.
+    private func appendDestination(
+        _ c: inout DocumentIndexContribution,
+        kind: ReferenceKind,
+        targetToken: LiminalTokenSyntax?,
         sourceRange: LiminalSourceRange,
         alias: String? = nil,
         targetText: String? = nil
     ) {
-        guard let targetToken else {
-            return
-        }
+        guard let targetToken else { return }
         let raw = targetText ?? targetToken.text
         let trimmedAlias: String? = alias.flatMap {
             let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         }
         let target = WikiTarget.parse(raw)
-        // `parse("")` yields an empty target with all-nil fields; drop
-        // those so empty `[label]()` and `![alt]()` don't pollute the
-        // index with no-op references.
         if target.notePath == nil,
            target.heading == nil,
            target.blockID == nil,
@@ -480,13 +461,85 @@ struct DocumentIndexBuilder {
         {
             return
         }
-        references.append(DocumentReference(
+        c.references.append(DocumentReference(
             kind: kind,
             target: target,
             alias: trimmedAlias,
             sourceRange: sourceRange,
             targetRange: targetToken.range,
-            snippet: makeSnippet(around: sourceRange)
+            snippet: .empty
         ))
+    }
+
+    // MARK: - Snippet stamping
+
+    /// Stamp every still-unstamped reference in `c` with the text of `scope`
+    /// (the nearest enclosing block-level node). Newlines collapse to spaces;
+    /// ASCII whitespace is trimmed from each end without crossing the
+    /// reference. The snippet is relative to `scope`, so it's
+    /// position-independent and survives reuse. No-op without `source`.
+    private func stamp(_ c: inout DocumentIndexContribution, scope: LiminalSourceRange) {
+        guard let source,
+              c.references.contains(where: { $0.snippet == .empty })
+        else { return }
+        let scopeStart = Int(scope.start.rawValue)
+        let scopeEnd = Int(scope.end.rawValue)
+        guard scopeStart >= 0, scopeEnd > scopeStart, scopeEnd <= source.byteCount else { return }
+
+        var bytes = source.bytes(in: TextRange(
+            start: TextSize(UInt32(scopeStart)),
+            end: TextSize(UInt32(scopeEnd))
+        ))
+        for i in bytes.indices where bytes[i] == 0x0A || bytes[i] == 0x0D {
+            bytes[i] = 0x20
+        }
+
+        for i in c.references.indices {
+            guard c.references[i].snippet == .empty else { continue }
+            let ref = c.references[i]
+            let initialOffset = max(0, Int(ref.sourceRange.start.rawValue) - scopeStart)
+            let initialLength = min(Int(ref.sourceRange.length.rawValue), max(0, bytes.count - initialOffset))
+            let refEnd = initialOffset + initialLength
+
+            var leading = 0
+            while leading < bytes.count, leading < initialOffset, Self.isAsciiWhitespace(bytes[leading]) {
+                leading += 1
+            }
+            var trailing = 0
+            while trailing < bytes.count - leading,
+                  bytes.count - trailing > refEnd,
+                  Self.isAsciiWhitespace(bytes[bytes.count - trailing - 1])
+            {
+                trailing += 1
+            }
+
+            let slice = Array(bytes[leading..<(bytes.count - trailing)])
+            let text = String(decoding: slice, as: UTF8.self)
+            let finalOffset = max(0, initialOffset - leading)
+            let finalLength = min(initialLength, max(0, slice.count - finalOffset))
+            c.references[i] = DocumentReference(
+                kind: ref.kind,
+                target: ref.target,
+                alias: ref.alias,
+                sourceRange: ref.sourceRange,
+                targetRange: ref.targetRange,
+                snippet: DocumentSnippet(
+                    text: text,
+                    referenceOffset: UInt32(finalOffset),
+                    referenceLength: UInt32(finalLength)
+                )
+            )
+        }
+    }
+
+    private static func isAsciiWhitespace(_ byte: UInt8) -> Bool {
+        byte == 0x20 || byte == 0x09
+    }
+
+    fileprivate static func shift(_ range: LiminalSourceRange, by delta: Int) -> LiminalSourceRange {
+        TextRange(
+            start: TextSize(UInt32(Int(range.start.rawValue) + delta)),
+            end: TextSize(UInt32(Int(range.end.rawValue) + delta))
+        )
     }
 }

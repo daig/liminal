@@ -201,6 +201,13 @@ public final class VaultEntry: ObservableObject {
     /// `DocumentIndex.build(root:)`.
     @Published public private(set) var indexes: [URL: DocumentIndex] = [:]
 
+    /// Per-note incremental-index memo, parallel to `indexes`. Carried across
+    /// reparses of an open document so unchanged subtrees reuse their cached
+    /// contribution. In-memory only (never serialized): a cold load leaves no
+    /// memo, so the first reindex does a full fold and seeds it. Entries are
+    /// content-addressed, so they stay valid regardless of version.
+    private var indexMemos: [URL: DocumentIndexMemo] = [:]
+
     /// Aggregated index. Refolded on every per-note change.
     @Published public private(set) var linkIndex: VaultLinkIndex = .empty
 
@@ -370,6 +377,7 @@ public final class VaultEntry: ObservableObject {
             if openURLs.contains(canonical) { continue }
             notes[canonical] = nil
             indexes[canonical] = nil
+            indexMemos[canonical] = nil
             linkIndex = linkIndex.applying(removalOf: canonical)
             urlSetChanged = true
             persistedCacheStale = true
@@ -538,9 +546,14 @@ public final class VaultEntry: ObservableObject {
             contentHash: contentHash
         )
         let isNewNote = notes[canonical] == nil
-        let newIndex = DocumentIndex.build(root: rootSyntax, source: content)
+        let (newIndex, newMemo) = DocumentIndex.build(
+            root: rootSyntax,
+            source: content,
+            reusing: indexMemos[canonical]
+        )
         notes[canonical] = metadata
         indexes[canonical] = newIndex
+        indexMemos[canonical] = newMemo
         linkIndex = linkIndex.applying(
             documentChange: canonical,
             metadata: metadata,

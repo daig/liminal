@@ -71,10 +71,12 @@ struct VaultCacheEntry: Equatable {
 enum VaultCacheFormat {
     static let magic: [UInt8] = Array("LMVCACHE".utf8)
     static let formatVersion: UInt32 = 1
-    /// Bump whenever the on-disk shape of `DocumentIndex` /
-    /// `DocumentReference` / `DocumentSnippet` / `HeadingAnchor` /
-    /// `BlockAnchor` changes. A mismatch rejects the whole cache.
-    static let indexSchemaVersion: UInt32 = 1
+    /// Bump whenever the on-disk shape *or content semantics* of
+    /// `DocumentIndex` / `DocumentReference` / `DocumentSnippet` /
+    /// `HeadingAnchor` / `BlockAnchor` changes. A mismatch rejects the whole
+    /// cache. v2: snippets are now the enclosing block's text rather than a
+    /// fixed ±36-byte window.
+    static let indexSchemaVersion: UInt32 = 2
 
     private static let referenceKindLink: UInt8 = 0
     private static let referenceKindEmbed: UInt8 = 1
