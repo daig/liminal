@@ -127,8 +127,10 @@ public final class LiminalEditorSession {
         _ target: SyntaxNodeHandle<LiminalLanguage>,
         with replacement: ResolvedGreenNode<LiminalLanguage>
     ) throws -> LiminalEditResult {
-        let output = try parseSession.replaceSubtree(target, with: replacement)
-        return finalizeReplace(output)
+        return try PerfSignpost.interval("replaceSubtree") {
+            let output = try parseSession.replaceSubtree(target, with: replacement)
+            return finalizeReplace(output)
+        }
     }
 
     @discardableResult
@@ -136,8 +138,10 @@ public final class LiminalEditorSession {
         _ target: SyntaxNodeHandle<LiminalLanguage>,
         with replacement: GreenTreeSnapshot<LiminalLanguage>
     ) throws -> LiminalEditResult {
-        let output = try parseSession.replaceSubtree(target, with: replacement)
-        return finalizeReplace(output)
+        return try PerfSignpost.interval("replaceSubtree") {
+            let output = try parseSession.replaceSubtree(target, with: replacement)
+            return finalizeReplace(output)
+        }
     }
 
     @discardableResult
@@ -145,8 +149,10 @@ public final class LiminalEditorSession {
         _ target: SyntaxNodeHandle<LiminalLanguage>,
         with replacement: borrowing GreenBuildResult<LiminalLanguage>
     ) throws -> LiminalEditResult {
-        let output = try parseSession.replaceSubtree(target, with: replacement)
-        return finalizeReplace(output)
+        return try PerfSignpost.interval("replaceSubtree") {
+            let output = try parseSession.replaceSubtree(target, with: replacement)
+            return finalizeReplace(output)
+        }
     }
 
     /// Install a snapshot tree wholesale, bypassing the parser. Used

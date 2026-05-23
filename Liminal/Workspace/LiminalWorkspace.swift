@@ -185,8 +185,10 @@ public struct DocumentIndex: Equatable, Sendable {
     /// `.empty` — backlinks-panel context relies on the source-bearing
     /// overload below.
     public static func build(root: RootSyntax) -> DocumentIndex {
-        var builder = DocumentIndexBuilder()
-        return builder.build(root: root).index
+        PerfSignpost.interval("index", "src=none") {
+            var builder = DocumentIndexBuilder()
+            return builder.build(root: root).index
+        }
     }
 
     /// Source-bearing variant: each reference also carries a pre-computed
@@ -194,8 +196,10 @@ public struct DocumentIndex: Equatable, Sendable {
     /// Used by the open-doc reindex path and the cold-start scan so backlinks
     /// display works without re-reading source bytes.
     public static func build(root: RootSyntax, source: CambiumSource) -> DocumentIndex {
-        var builder = DocumentIndexBuilder(source: source)
-        return builder.build(root: root).index
+        PerfSignpost.interval("index", "src=full") {
+            var builder = DocumentIndexBuilder(source: source)
+            return builder.build(root: root).index
+        }
     }
 
     /// Incremental variant: reuse `previousMemo` for subtrees whose content is
@@ -207,8 +211,12 @@ public struct DocumentIndex: Equatable, Sendable {
         source: CambiumSource,
         reusing previousMemo: DocumentIndexMemo?
     ) -> (index: DocumentIndex, memo: DocumentIndexMemo) {
+        let signpost = PerfSignpost.begin("index", "reusing=\(previousMemo != nil)")
         var builder = DocumentIndexBuilder(source: source, previousMemo: previousMemo)
-        return builder.build(root: root)
+        let result = builder.build(root: root)
+        PerfSignpost.end("index", signpost,
+            "refs=\(result.index.references.count) hits=\(builder.reuseHits) misses=\(builder.reuseMisses)")
+        return result
     }
 
     public func reference(containing offset: TextSize) -> DocumentReference? {

@@ -680,6 +680,11 @@ public final class LiminalParseSession {
         _ source: CambiumSource,
         edits: [TextEdit] = []
     ) throws -> LiminalParseResult {
+        let signpost = PerfSignpost.begin("parse", "bytes=\(source.byteCount) edits=\(edits.count)")
+        defer {
+            PerfSignpost.end("parse", signpost,
+                "reuse=\(lastReuseSummary.acceptedReuses)/\(lastReuseSummary.queries) bytesAcc=\(lastReuseSummary.bytesAccepted)")
+        }
         _ = incrementalSession.consumeAcceptedReuses()
 
         let effectiveEdits: [TextEdit]

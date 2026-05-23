@@ -31,7 +31,9 @@ struct LiminalTextView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 12, height: 12)
         textView.typingAttributes = context.coordinator.theme.defaultAttributes
 
-        textView.string = document.session.source.toString()
+        PerfSignpost.interval("coldboot.materialize") {
+            textView.string = document.session.source.toString()
+        }
         textView.textStorage?.delegate = context.coordinator
         textView.delegate = context.coordinator
         textView.vimController = document.vimController
@@ -555,28 +557,30 @@ struct LiminalTextView: NSViewRepresentable {
             MainActor.assumeIsolated {
                 guard !isApplyingProgrammaticEdit else { return }
 
-                let preEditRange = NSRange(
-                    location: editedRange.location,
-                    length: editedRange.length - delta
-                )
-                let preEditSource = document.session.source
-                guard let byteRange = LiminalTextView.utf16RangeToByteRange(
-                    preEditRange,
-                    in: preEditSource
-                ) else {
-                    NSLog("LiminalTextView: failed to convert NSRange \(preEditRange) to byte range")
-                    return
-                }
+                PerfSignpost.interval("keystroke", "editLen=\(editedRange.length) delta=\(delta)") {
+                    let preEditRange = NSRange(
+                        location: editedRange.location,
+                        length: editedRange.length - delta
+                    )
+                    let preEditSource = document.session.source
+                    guard let byteRange = LiminalTextView.utf16RangeToByteRange(
+                        preEditRange,
+                        in: preEditSource
+                    ) else {
+                        NSLog("LiminalTextView: failed to convert NSRange \(preEditRange) to byte range")
+                        return
+                    }
 
-                let edit = TextEdit(
-                    range: TextRange(
-                        start: TextSize(UInt32(byteRange.lowerBound)),
-                        length: TextSize(UInt32(byteRange.count))
-                    ),
-                    replacement: replacement
-                )
-                guard document.applyTextEdits([edit]) else { return }
-                applyHighlights(in: editedRange)
+                    let edit = TextEdit(
+                        range: TextRange(
+                            start: TextSize(UInt32(byteRange.lowerBound)),
+                            length: TextSize(UInt32(byteRange.count))
+                        ),
+                        replacement: replacement
+                    )
+                    guard document.applyTextEdits([edit]) else { return }
+                    applyHighlights(in: editedRange)
+                }
             }
         }
 
@@ -3025,6 +3029,17 @@ struct LiminalTextView: NSViewRepresentable {
                   let storage = textView.textStorage
             else { return }
 
+            let scopeLabel: String
+            switch scope {
+            case .fullDocument: scopeLabel = "fullDocument"
+            case .visibleViewport: scopeLabel = "visibleViewport"
+            case .parserDirtyRange: scopeLabel = "parserDirtyRange"
+            case .explicitByteRanges: scopeLabel = "explicitByteRanges"
+            }
+            let highlightSignpost = PerfSignpost.begin("highlight", "scope=\(scopeLabel)")
+            var paintedSpanCount = 0
+            defer { PerfSignpost.end("highlight", highlightSignpost, "spans=\(paintedSpanCount)") }
+
             let storageLen = storage.length
             let source = document.session.source
             let parsed = document.session.parseResult
@@ -3084,6 +3099,7 @@ struct LiminalTextView: NSViewRepresentable {
                 let spans = paintScope.byteRange.map {
                     highlighter.spans(for: root, in: $0)
                 } ?? highlighter.spans(for: root)
+                paintedSpanCount += spans.count
                 for span in spans {
                     guard let nsRange = LiminalTextView.byteRangeToNSRange(span.range, in: source)
                     else { continue }

@@ -389,6 +389,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     /// round-trip, no full highlight pass.
     @MainActor
     func structuralToggleTask(listItemHandle: SyntaxNodeHandle<LiminalLanguage>) -> Bool {
+        let signpost = PerfSignpost.begin("treeaction.toggle")
+        defer { PerfSignpost.end("treeaction.toggle", signpost) }
         let listItem = ListItemSyntax(unchecked: listItemHandle)
         guard let state = listItem.taskState else { return false }
 
@@ -459,6 +461,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
         replacement: GreenTreeSnapshot<LiminalLanguage>,
         edits: [TextEdit]
     ) -> Bool {
+        let signpost = PerfSignpost.begin("treeaction.paste")
+        defer { PerfSignpost.end("treeaction.paste", signpost) }
         let oldRoot = currentRootSyntax
         do {
             _ = try session.replaceSubtree(target, with: replacement)
@@ -490,6 +494,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     @discardableResult
     func writeToBackingFileIfPossible() -> Bool {
         guard let fileURL else { return false }
+        let signpost = PerfSignpost.begin("writethrough")
+        defer { PerfSignpost.end("writethrough", signpost) }
         do {
             let writtenSource = session.source.toString()
             try CoordinatedFileIO.write(
@@ -587,6 +593,8 @@ final class LiminalSourceDocument: ReferenceFileDocument {
     @MainActor
     func commitInsertSession(at cursor: Int) {
         guard let commit = makeUndoSnapshot(cursor: cursor) else { return }
+        let signpost = PerfSignpost.begin("commit")
+        defer { PerfSignpost.end("commit", signpost) }
         undoHistory.commitInsertSession(after: commit)
         indexInVault()
         writeThroughIfNeeded()
