@@ -13,9 +13,9 @@ remain the detailed inventories:
   - Answers: "Do we understand the logical meaning of this copied fragment?"
 - `Docs/structural_cst_paste_matrix.md`
   - Target-side operation inventory.
-  - Tracks source/target/mode triples.
-  - Answers: "Can this logical payload be pasted as block, nest, or splice at
-    this target?"
+  - Tracks source/target/intent triples.
+  - Answers: "Can this logical payload be pasted through a block, nest, or
+    splice intent at this target?"
 
 ## Guiding Model
 
@@ -27,17 +27,56 @@ Structural paste has two independent halves.
      logical payload, such as list base indent or one block quote layer.
    - Extraction should not know the future paste target.
 
-2. Paste adapts that logical payload into a target context.
-   - Block paste inserts document items into a document-item sequence.
-   - Nest paste inserts content inside a container.
-   - Splice paste inserts sibling children into the target parent's child
-     sequence.
+2. Paste lands on a target and adapts the logical payload into that target
+   context.
+   - Block paste lands a document-item slot.
+   - Splice paste lands a sibling slot in the target parent's child sequence.
+   - Nest paste starts from a container node, then derives an interior slot.
    - Primitive operations should reject invalid source/target pairs rather
      than guessing intent.
 
 Higher-level UI can later sit above these primitives and choose between valid
 operations, such as "paste as block," "paste into quote," or "splice list
 items."
+
+## First-Class Slots
+
+Structural paste uses the same Lift / Traverse / Land / Apply grammar as other
+structured commands, but it needs one additional first-class structural target:
+the CST slot.
+
+- Cursor position is text-space input to Lift, not a structural edit target.
+- CST node is one structural object. It can be inspected, mutated, or used to
+  derive an interior slot.
+- CST forest is contiguous sibling children plus their parent role. It is the
+  right target for yank, delete, change, and future replace.
+- CST slot is a typed boundary in a parent/container child sequence. It is the
+  right target for insert, splice, and paste.
+
+This gives the paste algebra:
+
+- `Forest -> Payload` for yank/copy.
+- `Slot x Payload -> Edit` for insertion, including block paste and splice
+  paste.
+- `Node x Payload -> interior Slot x Payload -> Edit` for nest paste.
+- `Forest x Payload -> Edit` for future replacement.
+
+Slots mirror forests. A forest is selected children plus a parent role; a slot
+is a child boundary plus a parent/sequence role. Slot roles include
+`root.documentItems`, `list.items`, `listItem.interior`,
+`blockQuote.documentItems`, `pipeTable.rows`, `pipeTableRow.cells`,
+`inlineContent.children`, `fields.children`, and `listValue.values`.
+
+Stable slot anchors should identify the parent/container, the sequence role,
+and a boundary anchor such as `atStart`, `atEnd`, `before(reference child)`,
+`after(reference child)`, or a `between(left, right, affinity)` gap. Resolved
+slots are current-tree execution targets with parent handles, insertion child
+index, byte offset, and neighbor metadata.
+
+Block, splice, append-inside, and prepend-inside are different ways to acquire
+a slot. They are not separate target-rendering families. Once Land has produced
+a typed slot, Apply chooses rendering from the logical payload family, the slot
+role, and local boundary context.
 
 ## Current Baseline
 
@@ -49,13 +88,19 @@ Implemented extraction families:
 - `blockQuote` -> document item children plus direct quote prefix tokens,
   `blockQuoteContent` projection.
 
-Implemented paste mode coverage:
+Implemented paste intent coverage:
 
 - Block paste for root document item payloads, list payloads, list item content,
   and block quote content.
 - Nest paste into list items for list payloads and paragraph/blank-line text.
 - Splice paste into list child sequences for list item sequences and projected
   list child content.
+
+Canonical Ex command surface:
+
+- `:CSTPasteBlock`
+- `:CSTPasteNest`
+- `:CSTPasteSplice`
 
 ## Thematic Design Chunks
 
@@ -92,7 +137,7 @@ Open decisions:
 
 ### 2. Block Quotes
 
-Status: source projection exists; target adapters deferred.
+Status: source projection exists; target slot/rendering support is deferred.
 
 Scope:
 
@@ -125,21 +170,20 @@ Open decisions:
 #### Target Semantics
 
 For block quote targets, "nest" and "splice" should use the same source
-adaptation rules but different placement rules.
+projection rules and eventually lower to the same `blockQuote.documentItems`
+slot renderer. They differ in how that slot is acquired.
 
 - Nest into block quote:
   - target intent names a `blockQuote` container;
-  - insert adapted document items inside that quote, at the container-level
-    before/after position chosen by the command;
+  - derive an interior `blockQuote.documentItems` slot inside that quote;
   - this is the operation users mean by "paste into this quote."
 - Splice into block quote:
-  - target intent names a precise child slot inside a `blockQuote`;
-  - insert adapted document items as siblings in that quote's child sequence;
+  - target intent names a precise `blockQuote.documentItems` child slot;
   - this is the structural sibling operation and should not retarget from an
     arbitrary cursor position.
 
-Both operations adapt the source by producing a root-level logical document item
-sequence, then rendering that sequence with one additional block quote prefix
+Both operations produce a `blockQuote.documentItems` slot. Apply then renders
+compatible logical document-item payloads with one additional block quote prefix
 layer. Whole block quote document items remain block quote document items, so
 they become nested quotes. Block quote content projections have already removed
 one quote layer, so pasting them into a quote restores exactly one layer.
@@ -285,7 +329,8 @@ Scope:
 
 Current decisions:
 
-- Typed/value syntax should not be forced through document-item paste modes.
+- Typed/value syntax should use value-specific slots rather than being forced
+  through document-item slot renderers.
 
 Open decisions:
 

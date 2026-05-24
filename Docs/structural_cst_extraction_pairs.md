@@ -10,7 +10,8 @@ Extraction is source-side only:
   a synthetic wrapper whose kind is the live selection parent.
 - `StructuralCSTSourceProjection` gives that fragment independent logical text,
   such as removing list indentation or one layer of block quote markers.
-- Paste modes then decide whether that logical payload is valid at a target.
+- Paste Apply/rendering then decides whether that logical payload is valid at a
+  landed CST slot or other structural target.
 
 This document intentionally does not decide target behavior. It answers:
 "If the user copies this wrapper/children shape, do we understand what logical
@@ -51,8 +52,8 @@ is not.
 | `pipeTableDelimiter` | `pipeTableCell` children | Usually reject or table-format adapter only. |
 | `pipeTableRow` | `pipeTableCell` children | Row/cell adapter. |
 | `pipeTableCell` | `inlineContent` | Cell content adapter. |
-| `structuredEmbedBlock` | `linkLabel`, `embedTarget` | Embed target/fallback-content adapter. |
-| `wikiEmbedBlock` | `wikiTarget` | Wiki embed target adapter. |
+| `structuredEmbedBlock` | `linkLabel`, `embedTarget` | Embed-target/fallback-content adapter. |
+| `wikiEmbedBlock` | `wikiTarget` | Wiki-target-child adapter. |
 
 Atomic raw blocks are intentionally omitted from this table:
 `frontmatter`, `fencedCodeBlock`, `mathBlock`, `htmlBlock`, and `commentBlock`
@@ -120,8 +121,8 @@ strip delimiters.
 | `linkDestination` | `linkTitle` plus destination tokens | Destination/title adapter. |
 | `linkTitle` | title text token | Probably atomic string adapter. |
 | `wikilink` | `wikiTarget`, alias `inlineContent` | Wiki target/alias adapter. |
-| `wikiEmbed` | `wikiTarget` plus raw payload token | Wiki embed target/payload adapter. |
-| `structuredEmbed` | `linkLabel`, `embedTarget` | Structured embed fallback/target adapter. |
+| `wikiEmbed` | `wikiTarget` plus raw payload token | Wiki embed-target/payload adapter. |
+| `structuredEmbed` | `linkLabel`, `embedTarget` | Structured embed fallback/embed-target-child adapter. |
 | `typedInline` | `typedConstructor` | Typed inline adapter. |
 | `typedConstructor` | `fields`, `inlineContent` | Constructor field/content adapter. |
 | `interpolation` | `interpolationExpression` | Interpolation expression adapter. |
@@ -151,7 +152,7 @@ families for fields, values, list elements, and record entries.
 | `recordValue` | `fields` | Record field adapter. |
 | `inlineLiteral` | `inlineContent` | Inline literal content adapter. |
 | `blockLiteral` | document item children | Block literal document-item sequence adapter. |
-| `structuredEmbedValue` | `linkLabel`, `embedTarget` | Value embed fallback/target adapter. |
+| `structuredEmbedValue` | `linkLabel`, `embedTarget` | Value embed fallback/embed-target-child adapter. |
 
 Atomic or token-heavy value wrappers that still need logical adapters:
 
@@ -211,10 +212,10 @@ These are the unsupported extraction pairs most likely to matter next:
 
 - Keep source extraction role-aware where the same wrapper means different
   things under different parents.
-- Keep projections independent from target paste modes. For example,
+- Keep projections independent from target paste intents. For example,
   `pipeTableRow` extraction should describe a logical row sequence; separate
-  target adapters decide whether it can be pasted into a table, converted to
-  root text, or rejected.
+  slot renderers decide whether it can be pasted into a table, converted to root
+  text, or rejected.
 - Do not make token-only internals pasteable by accident. For most wrappers,
   token-only children should either be part of an atomic parent extraction or
   have an explicit string/value adapter.

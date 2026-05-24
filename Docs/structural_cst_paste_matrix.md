@@ -1,8 +1,8 @@
 # Structural CST Paste Matrix
 
-This document tracks structural paste support as source/target/mode triples.
+This document tracks structural paste support as source/target/intent triples.
 It is intentionally about editor operations, not keybindings. A keybinding or
-future target-picker UI should choose one of these operation modes and pass a
+future target-picker UI should choose one of these operation intents and pass a
 precise target intent into the planner.
 
 ## Status Legend
@@ -16,13 +16,23 @@ precise target intent into the planner.
 | Reject | Intentionally invalid for now. |
 | N/A | The mode does not make semantic sense for this source/target pair. |
 
-## Paste Modes
+## Current Paste Intents
 
-| Mode | Operation | Current user path | Target shape |
+These are command intents and slot-acquisition strategies. They are not final
+target-rendering families. Once an intent lands a typed CST slot, Apply chooses
+rendering from the logical payload family, the slot role, and local boundary
+context.
+
+| Intent | Slot acquisition | Current user path | Current target shape |
 | --- | --- | --- | --- |
-| Block | Insert payload as document item(s) at the root level, with separator normalization to avoid accidental block merging. | Normal structural paste (`p`) | `root` child sequence |
-| Nest | Insert payload as content inside an existing container, creating/wrapping child structure if needed. | Explicit nested list paste (`Space+n`) | Currently a `listItem` |
-| Splice | Insert payload as sibling children of the target's parent. This is the precise structural sibling operation. | Explicit list-item splice paste (`Space+p`) | Currently a `list` child sequence, with cursor on a list item marker |
+| Block | Land a document-item slot, currently at the root. | `:CSTPasteBlock`; normal structural paste (`p`) | `root.documentItems` |
+| Nest | Land a container node, then derive an interior slot. | `:CSTPasteNest`; shortcut `Space+n` | Currently `listItem` -> child `list.items` |
+| Splice | Land a sibling slot in the target parent's child sequence. | `:CSTPasteSplice`; shortcut `Space+p` | Currently `list.items`, with cursor on a list item marker |
+
+Current and planned slot roles include `root.documentItems`, `list.items`,
+`listItem.interior`, `blockQuote.documentItems`, `pipeTable.rows`,
+`pipeTableRow.cells`, `inlineContent.children`, `fields.children`, and
+`listValue.values`.
 
 ## Current Clipboard Source Shapes
 
@@ -182,9 +192,9 @@ payload families.
 1. Generalize "document item sequence insertion" from root-only to any parent
    whose children are document items, starting with typed/template/schema body
    targets.
-2. Add block quote target adapters:
+2. Add block quote slot/rendering support:
    - source projection already gives lifted logical content;
-   - target adapter should inject one quote layer;
+   - `blockQuote.documentItems` rendering should inject one quote layer;
    - UI must distinguish paste beside quote from paste inside quote.
 3. Add pipe table row splice:
    - source: `pipeTable` wrapper with `pipeTableRow` child(ren), or a projected
@@ -203,12 +213,16 @@ payload families.
 
 ## Implementation Notes
 
-- Source adaptation should stay independent from target adaptation. A copied
-  fragment has independent logical meaning via its projection; target adapters
-  decide how that logical payload becomes valid CST at the destination.
+- Source adaptation should stay independent from target rendering. A copied
+  fragment has independent logical meaning via its projection; Apply decides how
+  that logical payload becomes valid CST at the landed slot.
 - Avoid fallback retargeting inside primitive operations. If an operation is a
   splice into a list, the cursor/target intent must identify the list item
   marker or a future explicit list child slot.
+- Treat block, splice, and nest as slot acquisition intents. Do not select
+  renderers from those names. Select renderers from payload family plus slot
+  role, with boundary context for separators, indentation, markers, quote
+  prefixes, and delimiters.
 - Prefer precise rejection over guessing. Higher-level UI can later offer
   choices such as "paste as block," "paste inside quote," or "splice list
   items."
