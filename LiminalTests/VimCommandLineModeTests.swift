@@ -112,6 +112,20 @@ struct VimCommandLineModeTests {
         #expect(c.commandLineInput == "")
     }
 
+    @Test(":CSTPasteBlock dispatches structural block paste")
+    func enterCSTPasteBlockDispatches() {
+        let c = VimController()
+        let spy = CommandLineSpy()
+        c.delegate = spy
+
+        _ = c.handle(.char(":"))
+        for ch in "CSTPasteBlock" { _ = c.handle(.char(ch)) }
+        _ = c.handle(.special(.returnKey))
+
+        #expect(spy.pasteCSTBlockCalls == [true])
+        #expect(c.mode == .normal)
+    }
+
     @Test("Enter on an unknown command returns silently without dispatch")
     func enterWithUnknownCommandReturnsSilently() {
         let c = VimController()
@@ -198,6 +212,7 @@ private final class CommandLineSpy: VimControllerDelegate {
     var enterCSTVisualModeCallCount = 0
     var swapCSTEndsCallCount = 0
     var findKindCalls: [FindKindCall] = []
+    var pasteCSTBlockCalls: [Bool] = []
 
     // Methods we observe.
     func enterCSTVisualMode() { enterCSTVisualModeCallCount += 1 }
@@ -205,6 +220,7 @@ private final class CommandLineSpy: VimControllerDelegate {
     func cstFindKind(direction: FindDirection, kind: TypedDescentKind, count: Int) {
         findKindCalls.append(.init(direction: direction, kind: kind, count: count))
     }
+    func pasteCSTBlock(after: Bool) { pasteCSTBlockCalls.append(after) }
 
     // Protocol stubs we don't care about.
     func moveCursor(motion: CursorMotion, count: Int) {}

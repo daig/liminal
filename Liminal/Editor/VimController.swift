@@ -775,6 +775,8 @@ public final class VimController: ObservableObject {
             delegate?.prepareForInsert(at: .atCursor)
         case .paste(let after):
             delegate?.paste(after: after)
+        case .pasteCSTBlock(let after):
+            delegate?.pasteCSTBlock(after: after)
         case .pasteCSTSplice(let after):
             delegate?.pasteCSTSplice(after: after)
         case .pasteCSTNest(let after):
@@ -1374,6 +1376,11 @@ public final class VimController: ObservableObject {
             else { return nil }
             return .cstFindKind(direction: .backward, kind: kind, count: count ?? 1)
         })
+
+        registry.register(.init(
+            name: "CSTPasteBlock",
+            description: "Paste CST clipboard payload as root document items"
+        ) { _, _ in .pasteCSTBlock(after: true) })
 
         registry.register(.init(
             name: "CSTPasteSplice",
@@ -1999,6 +2006,9 @@ public protocol VimControllerDelegate: AnyObject {
     /// Paste from the system pasteboard. `after` is `true` for `p`
     /// (after cursor / below line) and `false` for `P`.
     func paste(after: Bool)
+    /// Explicit target-intent paste for inserting compatible CST payloads
+    /// as root document items.
+    func pasteCSTBlock(after: Bool)
     /// Explicit target-intent paste for splicing compatible CST payloads
     /// into a strict child-sequence target.
     func pasteCSTSplice(after: Bool)
@@ -2117,6 +2127,7 @@ extension VimControllerDelegate {
     public func redo(count: Int) {}
     public func commitInsertSession() {}
     public func changeSelection() { deleteSelection() }
+    public func pasteCSTBlock(after: Bool) {}
     public func pasteCSTSplice(after: Bool) {}
     public func pasteCSTNest(after: Bool) {}
     // CST visual mode default no-ops — production Coordinator

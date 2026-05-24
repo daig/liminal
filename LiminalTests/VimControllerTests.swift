@@ -605,6 +605,7 @@ private final class VimDelegateSpy: VimControllerDelegate {
     var yankSelectionCallCount = 0
     var deleteSelectionCallCount = 0
     var pasteCalls: [Bool] = []
+    var pasteCSTBlockCalls: [Bool] = []
     var pasteCSTSpliceCalls: [Bool] = []
     var pasteCSTNestCalls: [Bool] = []
     var applyOperatorCalls: [ApplyOperatorCall] = []
@@ -644,6 +645,9 @@ private final class VimDelegateSpy: VimControllerDelegate {
     }
     func paste(after: Bool) {
         pasteCalls.append(after)
+    }
+    func pasteCSTBlock(after: Bool) {
+        pasteCSTBlockCalls.append(after)
     }
     func pasteCSTSplice(after: Bool) {
         pasteCSTSpliceCalls.append(after)

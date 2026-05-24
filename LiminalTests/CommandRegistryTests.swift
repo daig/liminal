@@ -73,7 +73,7 @@ struct CommandRegistryTests {
             "CSTExtendForward", "CSTExtendBackward",
             "CSTSwapEnds",
             "CSTFind", "CSTFindLast",
-            "CSTPasteSplice", "CSTPasteNest",
+            "CSTPasteBlock", "CSTPasteSplice", "CSTPasteNest",
             "ToggleTask",
             // Added in the trivial-wiring slice
             "CSTFirstSibling", "CSTLastSibling",
@@ -107,6 +107,23 @@ struct CommandRegistryTests {
     }
 
     // MARK: - New commands' dispatch shapes
+
+    @Test("CST paste commands dispatch explicit structural paste modes")
+    func cstPasteCommandsDispatch() {
+        let registry = VimController.defaultCommands()
+        #expect(
+            registry.resolve(name: "CSTPasteBlock", args: [], count: nil)
+            == .pasteCSTBlock(after: true)
+        )
+        #expect(
+            registry.resolve(name: "CSTPasteSplice", args: [], count: nil)
+            == .pasteCSTSplice(after: true)
+        )
+        #expect(
+            registry.resolve(name: "CSTPasteNest", args: [], count: nil)
+            == .pasteCSTNest(after: true)
+        )
+    }
 
     @Test("CSTFirstSibling / CSTLastSibling produce saturating sibling navigates")
     func siblingEndpointsSaturate() {

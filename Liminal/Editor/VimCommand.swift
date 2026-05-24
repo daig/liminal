@@ -19,6 +19,9 @@ public enum VimCommand: Sendable, Equatable {
     /// `p` / `P` in normal: paste from system clipboard. `after`
     /// distinguishes `p` (after cursor / below line) from `P`.
     case paste(after: Bool)
+    /// Explicit target-intent paste: insert a compatible CST clipboard
+    /// payload as root document items.
+    case pasteCSTBlock(after: Bool)
     /// Explicit target-intent paste: splice a compatible CST clipboard
     /// payload into a strict child-sequence target.
     case pasteCSTSplice(after: Bool)

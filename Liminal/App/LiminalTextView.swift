@@ -1515,7 +1515,7 @@ struct LiminalTextView: NSViewRepresentable {
                   let entry = SystemPasteboard.read()
             else { return }
             if entry.kind == .cstForest {
-                pasteStructural(entry, after: after, mode: .block)
+                pasteCSTBlock(after: after)
                 return
             }
             let cursor = textView.selectedRange().location
@@ -1545,6 +1545,16 @@ struct LiminalTextView: NSViewRepresentable {
                 afterCursor: plan.cursorAfter,
                 edits: [edit]
             )
+        }
+
+        func pasteCSTBlock(after: Bool) {
+            guard let entry = SystemPasteboard.read(),
+                  entry.kind == .cstForest
+            else {
+                NSSound.beep()
+                return
+            }
+            pasteStructural(entry, after: after, mode: .block)
         }
 
         func pasteCSTSplice(after: Bool) {
