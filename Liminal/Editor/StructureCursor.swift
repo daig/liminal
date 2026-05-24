@@ -72,7 +72,7 @@ public enum StructureCursor {
         // container (typed-block body, list item) outward if no sibling
         // exists at the inner level. Each entry's children list and the
         // cursor's index in it.
-        var siblingsChain: [(siblings: [TextRange], indexAtCursor: Int)] = []
+        var siblingsChain: [ContainerSiblings] = []
 
         root.syntax.withCursor { cursor in
             walkContainerChain(
@@ -86,30 +86,53 @@ public enum StructureCursor {
         // pop outward.
         for level in siblingsChain.reversed() {
             let siblings = level.siblings
-            let i = level.indexAtCursor
             guard !siblings.isEmpty else { continue }
             switch direction {
             case .previous:
-                if i > 0 {
+                if let i = level.indexAtCursor, i > 0 {
                     return Int(siblings[i - 1].start.rawValue)
                 }
+                let previous = level.insertionIndex - 1
+                if level.indexAtCursor == nil, previous >= 0 {
+                    return Int(siblings[previous].start.rawValue)
+                }
             case .next:
-                if i + 1 < siblings.count {
+                if let i = level.indexAtCursor, i + 1 < siblings.count {
                     return Int(siblings[i + 1].start.rawValue)
+                }
+                if level.indexAtCursor == nil,
+                   !level.isLeadingPrefix,
+                   level.insertionIndex < siblings.count {
+                    return Int(siblings[level.insertionIndex].start.rawValue)
                 }
             }
         }
         return nil
     }
 
+    private struct ContainerSiblings {
+        var kind: LiminalKind
+        var siblings: [TextRange]
+        var indexAtCursor: Int?
+        var insertionIndex: Int
+
+        var isLeadingPrefix: Bool {
+            kind != .root && indexAtCursor == nil && insertionIndex == 0
+        }
+    }
+
     private static func walkContainerChain(
         _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>,
         target: TextSize,
-        into chain: inout [(siblings: [TextRange], indexAtCursor: Int)]
+        into chain: inout [ContainerSiblings]
     ) {
         let nodeKind = LiminalLanguage.kind(for: cursor.rawKind)
         if Self.isContainer(nodeKind) {
-            let entry = collectSiblings(cursor, cursorOffset: target)
+            let entry = collectSiblings(
+                cursor,
+                kind: nodeKind,
+                cursorOffset: target
+            )
             chain.append(entry)
         }
         // Descend into the child whose range contains `target`.
@@ -123,10 +146,12 @@ public enum StructureCursor {
 
     private static func collectSiblings(
         _ cursor: borrowing SyntaxNodeCursor<LiminalLanguage>,
+        kind: LiminalKind,
         cursorOffset: TextSize
-    ) -> (siblings: [TextRange], indexAtCursor: Int) {
+    ) -> ContainerSiblings {
         var siblings: [TextRange] = []
-        var indexAtCursor = -1
+        var indexAtCursor: Int?
+        var insertionIndex = 0
         var i = 0
         cursor.forEachChild { child in
             let kind = LiminalLanguage.kind(for: child.rawKind)
@@ -136,13 +161,18 @@ public enum StructureCursor {
                 if range.start <= cursorOffset && cursorOffset <= range.end {
                     indexAtCursor = i
                 }
+                if range.start <= cursorOffset {
+                    insertionIndex = i + 1
+                }
                 i += 1
             }
         }
-        // If we couldn't pin the cursor to a specific sibling (it falls
-        // between or past them), index is left at -1; callers handle that
-        // as "no sibling in this direction within this container."
-        return (siblings, indexAtCursor)
+        return ContainerSiblings(
+            kind: kind,
+            siblings: siblings,
+            indexAtCursor: indexAtCursor,
+            insertionIndex: min(insertionIndex, siblings.count)
+        )
     }
 
     /// Kinds that own a list of document-item children. Used to walk the

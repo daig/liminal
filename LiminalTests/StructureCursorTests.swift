@@ -64,6 +64,25 @@ struct StructureCursorTests {
         }
     }
 
+    @Test("nextSibling from a list marker moves past the whole list")
+    func nextSiblingFromListMarkerSkipsListBody() throws {
+        let source = "- one\n- two\n\nAfter\n"
+        let parsed = try LiminalParser().parse(CambiumSource(source))
+        let next = StructureCursor.nextSibling(of: 0, in: parsed.rootSyntax)
+        #expect(next == byteOffset(of: "After", in: source))
+    }
+
+    @Test("nextSibling from list item content still uses item children")
+    func nextSiblingFromListContentUsesNestedChildren() throws {
+        let source = "- one\n  - child\n\nAfter\n"
+        let parsed = try LiminalParser().parse(CambiumSource(source))
+        let next = StructureCursor.nextSibling(
+            of: byteOffset(of: "one", in: source),
+            in: parsed.rootSyntax
+        )
+        #expect(next == byteOffset(of: "  - child", in: source))
+    }
+
     // MARK: - Task list item detection
 
     @Test("taskListItem finds unchecked task")
@@ -110,5 +129,12 @@ struct StructureCursorTests {
         let parsed = try LiminalParser().parse(CambiumSource(source))
         let location = StructureCursor.taskListItem(at: 0, in: parsed.rootSyntax)
         #expect(location == nil)
+    }
+
+    private func byteOffset(of needle: String, in source: String) -> Int {
+        source.utf8.distance(
+            from: source.utf8.startIndex,
+            to: source.range(of: needle)!.lowerBound.samePosition(in: source.utf8)!
+        )
     }
 }
