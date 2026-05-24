@@ -19,20 +19,19 @@ precise target intent into the planner.
 ## Current Paste Intents
 
 These are command intents and slot-acquisition strategies. They are not final
-target-rendering families. Once an intent lands a typed CST slot, Apply chooses
-rendering from the logical payload family, the slot role, and local boundary
-context.
+target-rendering families. Once an intent lands a resolved CST slot, Apply
+chooses rendering from the logical payload family, the resolved parent kind, and
+local boundary context.
 
 | Intent | Slot acquisition | Current user path | Current target shape |
 | --- | --- | --- | --- |
-| Block | Land a document-item slot, currently at the root. | `:CSTPasteBlock`; normal structural paste (`p`) | `root.documentItems` |
-| Nest | Land a container node, then derive an interior slot. | `:CSTPasteNest`; shortcut `Space+n` | Currently `listItem` -> child `list.items` |
-| Splice | Land a sibling slot in the target parent's child sequence. | `:CSTPasteSplice`; shortcut `Space+p` | Currently `list.items`, with cursor on a list item marker |
+| Block | Land a document-item slot, currently at the root. | `:CSTPasteBlock`; normal structural paste (`p`) | Child boundary in `root` |
+| Nest | Land a container node, then derive an interior slot. | `:CSTPasteNest`; shortcut `Space+n` | Currently `listItem` -> child boundary in nested `list` |
+| Splice | Land a sibling slot in the target parent's child sequence. | `:CSTPasteSplice`; shortcut `Space+p` | Currently child boundary in `list`, with cursor on a list item marker |
 
-Current and planned slot roles include `root.documentItems`, `list.items`,
-`listItem.interior`, `blockQuote.documentItems`, `pipeTable.rows`,
-`pipeTableRow.cells`, `inlineContent.children`, `fields.children`, and
-`listValue.values`.
+Current and planned slot shapes include child boundaries in `root`,
+`blockQuote`, `typedBlock`, `schemaBody`, `templateBody`, `list`, `pipeTable`,
+`pipeTableRow`, `pipeTableHeader`, `inlineContent`, `fields`, and `listValue`.
 
 ## Current Clipboard Source Shapes
 
@@ -194,7 +193,7 @@ payload families.
    targets.
 2. Add block quote slot/rendering support:
    - source projection already gives lifted logical content;
-   - `blockQuote.documentItems` rendering should inject one quote layer;
+   - rendering into a `blockQuote` child boundary should inject one quote layer;
    - UI must distinguish paste beside quote from paste inside quote.
 3. Add pipe table row splice:
    - source: `pipeTable` wrapper with `pipeTableRow` child(ren), or a projected
@@ -221,8 +220,8 @@ payload families.
   marker or a future explicit list child slot.
 - Treat block, splice, and nest as slot acquisition intents. Do not select
   renderers from those names. Select renderers from payload family plus slot
-  role, with boundary context for separators, indentation, markers, quote
-  prefixes, and delimiters.
+  parent kind, with boundary context for separators, indentation, markers,
+  quote prefixes, and delimiters.
 - Prefer precise rejection over guessing. Higher-level UI can later offer
   choices such as "paste as block," "paste inside quote," or "splice list
   items."

@@ -50,8 +50,8 @@ the CST slot.
   derive an interior slot.
 - CST forest is contiguous sibling children plus their parent role. It is the
   right target for yank, delete, change, and future replace.
-- CST slot is a typed boundary in a parent/container child sequence. It is the
-  right target for insert, splice, and paste.
+- CST slot is a direct boundary in a specific parent/container child sequence.
+  It is the right target for insert, splice, and paste.
 
 This gives the paste algebra:
 
@@ -61,22 +61,23 @@ This gives the paste algebra:
 - `Node x Payload -> interior Slot x Payload -> Edit` for nest paste.
 - `Forest x Payload -> Edit` for future replacement.
 
-Slots mirror forests. A forest is selected children plus a parent role; a slot
-is a child boundary plus a parent/sequence role. Slot roles include
-`root.documentItems`, `list.items`, `listItem.interior`,
-`blockQuote.documentItems`, `pipeTable.rows`, `pipeTableRow.cells`,
-`inlineContent.children`, `fields.children`, and `listValue.values`.
+Slots mirror forests. A forest is selected sibling children plus their parent;
+a slot is a direct child boundary plus a specific parent node. The concrete
+parent kind determines which direct children are admissible. Canonical slot
+shapes include child boundaries in `root`, `blockQuote`, `typedBlock`,
+`schemaBody`, `templateBody`, `list`, `pipeTable`, `pipeTableRow`,
+`pipeTableHeader`, `inlineContent`, `fields`, and `listValue`.
 
-Stable slot anchors should identify the parent/container, the sequence role,
-and a boundary anchor such as `atStart`, `atEnd`, `before(reference child)`,
+Stable slot anchors should identify the parent/container and a boundary anchor
+such as `atStart`, `atEnd`, `before(reference child)`,
 `after(reference child)`, or a `between(left, right, affinity)` gap. Resolved
 slots are current-tree execution targets with parent handles, insertion child
 index, byte offset, and neighbor metadata.
 
 Block, splice, append-inside, and prepend-inside are different ways to acquire
 a slot. They are not separate target-rendering families. Once Land has produced
-a typed slot, Apply chooses rendering from the logical payload family, the slot
-role, and local boundary context.
+a slot, Apply chooses rendering from the logical payload family, the resolved
+parent kind, and local boundary context.
 
 ## Current Baseline
 
@@ -170,19 +171,19 @@ Open decisions:
 #### Target Semantics
 
 For block quote targets, "nest" and "splice" should use the same source
-projection rules and eventually lower to the same `blockQuote.documentItems`
-slot renderer. They differ in how that slot is acquired.
+projection rules and eventually lower to a child boundary inside the target
+`blockQuote`. They differ in how that slot is acquired.
 
 - Nest into block quote:
   - target intent names a `blockQuote` container;
-  - derive an interior `blockQuote.documentItems` slot inside that quote;
+  - derive an interior child-boundary slot inside that quote;
   - this is the operation users mean by "paste into this quote."
 - Splice into block quote:
-  - target intent names a precise `blockQuote.documentItems` child slot;
+  - target intent names a precise child boundary inside a `blockQuote`;
   - this is the structural sibling operation and should not retarget from an
     arbitrary cursor position.
 
-Both operations produce a `blockQuote.documentItems` slot. Apply then renders
+Both operations produce a child-boundary slot in a `blockQuote`. Apply then renders
 compatible logical document-item payloads with one additional block quote prefix
 layer. Whole block quote document items remain block quote document items, so
 they become nested quotes. Block quote content projections have already removed

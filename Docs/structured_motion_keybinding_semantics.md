@@ -315,11 +315,12 @@ the root child nearest the cursor as the reference item.
 Traverse: none today. Future target-picking commands could insert a Traverse
 stage before paste.
 
-Land: produce a `root.documentItems` CST slot before or after the reference
+Land: produce a child-boundary CST slot in `root` before or after the reference
 root child.
 
 Apply: insert the compatible CST clipboard payload into that slot. Separator
-normalization comes from the slot role, not from a separate block renderer.
+normalization comes from the resolved parent kind and boundary context, not from
+a separate block renderer.
 
 Gap: this still uses `StructuralCSTPasteTargetScope` rather than the general
 structured motion grammar.
@@ -335,12 +336,12 @@ Traverse: none today. Future target-picking commands could insert a Traverse
 stage before paste.
 
 Land: produce a precise sibling CST slot in the target parent's child sequence.
-For the current implemented case, this is a `list.items` slot before or after
-the focused list item.
+For the current implemented case, this is a child boundary in the target `list`
+before or after the focused list item.
 
 Apply: insert the compatible CST clipboard payload into that slot. Splice is
 the slot-acquisition intent; rendering is selected by payload family plus slot
-role.
+parent kind and boundary context.
 
 Gap: this still uses `StructuralCSTPasteTargetScope` rather than the general
 structured motion grammar.
@@ -357,11 +358,11 @@ stage before paste.
 
 Land: produce the target container node, then derive an interior CST slot from
 that node. For the current implemented case, a `listItem` node derives a child
-`list.items` slot.
+boundary in a nested `list`.
 
 Apply: insert the compatible CST clipboard payload into the derived slot. Nest
 is the container-to-slot intent; rendering is selected by payload family plus
-slot role.
+parent kind and boundary context.
 
 Gap: like splice paste, this still uses `StructuralCSTPasteTargetScope`.
 

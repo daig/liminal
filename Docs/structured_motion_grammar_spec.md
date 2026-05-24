@@ -26,8 +26,9 @@ Structured editing distinguishes four structural values:
   for inspection, mutation, or deriving an interior slot.
 - CST forest: contiguous sibling children plus their parent role. Forest
   targets are useful for yank, delete, change, and replace.
-- CST slot: a typed boundary in a parent/container child sequence. Slot targets
-  are useful for insert, paste, generated structure, and splice-like edits.
+- CST slot: a direct boundary in a specific parent/container child sequence.
+  Slot targets are useful for insert, paste, generated structure, and
+  splice-like edits.
 
 ## Grammar Contract
 
@@ -229,8 +230,8 @@ Standard Land target kinds:
   visual-CST selection.
 - CST forest head target: a new head endpoint for an active visual-CST
   selection whose anchor is retained by Apply.
-- CST slot: choose a typed parent/container child-sequence role and a boundary
-  for paste or generated structure.
+- CST slot: choose a concrete parent/container and a direct child boundary for
+  paste or generated structure.
 - Mutation target: identify the precise source bytes or CST handle to edit.
 - Navigation target: a destination descriptor for another document,
   same-document anchor, or external URL.
@@ -251,15 +252,12 @@ Land must treat CST slots as first-class structural targets. A stable slot is
 not a raw byte offset and is not a raw child index. Its semantic identity is:
 
 - the parent/container anchor;
-- the typed child-sequence role, such as `root.documentItems`, `list.items`,
-  `blockQuote.documentItems`, `pipeTable.rows`, `pipeTableRow.cells`,
-  `inlineContent.children`, `fields.children`, or `listValue.values`;
 - a boundary anchor: `atStart`, `atEnd`, `before(reference child)`,
   `after(reference child)`, or a `between(left, right, affinity)` form.
 
 A resolved CST slot is current-tree-only execution data. It should normalize
-the anchor into the parent handle/path, the typed role, the insertion child
-index, the insertion byte offset, and left/right neighbor metadata. Stable slot
+the anchor into the parent handle/path, parent kind, insertion child index, the
+insertion byte offset, and left/right neighbor metadata. Stable slot
 anchors may resolve as strong, weak, recovered, or lost, mirroring the existing
 CST anchor and forest-anchor model. Apply may use a resolved slot immediately,
 but persistent marks, deferred execution, and target-picking UI should store
@@ -273,8 +271,8 @@ raw cursor offset after Lift has already resolved a structural site.
 
 Block, splice, append-inside, and prepend-inside are different ways to acquire
 a slot, not different final rendering operations. Once Land has produced a
-typed slot, Apply renders from the logical payload family, the slot role, and
-the slot's boundary context. Nest commands may start from a CST node, but a
+slot, Apply renders from the logical payload family, the resolved parent kind,
+and the slot's boundary context. Nest commands may start from a CST node, but a
 successful nest lowers that node target to an interior slot before insertion.
 
 Land must not repair incompatible Traverse results by silently choosing a new
@@ -312,7 +310,7 @@ repair.
 For structural paste, Apply must not use the command's block/splice/nest label
 as a rendering shortcut. Those labels describe paste intent and slot acquisition
 semantics. Concrete target rendering is selected by the logical payload family
-and the resolved slot role, with local boundary context for separator,
+and the resolved slot's parent kind, with local boundary context for separator,
 indentation, marker, quote-prefix, and delimiter policy.
 
 Apply owns post-action editor context. Mutations such as task toggle should keep
@@ -422,18 +420,18 @@ parent and reference child.
 Traverse: none today. A future paste-target command may traverse to a different
 focus before landing.
 
-Land: produce a typed sibling CST slot relative to the reference child. For the
-current list splice command, this is a `list.items` slot before or after the
-focused `listItem`.
+Land: produce a sibling CST slot relative to the reference child. For the
+current list splice command, this is a child boundary in the target `list`
+before or after the focused `listItem`.
 
 Apply: consume the landed slot, the structural paste payload, the before/after
 flag, and the retained resolved-slot context. Validate compatibility, choose
-the renderer from payload family plus slot role, apply the edit transaction,
-and set the post-paste cursor from the paste plan.
+the renderer from payload family plus resolved parent kind and boundary context,
+apply the edit transaction, and set the post-paste cursor from the paste plan.
 
 The landed target alone is sufficient only if it includes the structural site,
 not merely a byte offset. A byte offset would lose the target parent, reference
-child, typed slot role, origin focus, and exact target forest that the paste
+child, boundary context, origin focus, and exact target forest that the paste
 planner needs.
 
 ### Structural Paste Nest
@@ -445,12 +443,12 @@ container before landing.
 
 Land: produce the container node target and derive an interior CST slot from
 that node according to the command's nest semantics. For the current nested
-list command, a `listItem` node derives a child `list.items` slot, creating or
-choosing that child-list position as needed.
+list command, a `listItem` node derives or chooses a child-boundary slot in a
+nested `list` as needed.
 
 Apply: insert the compatible payload into the derived slot. Rendering is chosen
-from payload family plus slot role, not from the fact that the command was
-called "nest."
+from payload family plus resolved parent kind and boundary context, not from
+the fact that the command was called "nest."
 
 ### Structural Paste Block
 
@@ -459,11 +457,12 @@ the root child nearest the cursor as the reference item.
 
 Traverse: none today.
 
-Land: produce a `root.documentItems` CST slot before or after the reference root
-child.
+Land: produce a child-boundary CST slot in `root` before or after the reference
+root child.
 
 Apply: insert the compatible payload into that slot. Root separator
-normalization is part of the `root.documentItems` renderer.
+normalization is selected by the resolved `root` parent kind and boundary
+context.
 
 ### `<Space>t`: Toggle Task
 

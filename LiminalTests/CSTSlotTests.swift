@@ -5,18 +5,7 @@ import Testing
 @Suite("CSTSlot data model")
 struct CSTSlotTests {
 
-    @Test("known slot roles expose stable raw identifiers")
-    func knownRoleIdentifiers() {
-        #expect(CSTSlotRole.rootDocumentItems.rawValue == "root.documentItems")
-        #expect(CSTSlotRole.listItems.rawValue == "list.items")
-        #expect(CSTSlotRole.blockQuoteDocumentItems.rawValue == "blockQuote.documentItems")
-
-        let custom: CSTSlotRole = "custom.role"
-        #expect(custom.rawValue == "custom.role")
-        #expect(custom.description == "custom.role")
-    }
-
-    @Test("slot anchor records parent role and stable boundary child")
+    @Test("slot anchor records parent and stable boundary child")
     func slotAnchorRecordsBoundaryChild() {
         let parent = CSTNodeAnchor(
             path: [],
@@ -35,13 +24,45 @@ struct CSTSlotTests {
         )
         let anchor = CSTSlotAnchor(
             parent: parent,
-            role: .rootDocumentItems,
             boundary: .before(reference: child)
         )
 
         #expect(anchor.parent == parent)
-        #expect(anchor.role == .rootDocumentItems)
         #expect(anchor.boundary == .before(reference: child))
+    }
+
+    @Test("list splice slot is a list parent plus child boundary")
+    func listSpliceSlotUsesParentAndBoundaryOnly() {
+        let slot = CSTSlot(
+            parentPath: [0],
+            parentKind: .list,
+            boundary: .afterChild(index: 0)
+        )
+        let parent = CSTNodeAnchor(
+            path: [0],
+            fingerprint: NodeFingerprint(
+                kind: .list,
+                contentHash: ContentHash(low64: 1, high64: 2)
+            )
+        )
+        let listItem = CSTSlotChildAnchor(
+            path: [0, 0],
+            indexInParent: 0,
+            fingerprint: NodeFingerprint(
+                kind: .listItem,
+                contentHash: ContentHash(low64: 3, high64: 4)
+            )
+        )
+        let anchor = CSTSlotAnchor(
+            parent: parent,
+            boundary: .after(reference: listItem)
+        )
+
+        #expect(slot.parentPath == [0])
+        #expect(slot.parentKind == .list)
+        #expect(slot.boundary == .afterChild(index: 0))
+        #expect(anchor.parent == parent)
+        #expect(anchor.boundary == .after(reference: listItem))
     }
 
     @Test("resolved slot carries execution metadata without planning paste")
@@ -76,13 +97,11 @@ struct CSTSlotTests {
             )
             let anchor = CSTSlotAnchor(
                 parent: parentAnchor,
-                role: .rootDocumentItems,
                 boundary: .before(reference: childAnchor)
             )
             let slot = CSTSlot(
                 parentPath: rootPath,
                 parentKind: root.kind,
-                role: .rootDocumentItems,
                 boundary: .beforeChild(index: 0)
             )
             let childRange = root.childTextRange(at: 0)
@@ -105,7 +124,7 @@ struct CSTSlotTests {
             )
         }
 
-        #expect(resolved.slot.role == .rootDocumentItems)
+        #expect(resolved.slot.parentKind == .root)
         #expect(resolved.slot.boundary == .beforeChild(index: 0))
         #expect(resolved.insertionChildIndex == 0)
         #expect(resolved.insertionByteOffset == .zero)

@@ -1,48 +1,6 @@
 import CambiumCore
 import CambiumSelection
 
-/// Stable identifier for a typed child-sequence role that can host a CST slot.
-///
-/// The string form is intentionally open-ended so new grammar roles can be
-/// added without changing this data model. Known roles are exposed as constants
-/// for the structural paste and motion grammar documented today.
-public struct CSTSlotRole: Sendable, Equatable, Hashable, RawRepresentable,
-    ExpressibleByStringLiteral, CustomStringConvertible
-{
-    public let rawValue: String
-
-    public init(rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    public init(_ rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    public init(stringLiteral value: String) {
-        self.rawValue = value
-    }
-
-    public var description: String { rawValue }
-}
-
-public extension CSTSlotRole {
-    static let rootDocumentItems: CSTSlotRole = "root.documentItems"
-    static let listItems: CSTSlotRole = "list.items"
-    static let listItemInterior: CSTSlotRole = "listItem.interior"
-    static let blockQuoteDocumentItems: CSTSlotRole = "blockQuote.documentItems"
-    static let pipeTableRows: CSTSlotRole = "pipeTable.rows"
-    static let pipeTableRowCells: CSTSlotRole = "pipeTableRow.cells"
-    static let inlineContentChildren: CSTSlotRole = "inlineContent.children"
-    static let fieldsChildren: CSTSlotRole = "fields.children"
-    static let listValueValues: CSTSlotRole = "listValue.values"
-    static let recordValueFields: CSTSlotRole = "recordValue.fields"
-    static let typedBlockDocumentItems: CSTSlotRole = "typedBlock.documentItems"
-    static let schemaBodyDocumentItems: CSTSlotRole = "schemaBody.documentItems"
-    static let templateBodyDocumentItems: CSTSlotRole = "templateBody.documentItems"
-    static let blockLiteralDocumentItems: CSTSlotRole = "blockLiteral.documentItems"
-}
-
 /// Stable identity for a CST node used by slot anchors.
 ///
 /// Unlike `CSTAnchor`, this identifies a node itself rather than a byte position
@@ -104,26 +62,24 @@ public enum CSTSlotBoundary: Sendable, Equatable, Hashable {
     )
 }
 
-/// A typed child-boundary slot in the current CST.
+/// A direct child-boundary slot in the current CST.
 ///
 /// This is the structural target Land should produce before Apply renders an
-/// insertion. It intentionally carries no paste payload and performs no target
-/// lookup by itself.
+/// insertion. It is identified by one concrete parent node plus a boundary in
+/// that parent's direct children. It intentionally carries no paste payload and
+/// performs no target lookup by itself.
 public struct CSTSlot: Sendable, Equatable, Hashable {
     public let parentPath: LiminalCSTPath
     public let parentKind: LiminalKind
-    public let role: CSTSlotRole
     public let boundary: CSTSlotBoundary
 
     public init(
         parentPath: LiminalCSTPath,
         parentKind: LiminalKind,
-        role: CSTSlotRole,
         boundary: CSTSlotBoundary
     ) {
         self.parentPath = parentPath
         self.parentKind = parentKind
-        self.role = role
         self.boundary = boundary
     }
 }
@@ -131,16 +87,13 @@ public struct CSTSlot: Sendable, Equatable, Hashable {
 /// Persistent, version-independent capture of a CST slot.
 public struct CSTSlotAnchor: Sendable, Equatable, Hashable {
     public let parent: CSTNodeAnchor
-    public let role: CSTSlotRole
     public let boundary: CSTSlotBoundaryAnchor
 
     public init(
         parent: CSTNodeAnchor,
-        role: CSTSlotRole,
         boundary: CSTSlotBoundaryAnchor
     ) {
         self.parent = parent
-        self.role = role
         self.boundary = boundary
     }
 }
@@ -205,7 +158,8 @@ public struct ResolvedCSTSlot: Sendable, Equatable, Hashable {
 public enum CSTSlotResolution: Sendable, Equatable, Hashable {
     /// Parent and boundary references resolve with matching fingerprints.
     case strong(ResolvedCSTSlot)
-    /// Parent/child roles survive, but at least one fingerprint changed.
+    /// Parent and boundary references survive, but at least one fingerprint
+    /// changed.
     case weak(ResolvedCSTSlot)
     /// Exact references failed, but a meaningful enclosing slot was recovered.
     case recovered(ResolvedCSTSlot)
