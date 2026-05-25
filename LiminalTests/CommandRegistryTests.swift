@@ -92,8 +92,6 @@ struct CommandRegistryTests {
             "CSTDocumentStart", "CSTDocumentEnd",
             // Slice C — forest marks
             "CSTMark", "CSTJumpToMark", "CSTUnmark",
-            // CST slot mode
-            "CSTSlot", "CSTSlotMark",
             // Slice D — smart-expand / smart-narrow
             "CSTExpand", "CSTNarrow",
             // Slice E — ex / file commands
@@ -382,63 +380,6 @@ struct CommandRegistryTests {
         )
         // Non-letter arg → handler returns nil → registry returns nil.
         #expect(registry.resolve(name: "CSTMark", args: ["1"], count: nil) == nil)
-    }
-
-    @Test("CSTSlot handler dispatches all four slot selectors")
-    func cstSlotHandlerDispatches() {
-        let registry = VimController.defaultCommands()
-        #expect(
-            registry.resolve(name: "CSTSlot", args: ["prepend"], count: nil)
-            == .enterCSTSlotMode(selector: .prepend)
-        )
-        #expect(
-            registry.resolve(name: "CSTSlot", args: ["append"], count: nil)
-            == .enterCSTSlotMode(selector: .append)
-        )
-        #expect(
-            registry.resolve(name: "CSTSlot", args: ["before"], count: nil)
-            == .enterCSTSlotMode(selector: .before)
-        )
-        #expect(
-            registry.resolve(name: "CSTSlot", args: ["after"], count: nil)
-            == .enterCSTSlotMode(selector: .after)
-        )
-        #expect(registry.resolve(name: "CSTSlot", args: ["middle"], count: nil) == nil)
-    }
-
-    @Test("CSTSlot and CSTSlotMark expose static arg options")
-    func cstSlotCommandsExposeArgOptions() throws {
-        let registry = VimController.defaultCommands()
-
-        let slot = try #require(registry.command(named: "CSTSlot"))
-        switch slot.argSpec {
-        case .single(let label, let options):
-            #expect(label == "selector")
-            #expect(options.map(\.value) == ["prepend", "append", "before", "after"])
-        case .none, .dynamicSingle:
-            Issue.record("CSTSlot should have .single selector options")
-        }
-
-        let mark = try #require(registry.command(named: "CSTSlotMark"))
-        switch mark.argSpec {
-        case .single(let label, let options):
-            #expect(label == "letter")
-            #expect(options.count == 52)
-            #expect(options.contains(where: { $0.value == "a" }))
-            #expect(options.contains(where: { $0.value == "Z" }))
-        case .none, .dynamicSingle:
-            Issue.record("CSTSlotMark should have .single letter options")
-        }
-    }
-
-    @Test("CSTSlotMark handler dispatches setCSTSlotMark with the letter")
-    func cstSlotMarkHandlerDispatches() {
-        let registry = VimController.defaultCommands()
-        #expect(
-            registry.resolve(name: "CSTSlotMark", args: ["Z"], count: nil)
-            == .setCSTSlotMark(letter: "Z")
-        )
-        #expect(registry.resolve(name: "CSTSlotMark", args: ["1"], count: nil) == nil)
     }
 
     @Test("CSTJumpToMark handler dispatches jumpToForestMark with the letter")

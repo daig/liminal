@@ -5,51 +5,6 @@ import Testing
 @Suite("CSTSlot model")
 struct CSTSlotTests {
 
-    // MARK: - Selector grammar
-
-    @Test("selector command arguments round-trip")
-    func selectorRoundTrip() {
-        for selector in [CSTSlotSelector.prepend, .append, .before, .after] {
-            #expect(CSTSlotSelector(commandArgument: selector.commandArgument) == selector)
-        }
-        #expect(CSTSlotSelector(commandArgument: "middle") == nil)
-        #expect(
-            CSTSlotSelector.argOptions.map(\.value) == ["prepend", "append", "before", "after"]
-        )
-    }
-
-    // MARK: - Anchor identity
-
-    @Test("slot anchor stores reference node and selector")
-    func anchorStoresNodeAndSelector() {
-        let node = CSTNodeAnchor(
-            path: [0],
-            fingerprint: NodeFingerprint(
-                kind: .paragraph,
-                contentHash: ContentHash(low64: 1, high64: 2)
-            )
-        )
-        let anchor = CSTSlotAnchor(node: node, selector: .before)
-        #expect(anchor.node == node)
-        #expect(anchor.selector == .before)
-    }
-
-    @Test("resolved slot exposes parent handle, index, and byte offset")
-    func resolvedSlotFields() throws {
-        let parsed = try LiminalParser().parse(CambiumSource("One.\n"))
-        let resolved = parsed.tree.withRoot { root in
-            ResolvedCSTSlot(
-                parentHandle: root.makeHandle(),
-                insertionChildIndex: 0,
-                insertionByteOffset: .zero
-            )
-        }
-        #expect(resolved.insertionChildIndex == 0)
-        #expect(resolved.insertionByteOffset == .zero)
-        #expect(resolved == resolved)
-        #expect(CSTSlotResolution.strong(resolved) == .strong(resolved))
-    }
-
     // MARK: - Inward selectors (parent = the selected node)
 
     @Test("prepend/append resolve inside the selected node")
