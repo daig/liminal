@@ -62,6 +62,12 @@ public final class VimController: ObservableObject {
     /// hook is needed — `LiminalForestResolution` grades the result.
     @Published public private(set) var forestMarks = ForestMarkRegistry()
 
+    /// Session-local marks for active CST slots (`:CSTSlotMark`).
+    /// Independent from byte marks and forest marks; slot anchors
+    /// resolve lazily against the current tree when future consumers
+    /// use them.
+    @Published public private(set) var slotMarks = CSTSlotMarkRegistry()
+
     /// Snapshot of the `:CSTNarrow` descent chain — one entry per
     /// pending Narrow press, with the kind+index the press will land
     /// on. Empty when the descent stack is empty (no Expand history)
@@ -169,14 +175,14 @@ public final class VimController: ObservableObject {
         }
 
         switch mode {
-        case .normal, .visual, .visualLine, .visualBlock, .visualCST:
+        case .normal, .visual, .visualLine, .visualBlock, .visualCST, .slot:
             // Visual modes share normal mode's key-handling shape:
             // count digits, then binding-tree resolution. The
             // binding tree itself segregates per-mode bindings, so
             // motions in visual dispatch their own commands and
             // y/d/c only resolve when actually in a visual mode.
-            // (.visualCST gets its own binding table; the dispatch
-            // shape is identical.)
+            // .visualCST and .slot get their own binding tables; the
+            // dispatch shape is identical.
             return handleNormal(key)
         case .insert:
             return handleInsert(key)
@@ -521,7 +527,8 @@ public final class VimController: ObservableObject {
     private func computeChordHintMap() -> [String: [String]] {
         var map: [String: [String]] = [:]
         let modes: [VimMode] = [
-            .normal, .visual, .visualLine, .visualBlock, .visualCST, .insert,
+            .normal, .visual, .visualLine, .visualBlock, .visualCST, .slot,
+            .insert,
         ]
         for mode in modes {
             for binding in bindings.enumerateBindings(mode: mode) {
@@ -816,6 +823,17 @@ public final class VimController: ObservableObject {
             // before mirroring the forest into the text view.
             setMode(.visualCST)
             delegate?.enterCSTVisualMode()
+        case .enterCSTSlotMode(let selector):
+            if delegate?.enterCSTSlotMode(selector: selector) == true {
+                setMode(.slot)
+            }
+        case .leaveCSTSlotMode:
+            let canReturnToCST = delegate?.leaveCSTSlotMode() ?? true
+            setMode(canReturnToCST ? .visualCST : .normal)
+        case .decayCSTSlotToInsert:
+            if delegate?.decayCSTSlotToInsert() == true {
+                setMode(.insert)
+            }
         case .cstNavigate(let motion, let count):
             delegate?.cstNavigate(motion, count: count)
         case .extendCSTSelection(let motion, let count):
@@ -838,6 +856,8 @@ public final class VimController: ObservableObject {
             delegate?.jumpToForestMark(letter: letter)
         case .unsetForestMark(let letter):
             delegate?.unsetForestMark(letter: letter)
+        case .setCSTSlotMark(let letter):
+            delegate?.setCSTSlotMark(letter: letter)
         case .cstExpand(let count):
             delegate?.cstExpand(count: count)
         case .cstNarrow(let count):
@@ -1288,11 +1308,19 @@ public final class VimController: ObservableObject {
             .awaitFindKind(direction: .backward)
         }
 
+        // Slot mode. The active slot is a terminal target derived from
+        // visualCST provenance, so v1 intentionally has no navigation
+        // bindings inside the mode.
+        t.bind(.slot, [.special(.escape)],
+               description: "Back to Visual CST") { _ in .leaveCSTSlotMode }
+        t.bind(.slot, [.char("i")],
+               description: "Insert at slot") { _ in .decayCSTSlotToInsert }
+
         // `:` enters command-line mode from every "normal-like" mode
         // (including visual variants so the user can dispatch a `:`
         // command without losing the current selection).
         let commandLineEntryModes: [VimMode] = [
-            .normal, .visual, .visualLine, .visualBlock, .visualCST,
+            .normal, .visual, .visualLine, .visualBlock, .visualCST, .slot,
         ]
         for entryMode in commandLineEntryModes {
             t.bind(entryMode, [.char(":")],
@@ -1314,6 +1342,18 @@ public final class VimController: ObservableObject {
             name: "CSTEnter",
             description: "Enter visual CST mode at cursor"
         ) { _, _ in .enterCSTVisualMode })
+
+        registry.register(.init(
+            name: "CSTSlot",
+            description: "Derive a CST slot relative to the selected node (prepend/append inward, before/after outward)",
+            argSpec: .single(label: "selector", options: CSTSlotSelector.argOptions)
+        ) { args, _ in
+            guard let arg = args.first,
+                  args.count == 1,
+                  let selector = CSTSlotSelector(commandArgument: arg)
+            else { return nil }
+            return .enterCSTSlotMode(selector: selector)
+        })
 
         registry.register(.init(
             name: "CSTParent",
@@ -1662,8 +1702,8 @@ public final class VimController: ObservableObject {
         })
 
         // MARK: Last-child descent — symmetric opposite of CSTFirstChild.
-        // Both peel through glue wrappers via the descendant axis with
-        // .excluding(.glueWrapper). Direction picks the chain.
+        // Both descend one AST level; the navigation primitives skip framing
+        // and pass through wrappers intrinsically, so no predicate is needed.
 
         registry.register(.init(
             name: "CSTLastChild",
@@ -1673,7 +1713,7 @@ public final class VimController: ObservableObject {
                 descriptor: .init(
                     axis: .descendant,
                     direction: .backward,
-                    predicate: .excluding(.glueWrapper),
+                    predicate: .any,
                     count: 1
                 ),
                 extending: false
@@ -1724,6 +1764,18 @@ public final class VimController: ObservableObject {
                   ForestMarkRegistry.isValidMarkName(ch)
             else { return nil }
             return .setForestMark(letter: ch)
+        })
+
+        registry.register(.init(
+            name: "CSTSlotMark",
+            description: "Save the active CST slot to a mark slot (a-z, A-Z)",
+            argSpec: .single(label: "letter", options: allMarkLetters)
+        ) { args, _ in
+            guard let arg = args.first,
+                  let ch = arg.first, arg.count == 1,
+                  CSTSlotMarkRegistry.isValidMarkName(ch)
+            else { return nil }
+            return .setCSTSlotMark(letter: ch)
         })
 
         registry.register(.init(
@@ -1870,6 +1922,16 @@ public final class VimController: ObservableObject {
     /// Drop a forest-mark slot. Mirrors `MarkRegistry.unset`.
     public func unsetForestMark(_ letter: Character) {
         forestMarks.unset(letter)
+    }
+
+    // MARK: - CST slot mark registry plumbing
+
+    /// Register a slot anchor. Called by the Coordinator after
+    /// `.setCSTSlotMark(letter)` dispatches and captures the active
+    /// slot's stable anchor.
+    public func setCSTSlotMark(_ letter: Character, anchor: CSTSlotAnchor) {
+        guard CSTSlotMarkRegistry.isValidMarkName(letter) else { return }
+        slotMarks.set(letter, anchor: anchor)
     }
 
     // MARK: - Narrow chain preview
@@ -2046,6 +2108,16 @@ public protocol VimControllerDelegate: AnyObject {
     /// covers the cursor, the delegate should call
     /// ``VimController/forceNormalMode()`` to abort the entry.
     func enterCSTVisualMode()
+    /// Derive a CST slot from the live visual-CST provenance using
+    /// `selector`. Returns `true` only when a slot was derived and displayed.
+    func enterCSTSlotMode(selector: CSTSlotSelector) -> Bool
+    /// Leave slot mode and restore the visual-CST selection if the
+    /// underlying forest is still live. Returns `false` when the
+    /// caller should fall back to normal mode.
+    func leaveCSTSlotMode() -> Bool
+    /// Convert the active CST slot to an ordinary insert caret and
+    /// discard CST provenance. Returns `true` on successful decay.
+    func decayCSTSlotToInsert() -> Bool
     /// Slide the forest selection in `motion`'s direction `count`
     /// times. Each step collapses the selection to a singleton.
     func cstNavigate(_ motion: CSTMotion, count: Int)
@@ -2082,6 +2154,9 @@ public protocol VimControllerDelegate: AnyObject {
     func jumpToForestMark(letter: Character)
     /// Drop forest-mark slot `letter` from the registry.
     func unsetForestMark(letter: Character)
+    /// Capture the active CST slot's stable anchor into a slot-mark
+    /// register. No-op when no active slot exists.
+    func setCSTSlotMark(letter: Character)
     /// Render a one-line preview of forest-mark slot `letter` for the
     /// completion popup (e.g. `"heading: 'Architecture'"`) along with
     /// the slot's current resolution strength. Returns `nil` when the
@@ -2133,6 +2208,9 @@ extension VimControllerDelegate {
     // CST visual mode default no-ops — production Coordinator
     // overrides; spy delegates in tests inherit the no-op.
     public func enterCSTVisualMode() {}
+    public func enterCSTSlotMode(selector: CSTSlotSelector) -> Bool { false }
+    public func leaveCSTSlotMode() -> Bool { true }
+    public func decayCSTSlotToInsert() -> Bool { false }
     public func cstNavigate(_ motion: CSTMotion, count: Int) {}
     public func extendCSTSelection(_ motion: CSTMotion, count: Int) {}
     public func swapCSTEnds() {}
@@ -2156,6 +2234,7 @@ extension VimControllerDelegate {
     public func setForestMark(letter: Character) {}
     public func jumpToForestMark(letter: Character) {}
     public func unsetForestMark(letter: Character) {}
+    public func setCSTSlotMark(letter: Character) {}
     public func forestMarkPreview(letter: Character) -> ForestMarkPreview? { nil }
     public func cstExpand(count: Int) {}
     public func cstNarrow(count: Int) {}

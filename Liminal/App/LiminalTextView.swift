@@ -66,6 +66,7 @@ struct LiminalTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? VimTextView else { return }
         let target = document.session.source.toString()
         if textView.string != target {
+            context.coordinator.clearActiveCSTSlot()
             context.coordinator.isApplyingProgrammaticEdit = true
             textView.string = target
             context.coordinator.isApplyingProgrammaticEdit = false
@@ -192,7 +193,11 @@ struct LiminalTextView: NSViewRepresentable {
         /// depth directly — verifying "lateral clears the stack" via
         /// behavior alone is too indirect (it depends on which kinds
         /// happen to share byte ranges in the test fixture).
-        var cstDescentStack: [Int] = []
+        // Each entry is the raw child-index PATH from the level we ascended
+        // *to* down to the head we left, so a single Expand that crosses
+        // `passThrough` wrappers (e.g. inlineContent) records every raw level
+        // and Narrow can replay it exactly.
+        var cstDescentStack: [[Int]] = []
         static let cstDescentStackCap = 32
         private var treeVersionObservation: AnyCancellable?
         private var preferencesObservation: AnyCancellable?
@@ -232,6 +237,15 @@ struct LiminalTextView: NSViewRepresentable {
         /// structural identity after motion dispatch.
         internal var cstForest: LiminalForest?
 
+        /// Transient current-tree slot used only for active target
+        /// feedback. Future slot-selection and slot-paste commands will
+        /// own when this is set or consumed.
+        internal private(set) var activeCSTSlot: ResolvedCSTSlot?
+
+        /// Persistent identity for the active slot, captured at selection
+        /// time from the visual-CST selected node. Backs `:CSTSlotMark`.
+        internal private(set) var activeCSTSlotAnchor: CSTSlotAnchor?
+
         init(document: LiminalSourceDocument) {
             self.document = document
             self.hoverPreviewController = HoverPreviewController(document: document)
@@ -248,15 +262,16 @@ struct LiminalTextView: NSViewRepresentable {
             modeObservation = controller.$mode.sink { [weak self] newMode in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    // `.commandLine` is a transient interrupt — the
-                    // user will return to whatever they were in (the
-                    // controller's `commandLineReturnMode`). Skip
-                    // anchor cleanup so e.g. `.visualCST` → `:` → `<Esc>`
-                    // returns to the same forest selection.
-                    if newMode == .commandLine {
+                    // `.commandLine` is a transient interrupt, and
+                    // `.slot` is a transient CST target derived from
+                    // the current visual-CST provenance. Both preserve
+                    // the underlying forest selection so the user can
+                    // return to visualCST without rebuilding it.
+                    if newMode == .commandLine || newMode == .slot {
                         self.refreshCursorStyle()
                         return
                     }
+                    self.clearActiveCSTSlot()
                     if !newMode.isVisual {
                         // Leaving any visual mode → drop anchors so
                         // the next motion in normal mode places the
@@ -291,7 +306,9 @@ struct LiminalTextView: NSViewRepresentable {
             // short-circuits when the byte-mark registry is empty.
             treeVersionObservation = document.$treeVersion.sink { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.refreshForestMarkIndicators()
+                    guard let self else { return }
+                    self.clearActiveCSTSlot()
+                    self.refreshForestMarkIndicators()
                 }
             }
             forestMarksObservation = controller.$forestMarks.sink { [weak self] _ in
@@ -485,6 +502,110 @@ struct LiminalTextView: NSViewRepresentable {
             textView.needsDisplay = true
         }
 
+        // MARK: - Active CST slot visual
+
+        @discardableResult
+        func setActiveCSTSlot(_ slot: ResolvedCSTSlot) -> Bool {
+            guard let overlay = makeActiveCSTSlotOverlay(from: slot) else {
+                clearActiveCSTSlot()
+                return false
+            }
+            activeCSTSlot = slot
+            textView?.activeCSTSlotOverlay = overlay
+            return true
+        }
+
+        func clearActiveCSTSlot() {
+            activeCSTSlot = nil
+            activeCSTSlotAnchor = nil
+            textView?.activeCSTSlotOverlay = nil
+        }
+
+        private func makeActiveCSTSlotOverlay(
+            from slot: ResolvedCSTSlot
+        ) -> VimTextView.ActiveCSTSlotOverlay? {
+            guard let textView else { return nil }
+            let source = document.session.source
+            let insertionRange = CambiumCore.TextRange(
+                start: slot.insertionByteOffset,
+                length: TextSize(0)
+            )
+            guard let insertionNSRange = LiminalTextView.byteRangeToNSRange(
+                insertionRange,
+                in: source
+            ) else { return nil }
+
+            // Derive parent kind/range and the two neighbor ranges directly
+            // from the parent cursor — the resolved slot intentionally caches
+            // none of this presentation geometry.
+            let geometry = slot.parentHandle.withCursor {
+                parent -> (parentKind: LiminalKind, parentRange: NSRange?, left: NSRange?, right: NSRange?) in
+                let parentKind = parent.kind
+                let parentRange: NSRange? = parentKind == .root
+                    ? nil
+                    : LiminalTextView.byteRangeToNSRange(parent.textRange, in: source)
+                let count = parent.childOrTokenCount
+                let index = Int(slot.insertionChildIndex)
+                let left = index > 0
+                    ? LiminalTextView.byteRangeToNSRange(
+                        parent.childTextRange(at: index - 1), in: source)
+                    : nil
+                let right = index < count
+                    ? LiminalTextView.byteRangeToNSRange(
+                        parent.childTextRange(at: index), in: source)
+                    : nil
+                return (parentKind, parentRange, left, right)
+            }
+
+            let presentation = activeSlotPresentation(
+                parentKind: geometry.parentKind,
+                leftNeighborRange: geometry.left,
+                rightNeighborRange: geometry.right,
+                in: textView.string as NSString
+            )
+
+            return VimTextView.ActiveCSTSlotOverlay(
+                parentRange: geometry.parentRange,
+                insertionLocation: insertionNSRange.location,
+                leftNeighborRange: geometry.left,
+                rightNeighborRange: geometry.right,
+                parentKind: geometry.parentKind,
+                presentation: presentation
+            )
+        }
+
+        private func activeSlotPresentation(
+            parentKind: LiminalKind,
+            leftNeighborRange: NSRange?,
+            rightNeighborRange: NSRange?,
+            in text: NSString
+        ) -> VimTextView.ActiveCSTSlotOverlay.Presentation {
+            if parentKind == .inlineContent
+                || parentKind.categories.contains(.inlineUnit)
+            {
+                return .inlineCaret
+            }
+            if let leftNeighborRange,
+               let rightNeighborRange,
+               rangesShareLine(leftNeighborRange, rightNeighborRange, in: text)
+            {
+                return .inlineCaret
+            }
+            return .blockRule
+        }
+
+        private func rangesShareLine(
+            _ lhs: NSRange,
+            _ rhs: NSRange,
+            in text: NSString
+        ) -> Bool {
+            guard text.length > 0 else { return true }
+            let lhsLocation = min(lhs.location + max(lhs.length - 1, 0), text.length)
+            let rhsLocation = min(rhs.location, text.length)
+            return lineRange(at: lhsLocation, in: text).start
+                == lineRange(at: rhsLocation, in: text).start
+        }
+
         /// Block-cursor effect via selection: in Normal mode, the cursor's
         /// selection is length 1 so NSTextView's selection highlight paints
         /// a block over the "current" character. In Insert mode, length 0
@@ -505,12 +626,13 @@ struct LiminalTextView: NSViewRepresentable {
                 if current.length != 0 {
                     textView.setSelectedRange(NSRange(location: current.location, length: 0))
                 }
-            case .visual, .visualLine, .visualBlock, .visualCST, .commandLine:
+            case .visual, .visualLine, .visualBlock, .visualCST, .slot, .commandLine:
                 // Visual modes own their selection — leave it alone
                 // and let the per-motion extend logic (or the CST
-                // forest mirror, for .visualCST) manage it. `.commandLine`
-                // is a transient interrupt — the underlying text-view
-                // selection stays put until the user returns.
+                // forest mirror, for .visualCST) manage it. `.slot`
+                // and `.commandLine` are transient interrupts — the
+                // underlying text-view selection stays put until the
+                // user returns or explicitly decays to Insert.
                 break
             }
         }
@@ -1244,7 +1366,7 @@ struct LiminalTextView: NSViewRepresentable {
                     ranges: [r],
                     cursorAfter: r.location
                 )
-            case .normal, .insert, .commandLine:
+            case .normal, .insert, .slot, .commandLine:
                 return nil
             }
         }
@@ -1945,15 +2067,16 @@ struct LiminalTextView: NSViewRepresentable {
                 extendLinewiseSelection(toUTF16: clampedLocation)
             case .visualBlock:
                 extendBlockwiseSelection(toUTF16: clampedLocation)
-            case .visualCST, .commandLine:
+            case .visualCST, .slot, .commandLine:
                 // .visualCST owns the text-view selection via
                 // mirrorCSTSelection. Generic UTF-16 cursor placement
                 // doesn't apply here: text-cursor motions aren't bound
                 // in .visualCST, so this path shouldn't fire — but if it
                 // does (e.g. a future code path), preserve the forest's
-                // range rather than collapse it. `.commandLine` is a
-                // transient interrupt — leave the underlying selection
-                // untouched until the user returns.
+                // range rather than collapse it. `.slot` and
+                // `.commandLine` are transient interrupts — leave the
+                // underlying selection untouched until the user returns
+                // or slot mode explicitly decays to Insert.
                 break
             }
         }
@@ -2111,14 +2234,14 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
-        /// Translate a user-facing ``CSTMotion`` chord into the kernel
-        /// motion that backs it. `.parent` / `.firstChild` carry the
-        /// `.excluding(.glueWrapper)` predicate so a single press
-        /// compresses through any chain of structural wrappers.
+        /// Translate a user-facing ``CSTMotion`` chord into the kernel motion
+        /// that backs it. `.parent` / `.firstChild` need no predicate: the
+        /// navigation primitives intrinsically skip framing and pass through
+        /// wrappers, so one step lands on the adjacent AST level.
         private static func forestMotion(for motion: CSTMotion) -> ForestMotion {
             switch motion {
-            case .parent:           return .ancestor(.excluding(.glueWrapper))
-            case .firstChild:       return .descendant(.excluding(.glueWrapper))
+            case .parent:           return .ancestor()
+            case .firstChild:       return .descendant()
             case .nextSibling:      return .siblingForward()
             case .previousSibling:  return .siblingBackward()
             }
@@ -2221,6 +2344,144 @@ struct LiminalTextView: NSViewRepresentable {
             mirrorCSTSelection()
         }
 
+        // MARK: - CST slot mode
+
+        /// Capture an interior CST slot from the current singleton
+        /// visual-CST node and publish the active-slot overlay. Returns
+        /// `false` without changing slot state when the current forest
+        /// cannot produce the requested slot.
+        func enterCSTSlotMode(selector: CSTSlotSelector) -> Bool {
+            guard ensureForestIsLive(),
+                  let forest = cstForest,
+                  let (slot, anchor) = resolvedSlot(from: forest, selector: selector),
+                  setActiveCSTSlot(slot)
+            else { return false }
+            activeCSTSlotAnchor = anchor
+            return true
+        }
+
+        /// Leave slot mode and return to the preserved visual-CST
+        /// selection. If the forest went stale while the user was in
+        /// slot mode, report failure so the controller can fall back to
+        /// normal mode.
+        func leaveCSTSlotMode() -> Bool {
+            clearActiveCSTSlot()
+            guard ensureForestIsLive(), cstForest != nil else {
+                textView?.cstSelectionRanges = []
+                textView?.cstHeadEdge = nil
+                clearNarrowChainAndStack()
+                return false
+            }
+            mirrorCSTSelection()
+            return true
+        }
+
+        /// Convert the active slot to an ordinary insert caret. This
+        /// deliberately forgets the CST slot and visual-CST provenance:
+        /// subsequent typing is just insert-mode text editing at the
+        /// slot's byte-derived cursor position.
+        func decayCSTSlotToInsert() -> Bool {
+            guard let slot = activeCSTSlot,
+                  let textView,
+                  let insertionRange = LiminalTextView.byteRangeToNSRange(
+                    TextRange(start: slot.insertionByteOffset, length: TextSize(0)),
+                    in: document.session.source
+                  )
+            else { return false }
+
+            let cursor = insertionRange.location
+            document.beginInsertSession(at: cursor)
+            clearActiveCSTSlot()
+            visualAnchorUTF16 = nil
+            visualBlockAnchor = nil
+            visualHeadUTF16 = nil
+            cstForest = nil
+            clearNarrowChainAndStack()
+            textView.cstSelectionRanges = []
+            textView.cstHeadEdge = nil
+            textView.setSelectedRange(NSRange(location: cursor, length: 0))
+            textView.scrollRangeToVisible(textView.selectedRange())
+            return true
+        }
+
+        /// Capture the active slot's persistent anchor into the
+        /// controller-owned slot mark registry. Visual feedback for
+        /// persisted slot marks is intentionally deferred.
+        func setCSTSlotMark(letter: Character) {
+            guard let anchor = activeCSTSlotAnchor else { return }
+            document.vimController.setCSTSlotMark(letter, anchor: anchor)
+        }
+
+        private func resolvedSlot(
+            from forest: LiminalForest,
+            selector: CSTSlotSelector
+        ) -> (slot: ResolvedCSTSlot, anchor: CSTSlotAnchor)? {
+            guard forest.firstChildIndex == forest.lastChildIndex else {
+                return nil
+            }
+            let headIndex = forest.headChildIndex
+
+            return forest.parent.withCursor {
+                parent -> (slot: ResolvedCSTSlot, anchor: CSTSlotAnchor)? in
+                // Stable identity of the selected node (child `headIndex` of
+                // the forest parent), independent of the selector.
+                guard let nodeAnchor = parent.withChildNode(atRawIndex: headIndex, { node in
+                    CSTNodeAnchor(
+                        path: node.liminalCSTPath,
+                        fingerprint: NodeFingerprint(
+                            kind: node.kind,
+                            contentHash: node.greenHash
+                        )
+                    )
+                }) else { return nil }
+                let anchor = CSTSlotAnchor(node: nodeAnchor, selector: selector)
+
+                switch selector {
+                case .before, .after:
+                    // Outward: slot parent = the forest parent.
+                    let count = UInt32(parent.childOrTokenCount)
+                    let index = UInt32(headIndex) + (selector == .after ? 1 : 0)
+                    guard index <= count else { return nil }
+                    let byteOffset: TextSize = index < count
+                        ? parent.childTextRange(at: Int(index)).start
+                        : parent.textRange.end
+                    return (
+                        ResolvedCSTSlot(
+                            parentHandle: parent.makeHandle(),
+                            insertionChildIndex: index,
+                            insertionByteOffset: byteOffset
+                        ),
+                        anchor
+                    )
+                case .prepend, .append:
+                    // Inward: slot parent = the selected node itself, bounded
+                    // by its content children so the node's own framing tokens
+                    // (`!`, `|`, brackets/parens, list markers…) are skipped
+                    // and the slot lands at real content (e.g. the URL text
+                    // inside a link destination).
+                    return parent.withChildNode(atRawIndex: headIndex, {
+                        node -> (slot: ResolvedCSTSlot, anchor: CSTSlotAnchor)? in
+                        let count = UInt32(node.childOrTokenCount)
+                        let bounds = contentChildBounds(of: node)
+                        let index: UInt32 = (selector == .prepend)
+                            ? (bounds?.first ?? 0)
+                            : (bounds?.afterLast ?? count)
+                        let byteOffset: TextSize = index < count
+                            ? node.childTextRange(at: Int(index)).start
+                            : node.textRange.end
+                        return (
+                            ResolvedCSTSlot(
+                                parentHandle: node.makeHandle(),
+                                insertionChildIndex: index,
+                                insertionByteOffset: byteOffset
+                            ),
+                            anchor
+                        )
+                    }) ?? nil
+                }
+            }
+        }
+
         // MARK: - Forest marks
 
         /// Capture the live `cstForest` to forest-mark slot `letter`.
@@ -2308,13 +2569,17 @@ struct LiminalTextView: NSViewRepresentable {
             guard ensureForestIsLive() else { return }
             var moved = false
             for _ in 0..<max(1, count) {
-                guard let forest = cstForest,
-                      let parent = forest.parentForest()
-                else { break }
+                guard let forest = cstForest else { break }
+                let fromPath = headNodePath(of: forest)
+                guard let parent = forest.parentForest() else { break }
+                // The raw path from the ascended parent's head down to the
+                // head we're leaving — spans any passThrough levels skipped.
+                let relative = Array(fromPath.dropFirst(headNodePath(of: parent).count))
+                guard !relative.isEmpty else { break }
                 if cstDescentStack.count >= Coordinator.cstDescentStackCap {
                     cstDescentStack.removeFirst()
                 }
-                cstDescentStack.append(forest.headChildIndex)
+                cstDescentStack.append(relative)
                 cstForest = parent
                 moved = true
             }
@@ -2333,14 +2598,12 @@ struct LiminalTextView: NSViewRepresentable {
             var moved = false
             for _ in 0..<max(1, count) {
                 guard let forest = cstForest else { break }
-                let nextForest: LiminalForest?
-                if let savedIdx = cstDescentStack.popLast(),
-                   let restored = forest.childForest(at: savedIdx) {
-                    nextForest = restored
-                } else {
-                    nextForest = forest.firstChildForest()
+                // Replay the remembered path if we have one; otherwise fall
+                // back to a plain first-child descent.
+                let restored = cstDescentStack.popLast().flatMap {
+                    replayDescent($0, from: forest)
                 }
-                guard let target = nextForest else { break }
+                guard let target = restored ?? forest.firstChildForest() else { break }
                 cstForest = target
                 moved = true
             }
@@ -2362,9 +2625,9 @@ struct LiminalTextView: NSViewRepresentable {
             }
             var entries: [NarrowChainEntry] = []
             var cursor: LiminalForest? = forest
-            for (ord, idx) in cstDescentStack.reversed().enumerated() {
+            for (ord, path) in cstDescentStack.reversed().enumerated() {
                 guard let f = cursor,
-                      let descended = f.childForest(at: idx)
+                      let descended = replayDescent(path, from: f)
                 else { break }
                 let kind = descended.parent.withCursor { c in
                     c.green { $0.child(at: descended.headChildIndex) }.kind
@@ -2372,11 +2635,29 @@ struct LiminalTextView: NSViewRepresentable {
                 entries.append(NarrowChainEntry(
                     ordinal: ord + 1,
                     kindDisplay: kind.displayName,
-                    childIndex: idx
+                    childIndex: path.last ?? 0
                 ))
                 cursor = descended
             }
             document.vimController.updateNarrowChainPreview(entries)
+        }
+
+        /// Full raw child-index path from the tree root to `forest`'s head.
+        private func headNodePath(of forest: LiminalForest) -> [Int] {
+            forest.parent.withCursor { parent in
+                parent.childIndexPath().map(Int.init) + [forest.headChildIndex]
+            }
+        }
+
+        /// Descend `forest` along a raw child-index `path` (one `childForest`
+        /// hop per index), or `nil` if any step no longer resolves.
+        private func replayDescent(_ path: [Int], from forest: LiminalForest) -> LiminalForest? {
+            var current = forest
+            for index in path {
+                guard let next = current.childForest(at: index) else { return nil }
+                current = next
+            }
+            return current
         }
 
         /// Drop the descent stack AND push an empty narrow-chain

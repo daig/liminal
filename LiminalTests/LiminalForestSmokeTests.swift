@@ -68,11 +68,11 @@ struct LiminalForestSmokeTests {
         }
     }
 
-    @Test("firstChildForest refuses to descend into an opaque fenced code block")
-    func opaqueCodeBlockBlocksDescent() throws {
+    @Test("firstChildForest descends into a code block's payload token")
+    func codeBlockDescendsToPayload() throws {
         let parser = LiminalParser()
         let parsed = try parser.parse(CambiumSource("""
-        ```swift
+        ```
         let x = 1
         ```
         """))
@@ -88,8 +88,12 @@ struct LiminalForestSmokeTests {
             root.green { $0.child(at: f.anchorChildIndex) }.kind
         }
         #expect(kind == .fencedCodeBlock)
-        // Cannot descend: childPolicy(.fencedCodeBlock) == .opaque
-        #expect(f.firstChildForest() == nil)
+        // `.opaque` is gone: descent lands on the code body payload token.
+        let down = try #require(f.firstChildForest())
+        let downKind = down.parent.withCursor {
+            $0.green { green in green.child(at: down.anchorChildIndex) }.kind
+        }
+        #expect(downKind == .codeText)
     }
 
     @Test("anchor captured against unchanged tree round-trips strong")

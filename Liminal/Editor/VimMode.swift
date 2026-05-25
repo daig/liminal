@@ -14,6 +14,7 @@ public enum VimMode: Sendable, Equatable, Hashable {
     case visualLine     // V
     case visualBlock    // Ctrl-v
     case visualCST      // gC — selects CST forests (structural)
+    case slot           // transient CST slot target, sourced from visualCST
     case commandLine    // : — typed ex commands, returns to prior mode on Enter/Esc
 }
 
@@ -22,14 +23,14 @@ extension VimMode {
     /// Coordinator's cursor-placement chokepoint to pick the
     /// extend-selection path over set-cursor, and by the mode-leave
     /// observer to clear all selection state on transition to a
-    /// non-visual mode. `.commandLine` is intentionally false — it's
-    /// a transient interrupt that returns to the prior mode (see the
-    /// Coordinator's mode observer for the special-case that preserves
-    /// visual state during a `:` round-trip).
+    /// non-visual mode. `.slot` and `.commandLine` are intentionally
+    /// false — both preserve underlying visual-CST provenance via
+    /// Coordinator mode-observer special-cases rather than behaving as
+    /// generic visual selections.
     public var isVisual: Bool {
         switch self {
         case .visual, .visualLine, .visualBlock, .visualCST: return true
-        case .normal, .insert, .commandLine: return false
+        case .normal, .insert, .slot, .commandLine: return false
         }
     }
 }

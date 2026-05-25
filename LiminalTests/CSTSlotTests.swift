@@ -2,134 +2,266 @@ import CambiumCore
 import Testing
 @testable import Liminal
 
-@Suite("CSTSlot data model")
+@Suite("CSTSlot model")
 struct CSTSlotTests {
 
-    @Test("slot anchor records parent and stable boundary child")
-    func slotAnchorRecordsBoundaryChild() {
-        let parent = CSTNodeAnchor(
-            path: [],
-            fingerprint: NodeFingerprint(
-                kind: .root,
-                contentHash: ContentHash(low64: 1, high64: 2)
-            )
+    // MARK: - Selector grammar
+
+    @Test("selector command arguments round-trip")
+    func selectorRoundTrip() {
+        for selector in [CSTSlotSelector.prepend, .append, .before, .after] {
+            #expect(CSTSlotSelector(commandArgument: selector.commandArgument) == selector)
+        }
+        #expect(CSTSlotSelector(commandArgument: "middle") == nil)
+        #expect(
+            CSTSlotSelector.argOptions.map(\.value) == ["prepend", "append", "before", "after"]
         )
-        let child = CSTSlotChildAnchor(
+    }
+
+    // MARK: - Anchor identity
+
+    @Test("slot anchor stores reference node and selector")
+    func anchorStoresNodeAndSelector() {
+        let node = CSTNodeAnchor(
             path: [0],
-            indexInParent: 0,
             fingerprint: NodeFingerprint(
                 kind: .paragraph,
-                contentHash: ContentHash(low64: 3, high64: 4)
-            )
-        )
-        let anchor = CSTSlotAnchor(
-            parent: parent,
-            boundary: .before(reference: child)
-        )
-
-        #expect(anchor.parent == parent)
-        #expect(anchor.boundary == .before(reference: child))
-    }
-
-    @Test("list splice slot is a list parent plus child boundary")
-    func listSpliceSlotUsesParentAndBoundaryOnly() {
-        let slot = CSTSlot(
-            parentPath: [0],
-            parentKind: .list,
-            boundary: .afterChild(index: 0)
-        )
-        let parent = CSTNodeAnchor(
-            path: [0],
-            fingerprint: NodeFingerprint(
-                kind: .list,
                 contentHash: ContentHash(low64: 1, high64: 2)
             )
         )
-        let listItem = CSTSlotChildAnchor(
-            path: [0, 0],
-            indexInParent: 0,
-            fingerprint: NodeFingerprint(
-                kind: .listItem,
-                contentHash: ContentHash(low64: 3, high64: 4)
-            )
-        )
-        let anchor = CSTSlotAnchor(
-            parent: parent,
-            boundary: .after(reference: listItem)
-        )
-
-        #expect(slot.parentPath == [0])
-        #expect(slot.parentKind == .list)
-        #expect(slot.boundary == .afterChild(index: 0))
-        #expect(anchor.parent == parent)
-        #expect(anchor.boundary == .after(reference: listItem))
+        let anchor = CSTSlotAnchor(node: node, selector: .before)
+        #expect(anchor.node == node)
+        #expect(anchor.selector == .before)
     }
 
-    @Test("resolved slot carries execution metadata without planning paste")
-    func resolvedSlotCarriesExecutionMetadata() throws {
-        let parser = LiminalParser()
-        let parsed = try parser.parse(CambiumSource("""
-        # Heading
-
-        Body paragraph.
-        """))
-
-        let resolved = parsed.tree.withRoot { root -> ResolvedCSTSlot in
-            let rootPath = root.liminalCSTPath
-            let parentAnchor = CSTNodeAnchor(
-                path: rootPath,
-                fingerprint: NodeFingerprint(
-                    kind: root.kind,
-                    contentHash: root.greenHash
-                )
-            )
-            let childFingerprint = root.green { green in
-                let child = green.child(at: 0)
-                return NodeFingerprint(
-                    kind: child.kind,
-                    contentHash: child.contentHash
-                )
-            }
-            let childAnchor = CSTSlotChildAnchor(
-                path: rootPath.appending(0),
-                indexInParent: 0,
-                fingerprint: childFingerprint
-            )
-            let anchor = CSTSlotAnchor(
-                parent: parentAnchor,
-                boundary: .before(reference: childAnchor)
-            )
-            let slot = CSTSlot(
-                parentPath: rootPath,
-                parentKind: root.kind,
-                boundary: .beforeChild(index: 0)
-            )
-            let childRange = root.childTextRange(at: 0)
-            let rightNeighbor = CSTSlotNeighbor(
-                path: rootPath.appending(0),
-                indexInParent: 0,
-                kind: childFingerprint.kind,
-                textRange: childRange,
-                fingerprint: childFingerprint
-            )
-
-            return ResolvedCSTSlot(
-                slot: slot,
-                anchor: anchor,
+    @Test("resolved slot exposes parent handle, index, and byte offset")
+    func resolvedSlotFields() throws {
+        let parsed = try LiminalParser().parse(CambiumSource("One.\n"))
+        let resolved = parsed.tree.withRoot { root in
+            ResolvedCSTSlot(
                 parentHandle: root.makeHandle(),
                 insertionChildIndex: 0,
-                insertionByteOffset: childRange.start,
-                leftNeighbor: nil,
-                rightNeighbor: rightNeighbor
+                insertionByteOffset: .zero
+            )
+        }
+        #expect(resolved.insertionChildIndex == 0)
+        #expect(resolved.insertionByteOffset == .zero)
+        #expect(resolved == resolved)
+        #expect(CSTSlotResolution.strong(resolved) == .strong(resolved))
+    }
+
+    // MARK: - Inward selectors (parent = the selected node)
+
+    @Test("prepend/append resolve inside the selected node")
+    func inwardResolvesInsideNode() throws {
+        let parsed = try LiminalParser().parse(CambiumSource("- one\n- two\n"))
+
+        // Root's child 0 is the list; use it as the slot's container.
+        let (prepend, append, listChildCount) = try parsed.tree.withRoot {
+            root -> (CSTSlotAnchor, CSTSlotAnchor, UInt32) in
+            try #require(root.withChildNode(atRawIndex: 0) { list in
+                let node = CSTNodeAnchor(
+                    path: list.liminalCSTPath,
+                    fingerprint: NodeFingerprint(kind: list.kind, contentHash: list.greenHash)
+                )
+                return (
+                    CSTSlotAnchor(node: node, selector: .prepend),
+                    CSTSlotAnchor(node: node, selector: .append),
+                    UInt32(list.childOrTokenCount)
+                )
+            })
+        }
+
+        guard case .strong(let prependSlot) = prepend.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong prepend"); return
+        }
+        #expect(prependSlot.insertionChildIndex == 0)
+        #expect(prependSlot.parentHandle.withCursor { $0.kind } == .list)
+
+        guard case .strong(let appendSlot) = append.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong append"); return
+        }
+        #expect(appendSlot.insertionChildIndex == listChildCount)
+        #expect(appendSlot.parentHandle.withCursor { $0.kind } == .list)
+    }
+
+    // MARK: - Outward selectors (parent = the selected node's parent)
+
+    @Test("before/after resolve beside the selected node in its parent")
+    func outwardResolvesInParent() throws {
+        let parsed = try LiminalParser().parse(CambiumSource("# Heading\n\nBody.\n"))
+
+        // Root's child 0 is the heading; before/after target root.
+        let (before, after) = try parsed.tree.withRoot {
+            root -> (CSTSlotAnchor, CSTSlotAnchor) in
+            try #require(root.withChildNode(atRawIndex: 0) { node in
+                let anchor = CSTNodeAnchor(
+                    path: node.liminalCSTPath,
+                    fingerprint: NodeFingerprint(kind: node.kind, contentHash: node.greenHash)
+                )
+                return (
+                    CSTSlotAnchor(node: anchor, selector: .before),
+                    CSTSlotAnchor(node: anchor, selector: .after)
+                )
+            })
+        }
+
+        guard case .strong(let beforeSlot) = before.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong before"); return
+        }
+        #expect(beforeSlot.insertionChildIndex == 0)
+        #expect(beforeSlot.parentHandle.withCursor { $0.kind } == .root)
+
+        guard case .strong(let afterSlot) = after.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong after"); return
+        }
+        #expect(afterSlot.insertionChildIndex == 1)
+        #expect(afterSlot.parentHandle.withCursor { $0.kind } == .root)
+    }
+
+    // MARK: - Root node edge cases
+
+    @Test("inward selector on the root node targets the document")
+    func inwardOnRootTargetsDocument() throws {
+        let parsed = try LiminalParser().parse(CambiumSource("One.\n"))
+        let anchor = parsed.tree.withRoot { root in
+            CSTSlotAnchor(
+                node: CSTNodeAnchor(
+                    path: root.liminalCSTPath,
+                    fingerprint: NodeFingerprint(kind: root.kind, contentHash: root.greenHash)
+                ),
+                selector: .prepend
             )
         }
 
-        #expect(resolved.slot.parentKind == .root)
-        #expect(resolved.slot.boundary == .beforeChild(index: 0))
+        guard case .strong(let resolved) = anchor.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong"); return
+        }
         #expect(resolved.insertionChildIndex == 0)
-        #expect(resolved.insertionByteOffset == .zero)
-        #expect(resolved.leftNeighbor == nil)
-        #expect(resolved.rightNeighbor?.kind == .atxHeading)
-        #expect(CSTSlotResolution.strong(resolved) == .strong(resolved))
+        #expect(resolved.parentHandle.withCursor { $0.kind } == .root)
+    }
+
+    @Test("outward selector on the root node is lost (no parent)")
+    func outwardOnRootIsLost() throws {
+        let parsed = try LiminalParser().parse(CambiumSource("One.\n"))
+        let anchor = parsed.tree.withRoot { root in
+            CSTSlotAnchor(
+                node: CSTNodeAnchor(
+                    path: root.liminalCSTPath,
+                    fingerprint: NodeFingerprint(kind: root.kind, contentHash: root.greenHash)
+                ),
+                selector: .before
+            )
+        }
+        #expect(anchor.resolve(in: parsed.rootSyntax) == .lost)
+    }
+
+    // MARK: - Resolution grading
+
+    @Test("resolves weak when the node survives but its content changed")
+    func weakOnContentChange() throws {
+        let original = try LiminalParser().parse(CambiumSource("One.\n"))
+        let edited = try LiminalParser().parse(CambiumSource("One changed.\n"))
+        let anchor = try original.tree.withRoot { root -> CSTSlotAnchor in
+            try #require(root.withChildNode(atRawIndex: 0) { node in
+                CSTSlotAnchor(
+                    node: CSTNodeAnchor(
+                        path: node.liminalCSTPath,
+                        fingerprint: NodeFingerprint(kind: node.kind, contentHash: node.greenHash)
+                    ),
+                    selector: .before
+                )
+            })
+        }
+
+        guard case .weak(let resolved) = anchor.resolve(in: edited.rootSyntax) else {
+            Issue.record("expected .weak, got \(anchor.resolve(in: edited.rootSyntax))"); return
+        }
+        #expect(resolved.parentHandle.withCursor { $0.kind } == .root)
+        #expect(resolved.insertionChildIndex == 0)
+    }
+
+    @Test("resolves lost when the node is deleted")
+    func lostOnDeletion() throws {
+        let original = try LiminalParser().parse(CambiumSource("One.\n"))
+        let edited = try LiminalParser().parse(CambiumSource(""))
+        let anchor = try original.tree.withRoot { root -> CSTSlotAnchor in
+            try #require(root.withChildNode(atRawIndex: 0) { node in
+                CSTSlotAnchor(
+                    node: CSTNodeAnchor(
+                        path: node.liminalCSTPath,
+                        fingerprint: NodeFingerprint(kind: node.kind, contentHash: node.greenHash)
+                    ),
+                    selector: .append
+                )
+            })
+        }
+        #expect(anchor.resolve(in: edited.rootSyntax) == .lost)
+    }
+
+    @Test("resolves lost when the node's kind changes")
+    func lostOnKindChange() throws {
+        let original = try LiminalParser().parse(CambiumSource("One.\n"))       // paragraph
+        let edited = try LiminalParser().parse(CambiumSource("# One\n"))         // atxHeading
+        let anchor = try original.tree.withRoot { root -> CSTSlotAnchor in
+            try #require(root.withChildNode(atRawIndex: 0) { node in
+                CSTSlotAnchor(
+                    node: CSTNodeAnchor(
+                        path: node.liminalCSTPath,
+                        fingerprint: NodeFingerprint(kind: node.kind, contentHash: node.greenHash)
+                    ),
+                    selector: .before
+                )
+            })
+        }
+        #expect(anchor.resolve(in: edited.rootSyntax) == .lost)
+    }
+
+    // MARK: - Framing-aware interior bounds
+
+    @Test("inward slots on a payload wrapper land at the content, inside the framing")
+    func inwardSkipsFramingToPayloadContent() throws {
+        // "[text](url)": the linkDestination is "(url)" — the parens are
+        // syntactic framing, the URL text is a (non-navigable) payload token.
+        // prepend must land just after '(', append just before ')'.
+        let source = "[text](url)\n"
+        let parsed = try LiminalParser().parse(CambiumSource(source))
+        let node = try #require(parsed.tree.withRoot { root in
+            Self.findNodeAnchor(ofKind: .linkDestination, in: root)
+        })
+
+        let prepend = CSTSlotAnchor(node: node, selector: .prepend)
+        let append = CSTSlotAnchor(node: node, selector: .append)
+
+        guard case .strong(let prependSlot) = prepend.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong prepend"); return
+        }
+        guard case .strong(let appendSlot) = append.resolve(in: parsed.rootSyntax) else {
+            Issue.record("expected .strong append"); return
+        }
+        // "[text](url)\n": '(' at byte 6, "url" at 7...9, ')' at 10.
+        #expect(prependSlot.insertionByteOffset == TextSize(7))   // after '('
+        #expect(appendSlot.insertionByteOffset == TextSize(10))   // before ')'
+    }
+
+    /// Depth-first search for the first node of `kind`, returning a stable
+    /// anchor to it.
+    private static func findNodeAnchor(
+        ofKind kind: LiminalKind,
+        in cursor: borrowing SyntaxNodeCursor<LiminalLanguage>
+    ) -> CSTNodeAnchor? {
+        if cursor.kind == kind {
+            return CSTNodeAnchor(
+                path: cursor.liminalCSTPath,
+                fingerprint: NodeFingerprint(kind: cursor.kind, contentHash: cursor.greenHash)
+            )
+        }
+        for i in 0..<cursor.childOrTokenCount {
+            let found = cursor.withChildNode(atRawIndex: i) { child in
+                findNodeAnchor(ofKind: kind, in: child)
+            } ?? nil
+            if let found { return found }
+        }
+        return nil
     }
 }

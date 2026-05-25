@@ -76,6 +76,21 @@ public enum VimCommand: Sendable, Equatable {
     /// cursor (block-level entry) and mirrors it into the text view.
     case enterCSTVisualMode
 
+    /// `:CSTSlot <selector>` from visual-CST provenance: derive a slot
+    /// relative to the selected singleton CST node — inward
+    /// (prepend/append) makes the node the slot's parent, outward
+    /// (before/after) places the slot beside the node in its parent.
+    /// Displays the active-slot overlay and enters ``VimMode/slot``.
+    case enterCSTSlotMode(selector: CSTSlotSelector)
+
+    /// `<Esc>` in slot mode: forget the active slot target and return
+    /// to the preserved visual-CST selection when it is still live.
+    case leaveCSTSlotMode
+
+    /// `i` in slot mode: place a regular insert caret at the slot
+    /// insertion point and discard CST slot provenance.
+    case decayCSTSlotToInsert
+
     /// CST-structural motion that *slides* the forest selection to a
     /// new singleton in the named direction. The motion may be
     /// repeated `count` times; if any step has no successor the move
@@ -134,6 +149,11 @@ public enum VimCommand: Sendable, Equatable {
     /// Drop a forest-mark slot. Backs `:CSTUnmark <letter>`. Works from
     /// any mode (it's a registry mutation, not a selection change).
     case unsetForestMark(letter: Character)
+
+    /// Save the active CST slot to a slot-mark registry. No-op when
+    /// not in ``VimMode/slot`` or when there is no active slot anchor.
+    /// Backs `:CSTSlotMark <letter>`.
+    case setCSTSlotMark(letter: Character)
 
     /// Smart-expand: ascend one navigable level (same as `:CSTParent`)
     /// while pushing the leaving `headChildIndex` onto a descent-history

@@ -152,6 +152,7 @@ struct VimVisualModeTests {
         #expect(VimMode.visualBlock.isVisual)
         #expect(VimMode.normal.isVisual == false)
         #expect(VimMode.insert.isVisual == false)
+        #expect(VimMode.slot.isVisual == false)
     }
 }
 

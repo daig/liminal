@@ -135,17 +135,19 @@ struct LiminalCSTVisualIntegrationTests {
                 "ascend shouldn't move the selection start later")
     }
 
-    @Test("firstChild descend into an opaque fenced code block is a no-op")
-    func firstChildOnOpaqueBlockIsNoOp() throws {
-        let fixture = try makeFixture("```swift\nlet x = 1\n```\n")
+    @Test("firstChild descends into a (no-longer-opaque) code block's payload")
+    func firstChildDescendsIntoCodeBlockPayload() throws {
+        // No info string, so the first content stop is the code body itself.
+        let fixture = try makeFixture("```\nlet x = 1\n```\n")
         fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
-        let before = fixture.textView.cstSelectionRanges
+        let block = try #require(fixture.coordinator.cstForest)
+        #expect(headKind(block) == .fencedCodeBlock)
 
         fixture.coordinator.cstNavigate(.firstChild, count: 1)
-        let after = fixture.textView.cstSelectionRanges
-
-        #expect(after == before, "opaque-block descend should not move selection")
+        let descended = try #require(fixture.coordinator.cstForest)
+        // `.opaque` is gone: descent lands on the code body payload token.
+        #expect(headKind(descended) == .codeText)
     }
 
     // MARK: - Glue-skip semantics (step 3a)
@@ -1046,9 +1048,11 @@ struct LiminalCSTVisualIntegrationTests {
 
     @Test("Narrow chain preview tracks the descent stack")
     func narrowChainPreviewTracksStack() throws {
-        let source = "Hello **bold** world.\n"
+        // Starts with the strong run so the first `firstChild` lands on it
+        // (paragraph → strong → "bold"), giving a genuine two-level descent.
+        let source = "**bold** world.\n"
         let fixture = try makeFixture(source)
-        fixture.placeCursor(atUTF16: try utf16Offset(of: "bold", in: source))
+        fixture.placeCursor(atUTF16: 0)
         fixture.coordinator.enterCSTVisualMode()
         // Empty stack → empty preview.
         #expect(fixture.controller.narrowChainPreview.isEmpty)
@@ -1061,10 +1065,9 @@ struct LiminalCSTVisualIntegrationTests {
         let preview = fixture.controller.narrowChainPreview
         #expect(preview.count == 2,
                 "expected 2 chain entries; saw \(preview.count)")
-        #expect(preview[0].ordinal == 1, "first entry must be next-to-pop")
-        #expect(preview[1].ordinal == 2)
-        // Kind display strings are non-empty (don't pin specific kinds —
-        // the structural shape of "Hello **bold** world." is policy-dependent).
+        // Safe indexing — a wrong count fails an assertion rather than trapping.
+        #expect(preview.first?.ordinal == 1, "first entry must be next-to-pop")
+        #expect(preview.dropFirst().first?.ordinal == 2)
         for entry in preview {
             #expect(!entry.kindDisplay.isEmpty,
                     "entry \(entry.ordinal) missing kind display name")
@@ -1123,6 +1126,253 @@ struct LiminalCSTVisualIntegrationTests {
         for ch in "CSTUnmark x" { _ = fixture.controller.handle(.char(ch)) }
         _ = fixture.controller.handle(.special(.returnKey))
         #expect(fixture.controller.forestMarks.anchor(named: "x") == nil)
+    }
+
+    // MARK: - Slot mode
+
+    @Test(":CSTSlot append enters slot mode and displays an interior active slot")
+    func cstSlotAppendEntersSlotMode() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let forest = try #require(fixture.coordinator.cstForest)
+        let selectedKind = headKind(forest)
+        let selectedPath = forest.parentCSTPath.appending(UInt32(forest.headChildIndex))
+
+        enterCommand(fixture.controller, "CSTSlot append")
+
+        let slot = try #require(fixture.coordinator.activeCSTSlot)
+        let anchor = try #require(fixture.coordinator.activeCSTSlotAnchor)
+        #expect(fixture.controller.mode == .slot)
+        // append is inward: the slot's parent is the selected node itself.
+        #expect(slot.parentHandle.withCursor { $0.kind } == selectedKind)
+        #expect(anchor.node.path == selectedPath)
+        #expect(anchor.selector == .append)
+        #expect(fixture.textView.activeCSTSlotOverlay != nil)
+    }
+
+    @Test(":CSTSlot prepend derives an interior slot from a singleton selected node")
+    func cstSlotPrependDerivesInteriorSlot() throws {
+        let source = "- one\n- two\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let forest = try #require(fixture.coordinator.cstForest)
+        let selectedKind = headKind(forest)
+        let selectedStart = forest.parent.withCursor { parent in
+            parent.childTextRange(at: forest.headChildIndex).start
+        }
+
+        enterCommand(fixture.controller, "CSTSlot prepend")
+
+        let slot = try #require(fixture.coordinator.activeCSTSlot)
+        let anchor = try #require(fixture.coordinator.activeCSTSlotAnchor)
+        #expect(fixture.controller.mode == .slot)
+        // prepend is inward: parent is the selected node. The selected list
+        // item leads with a non-navigable "- " marker, so the slot skips it
+        // and lands at the first content child rather than before the marker.
+        #expect(slot.parentHandle.withCursor { $0.kind } == selectedKind)
+        #expect(anchor.selector == .prepend)
+        #expect(slot.insertionChildIndex > 0)
+        #expect(slot.insertionByteOffset > selectedStart)
+    }
+
+    @Test(":CSTSlot after enters slot mode with an outward slot in the parent")
+    func cstSlotAfterEntersOutwardSlot() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        let forest = try #require(fixture.coordinator.cstForest)
+        let headIndex = UInt32(forest.headChildIndex)
+
+        enterCommand(fixture.controller, "CSTSlot after")
+
+        let slot = try #require(fixture.coordinator.activeCSTSlot)
+        let anchor = try #require(fixture.coordinator.activeCSTSlotAnchor)
+        #expect(fixture.controller.mode == .slot)
+        // after is outward: the slot lives in the selected node's parent,
+        // just past the selected node.
+        #expect(slot.parentHandle.withCursor { $0.kind } == .root)
+        #expect(slot.insertionChildIndex == headIndex + 1)
+        #expect(anchor.selector == .after)
+        #expect(fixture.textView.activeCSTSlotOverlay != nil)
+    }
+
+    @Test(":CSTSlot append on a wikilink highlights the wikilink as slot parent")
+    func cstSlotAppendOnWikilinkHighlightsSelectedNodeAsParent() throws {
+        let source = "A [[Page]] B\n"
+        let fixture = try makeFixture(source)
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        fixture.coordinator.cstFindKind(direction: .forward, kind: .wikilink, count: 1)
+        let wikiOffset = try utf16Offset(of: "[[Page]]", in: source)
+
+        enterCommand(fixture.controller, "CSTSlot append")
+
+        let slot = try #require(fixture.coordinator.activeCSTSlot)
+        let anchor = try #require(fixture.coordinator.activeCSTSlotAnchor)
+        let overlay = try #require(fixture.textView.activeCSTSlotOverlay)
+        #expect(slot.parentHandle.withCursor { $0.kind } == .wikilink)
+        #expect(anchor.selector == .append)
+        #expect(overlay.parentKind == .wikilink)
+        #expect(overlay.parentRange == NSRange(
+            location: wikiOffset,
+            length: "[[Page]]".utf16.count
+        ))
+    }
+
+    @Test("Esc from slot mode clears the active slot and returns to visualCST")
+    func escFromSlotModeClearsActiveSlot() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        enterCommand(fixture.controller, "CSTSlot append")
+        #expect(fixture.textView.activeCSTSlotOverlay != nil)
+
+        _ = fixture.controller.handle(.special(.escape))
+
+        #expect(fixture.controller.mode == .visualCST)
+        #expect(fixture.coordinator.activeCSTSlot == nil)
+        #expect(fixture.textView.activeCSTSlotOverlay == nil)
+        #expect(!fixture.textView.cstSelectionRanges.isEmpty)
+    }
+
+    @Test("i from slot mode decays into insert at the slot insertion point")
+    func insertFromSlotModeLandsAtInsertionPoint() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        enterCommand(fixture.controller, "CSTSlot append")
+        let slot = try #require(fixture.coordinator.activeCSTSlot)
+        let expectedRange = try #require(LiminalTextView.byteRangeToNSRange(
+            TextRange(start: slot.insertionByteOffset, length: TextSize(0)),
+            in: fixture.document.session.source
+        ))
+
+        _ = fixture.controller.handle(.char("i"))
+
+        #expect(fixture.controller.mode == .insert)
+        #expect(fixture.textView.selectedRange() == expectedRange)
+        #expect(fixture.coordinator.activeCSTSlot == nil)
+        #expect(fixture.textView.activeCSTSlotOverlay == nil)
+        #expect(fixture.coordinator.cstForest == nil)
+        #expect(fixture.textView.cstSelectionRanges.isEmpty)
+    }
+
+    @Test(":CSTSlotMark stores the current slot anchor")
+    func cstSlotMarkStoresAnchor() throws {
+        let fixture = try makeFixture("First.\n\nSecond.\n")
+        fixture.placeCursor(atUTF16: 0)
+        _ = fixture.controller.handle(.char("g"))
+        _ = fixture.controller.handle(.char("C"))
+        enterCommand(fixture.controller, "CSTSlot append")
+        let anchor = try #require(fixture.coordinator.activeCSTSlotAnchor)
+
+        enterCommand(fixture.controller, "CSTSlotMark a")
+
+        #expect(fixture.controller.mode == .slot)
+        #expect(fixture.controller.slotMarks.anchor(named: "a") == anchor)
+    }
+
+    @Test("Active CST slot overlay uses a block rule for list child boundaries")
+    func activeCSTSlotOverlayUsesBlockRuleForListBoundary() throws {
+        let source = "- one\n- two\n"
+        let fixture = try makeFixture(source)
+        let tree = try #require(fixture.document.session.currentTree)
+        let slot = try firstResolvedSlot(
+            in: tree,
+            parentKind: .list,
+            insertionChildIndex: 1
+        )
+        let secondItemOffset = try utf16Offset(of: "- two", in: source)
+
+        fixture.coordinator.setActiveCSTSlot(slot)
+
+        let overlay = try #require(fixture.textView.activeCSTSlotOverlay)
+        #expect(fixture.coordinator.activeCSTSlot == slot)
+        #expect(overlay.presentation == .blockRule)
+        #expect(overlay.parentKind == .list)
+        #expect(overlay.insertionLocation == secondItemOffset)
+        #expect(overlay.parentRange?.location == 0)
+        #expect(overlay.parentRange?.length == source.utf16.count)
+        #expect(overlay.leftNeighborRange?.location == 0)
+        #expect(overlay.rightNeighborRange?.location == secondItemOffset)
+    }
+
+    @Test("Active CST slot overlay uses an inline caret for inline content boundaries")
+    func activeCSTSlotOverlayUsesInlineCaretForInlineContentBoundary() throws {
+        let source = "A `code` tail.\n"
+        let fixture = try makeFixture(source)
+        let tree = try #require(fixture.document.session.currentTree)
+        let slot = try firstResolvedSlot(
+            in: tree,
+            parentKind: .inlineContent,
+            insertionChildIndex: 1
+        )
+        let codeOffset = try utf16Offset(of: "`code`", in: source)
+
+        fixture.coordinator.setActiveCSTSlot(slot)
+
+        let overlay = try #require(fixture.textView.activeCSTSlotOverlay)
+        #expect(overlay.presentation == .inlineCaret)
+        #expect(overlay.parentKind == .inlineContent)
+        #expect(overlay.insertionLocation == codeOffset)
+        #expect((overlay.parentRange?.length ?? 0) > 0)
+    }
+
+    @Test("Clearing an active CST slot removes coordinator and text-view state")
+    func clearingActiveCSTSlotRemovesState() throws {
+        let source = "- one\n- two\n"
+        let fixture = try makeFixture(source)
+        let tree = try #require(fixture.document.session.currentTree)
+        let slot = try firstResolvedSlot(
+            in: tree,
+            parentKind: .list,
+            insertionChildIndex: 1
+        )
+        fixture.coordinator.setActiveCSTSlot(slot)
+        #expect(fixture.textView.activeCSTSlotOverlay != nil)
+
+        fixture.coordinator.clearActiveCSTSlot()
+
+        #expect(fixture.coordinator.activeCSTSlot == nil)
+        #expect(fixture.textView.activeCSTSlotOverlay == nil)
+    }
+
+    @Test("Tree mutation clears active CST slot overlay")
+    func treeMutationClearsActiveCSTSlotOverlay() async throws {
+        let source = "- one\n- two\n"
+        let fixture = try makeFixture(source)
+        fixture.coordinator.installModeObservers(on: fixture.controller)
+        // Let the initial @Published treeVersion value fan out before
+        // setting the slot; production installs observers before any slot
+        // can be selected.
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        let tree = try #require(fixture.document.session.currentTree)
+        let slot = try firstResolvedSlot(
+            in: tree,
+            parentKind: .list,
+            insertionChildIndex: 1
+        )
+        fixture.coordinator.setActiveCSTSlot(slot)
+        #expect(fixture.textView.activeCSTSlotOverlay != nil)
+
+        let edit = TextEdit(
+            range: TextRange(start: TextSize(0), length: TextSize(0)),
+            replacement: "intro\n"
+        )
+        #expect(fixture.document.applyTextEdits([edit]))
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        #expect(fixture.coordinator.activeCSTSlot == nil)
+        #expect(fixture.textView.activeCSTSlotOverlay == nil)
     }
 }
 
@@ -1186,6 +1436,19 @@ private func utf16Offset(of needle: String, in source: String) throws -> Int {
     return source.utf16.distance(from: source.utf16.startIndex, to: range.lowerBound)
 }
 
+@MainActor
+private func enterCommand(_ controller: VimController, _ command: String) {
+    _ = controller.handle(.char(":"))
+    for ch in command {
+        if ch == " " {
+            _ = controller.handle(.special(.space))
+        } else {
+            _ = controller.handle(.char(ch))
+        }
+    }
+    _ = controller.handle(.special(.returnKey))
+}
+
 private func headKind(_ forest: LiminalForest) -> LiminalKind {
     forest.parent.withCursor { cursor in
         cursor.green { green in green.child(at: forest.headChildIndex) }.kind
@@ -1238,4 +1501,42 @@ private func rootListItemsForest(
         }
         return nil
     }
+}
+
+private func firstResolvedSlot(
+    in tree: SharedSyntaxTree<LiminalLanguage>,
+    parentKind: LiminalKind,
+    insertionChildIndex: UInt32
+) throws -> ResolvedCSTSlot {
+    try #require(tree.withRoot { root in
+        firstResolvedSlot(in: root, parentKind: parentKind, insertionChildIndex: insertionChildIndex)
+    })
+}
+
+private func firstResolvedSlot(
+    in cursor: borrowing SyntaxNodeCursor<LiminalLanguage>,
+    parentKind: LiminalKind,
+    insertionChildIndex: UInt32
+) -> ResolvedCSTSlot? {
+    if cursor.kind == parentKind {
+        let count = UInt32(cursor.childOrTokenCount)
+        if insertionChildIndex <= count {
+            let byteOffset: TextSize = insertionChildIndex < count
+                ? cursor.childTextRange(at: Int(insertionChildIndex)).start
+                : cursor.textRange.end
+            return ResolvedCSTSlot(
+                parentHandle: cursor.makeHandle(),
+                insertionChildIndex: insertionChildIndex,
+                insertionByteOffset: byteOffset
+            )
+        }
+    }
+
+    for index in 0..<cursor.childOrTokenCount {
+        let found = cursor.withChildNode(atRawIndex: index) { child -> ResolvedCSTSlot? in
+            firstResolvedSlot(in: child, parentKind: parentKind, insertionChildIndex: insertionChildIndex)
+        } ?? nil
+        if let found { return found }
+    }
+    return nil
 }

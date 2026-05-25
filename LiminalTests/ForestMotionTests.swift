@@ -136,14 +136,15 @@ struct ForestMotionTests {
         #expect(viaKernel == viaPrimitive)
     }
 
-    @Test("descendant into a fenced code block returns nil (opaque)")
-    func descendantIntoOpaqueReturnsNil() throws {
+    @Test("descendant into a (no-longer-opaque) code block lands on its payload")
+    func descendantIntoCodeBlockLandsOnPayload() throws {
         let parsed = try LiminalParser().parse(CambiumSource("```\nlet x = 1\n```\n"))
         let tree = parsed.tree
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .fencedCodeBlock)
-        let result = start.moved(by: .descendant(), extending: false)
-        #expect(result == nil)
+        // `.opaque` is gone: descent lands on the code body payload token.
+        let result = try #require(start.moved(by: .descendant(), extending: false))
+        #expect(Self.headKind(result) == .codeText)
     }
 
     @Test("descendant with extending: true returns nil")
@@ -163,9 +164,9 @@ struct ForestMotionTests {
         let start = try #require(LiminalForest.cstVisualEntry(at: .zero, in: tree))
         #expect(Self.headKind(start) == .paragraph)
         let result = try #require(start.moved(by: .preorderForward(), extending: false))
-        // Should descend INTO paragraph (head = .inlineContent), NOT slide
-        // to the next root sibling.
-        #expect(Self.headKind(result) == .inlineContent)
+        // Should descend INTO the paragraph — through the inlineContent
+        // passThrough to its first inline stop — NOT slide to the next sibling.
+        #expect(Self.headKind(result) == .inlineText)
     }
 
     @Test("preorder forward eventually crosses sibling boundaries")

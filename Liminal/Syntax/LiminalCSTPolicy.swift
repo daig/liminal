@@ -4,32 +4,39 @@ import CambiumSelection
 /// The selection policy that parameterizes ``LiminalForest`` /
 /// ``LiminalForestAnchor`` for the Liminal editor.
 ///
-/// This policy answers two questions for every ``LiminalKind``:
+/// Structural ("visual CST") navigation is *behaviorally* navigating the
+/// conceptual typed-AST, not the raw CST. The CST carries extra elements that
+/// have no AST counterpart — required delimiters, separators, trivia, and pure
+/// wrapper nodes. This policy assigns each ``LiminalKind`` one
+/// ``NavigationRole`` so the generic selection layer can contract the CST down
+/// to its AST-content view:
 ///
-/// 1. ``isNavigable(_:)`` — can a child of this kind, in isolation, be an
-///    endpoint of a structural selection? Trivia, punctuation glue,
-///    payload-only tokens (the body of a fenced code block, frontmatter,
-///    raw text salvage tokens) all return `false`.
-/// 2. ``childPolicy(of:)`` — when this kind is a parent of a selection,
-///    what's the rule for which children participate? Opaque-payload
-///    parents (code blocks, math, HTML, comments, frontmatter) return
-///    ``ChildSelectionPolicy/opaque``; ``inlineContent`` returns
-///    ``ChildSelectionPolicy/allChildren`` so its text-token children
-///    are navigable; everything else uses
-///    ``ChildSelectionPolicy/structuralChildren``.
+/// - ``NavigationRole/stop``: an AST-present element — every structural node,
+///   plus the payload tokens that carry leaf data (a URL, a code body, an
+///   inline-text run, a scalar literal, an identifier). Navigation lands here.
+/// - ``NavigationRole/passThrough``: an AST-erased *single-content wrapper*
+///   that is never a sibling of other stops (`inlineContent`, `scalarValue`,
+///   `interpolationExpression`). Navigation descends through it and ascends
+///   past it, never landing on it.
+/// - ``NavigationRole/skip``: AST-erased filler — required markers/delimiters,
+///   element separators, whitespace/newline trivia, soft/hard breaks, the
+///   table delimiter row, and zero-width `missing` recovery holes.
 ///
-/// Both functions are exhaustive switches on ``LiminalKind`` with no
-/// `default:` branch — the compiler enforces that new kinds in the grammar
-/// get an explicit classification when they're added.
+/// One exhaustive `switch` with no `default:` keeps the policy in sync with the
+/// grammar: a new ``LiminalKind`` is a compile error until it is classified.
 public enum LiminalCSTPolicy: SyntaxSelectionPolicy {
     public typealias Lang = LiminalLanguage
 
-    public static func isNavigable(_ kind: LiminalKind) -> Bool {
+    public static func navigationRole(_ kind: LiminalKind) -> NavigationRole {
         switch kind {
-        // Trivia and structural punctuation tokens: never selectable on
-        // their own.
-        case .whitespace, .newline,
-             .atSign, .bang, .ampersand, .hash, .caret, .dollar,
+
+        // MARK: skip — AST-erased filler
+
+        // Trivia.
+        case .whitespace, .newline:
+            return .skip
+        // Required delimiters / markers / punctuation.
+        case .atSign, .bang, .ampersand, .hash, .caret, .dollar,
              .leftBracket, .rightBracket, .leftParen, .rightParen,
              .leftBrace, .rightBrace, .lessThan, .greaterThan,
              .comma, .colon, .pipe, .backtick, .tilde, .star,
@@ -38,132 +45,25 @@ public enum LiminalCSTPolicy: SyntaxSelectionPolicy {
              .doubleQuote, .semicolon,
              .hashRun, .colonRun, .fenceRun,
              .listMarker, .orderedListMarker, .taskMarker:
-            return false
+            return .skip
+        // Line breaks carry no AST content.
+        case .softBreak, .hardBreak:
+            return .skip
+        // The `|---|` table delimiter row is pure framing.
+        case .pipeTableDelimiter:
+            return .skip
+        // A zero-width recovery hole — nothing to land on.
+        case .missing:
+            return .skip
 
-        // Identifier and literal tokens: pieces of structured nodes, not
-        // selection targets in their own right.
+        // MARK: passThrough — AST-erased single-content wrappers
+
+        case .inlineContent, .scalarValue, .interpolationExpression:
+            return .passThrough
+
+        // MARK: stop — payload tokens
+
         case .identifier, .qname, .anchor, .fieldName,
-             .quotedStringLiteral, .integerLiteral, .numberLiteral,
-             .booleanLiteral, .nullLiteral, .bareScalarLiteral:
-            return false
-
-        // Payload-only content tokens: the body of an opaque container or
-        // an internal text slice of a wrapper. Not selection targets.
-        case .codeText, .mathText, .htmlText, .frontmatterText,
-             .commentText, .rawPayloadText,
-             .linkDestinationText, .linkTitleText,
-             .wikiTargetText, .embedTargetText,
-             .interpolationText, .externalReferenceText,
-             .schemaText, .templateText, .directiveText, .errorText:
-            return false
-
-        // The lone navigable token: inline text runs inside an
-        // inlineContent container with .allChildren policy.
-        case .inlineText:
-            return true
-
-        // Document, block, inline, value, schema, and template structural
-        // nodes. Every node kind is a meaningful structural unit.
-        case .root,
-             .blankLine, .frontmatter, .directive, .valueDeclaration,
-             .paragraph, .atxHeading, .thematicBreak,
-             .list, .listItem, .blockQuote,
-             .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock,
-             .typedBlock,
-             .pipeTable, .pipeTableHeader, .pipeTableDelimiter,
-             .pipeTableRow, .pipeTableCell,
-             .structuredEmbedBlock, .wikiEmbedBlock,
-             .blockIdSuffix,
-             .inlineContent,
-             .softBreak, .hardBreak, .codeSpan, .escapedPunctuation,
-             .emphasis, .strong, .strikethrough, .highlight,
-             .mdLink, .mdImage, .autolink,
-             .wikilink, .wikiEmbed, .structuredEmbed,
-             .mathInline, .htmlInline, .inlineComment,
-             .footnoteInline, .interpolation, .typedInline,
-             .linkLabel, .linkDestination, .linkTitle,
-             .wikiTarget, .embedTarget,
-             .value, .typedConstructor, .fields, .field,
-             .listValue, .recordValue,
-             .inlineLiteral, .blockLiteral,
-             .reference, .externalReference,
-             .structuredEmbedValue, .scalarValue,
-             .schemaBlock, .schemaHeader,
-             .schemaTypeDeclaration, .schemaTemplateTypeDeclaration,
-             .schemaTypeExpression, .schemaField, .schemaModifier,
-             .schemaBody, .schemaVariantCase,
-             .templateBlock, .templateSignature, .templateParameter,
-             .templateBody,
-             .useDirective, .interpolationExpression:
-            return true
-
-        // Recovery sentinels: selectable so the editor can navigate to
-        // them and surface a "this region is incomplete" affordance.
-        case .missing, .error:
-            return true
-        }
-    }
-
-    public static func childPolicy(of parent: LiminalKind) -> ChildSelectionPolicy {
-        switch parent {
-        // Raw-payload containers: their inner CST is a flat text token,
-        // not something a user navigates into. CST visual mode lands on
-        // the whole block as an atomic unit.
-        case .fencedCodeBlock, .mathBlock, .htmlBlock,
-             .commentBlock, .frontmatter:
-            return .opaque
-
-        // Mixed-content containers: structurally interesting node
-        // children appear alongside meaningful text-token children
-        // (e.g. inline-text runs inside an inlineContent), so token
-        // children participate in navigation.
-        case .inlineContent:
-            return .allChildren
-
-        // Everything else: only structural node children participate.
-        case .root, .blankLine, .directive, .valueDeclaration,
-             .paragraph, .atxHeading, .thematicBreak,
-             .list, .listItem, .blockQuote,
-             .typedBlock,
-             .pipeTable, .pipeTableHeader, .pipeTableDelimiter,
-             .pipeTableRow, .pipeTableCell,
-             .structuredEmbedBlock, .wikiEmbedBlock,
-             .blockIdSuffix,
-             .softBreak, .hardBreak, .codeSpan, .escapedPunctuation,
-             .emphasis, .strong, .strikethrough, .highlight,
-             .mdLink, .mdImage, .autolink,
-             .wikilink, .wikiEmbed, .structuredEmbed,
-             .mathInline, .htmlInline, .inlineComment,
-             .footnoteInline, .interpolation, .typedInline,
-             .linkLabel, .linkDestination, .linkTitle,
-             .wikiTarget, .embedTarget,
-             .value, .typedConstructor, .fields, .field,
-             .listValue, .recordValue,
-             .inlineLiteral, .blockLiteral,
-             .reference, .externalReference,
-             .structuredEmbedValue, .scalarValue,
-             .schemaBlock, .schemaHeader,
-             .schemaTypeDeclaration, .schemaTemplateTypeDeclaration,
-             .schemaTypeExpression, .schemaField, .schemaModifier,
-             .schemaBody, .schemaVariantCase,
-             .templateBlock, .templateSignature, .templateParameter,
-             .templateBody,
-             .useDirective, .interpolationExpression,
-             .missing, .error,
-             // Token-kind parents: tokens have no children, so the
-             // policy is irrelevant in practice; pick the conservative
-             // default rather than a special case.
-             .whitespace, .newline,
-             .atSign, .bang, .ampersand, .hash, .caret, .dollar,
-             .leftBracket, .rightBracket, .leftParen, .rightParen,
-             .leftBrace, .rightBrace, .lessThan, .greaterThan,
-             .comma, .colon, .pipe, .backtick, .tilde, .star,
-             .underscore, .dash, .plus, .dot, .slash, .backslash,
-             .percent, .equals, .questionMark, .singleQuote,
-             .doubleQuote, .semicolon,
-             .hashRun, .colonRun, .fenceRun,
-             .listMarker, .orderedListMarker, .taskMarker,
-             .identifier, .qname, .anchor, .fieldName,
              .quotedStringLiteral, .integerLiteral, .numberLiteral,
              .booleanLiteral, .nullLiteral, .bareScalarLiteral,
              .inlineText,
@@ -173,7 +73,41 @@ public enum LiminalCSTPolicy: SyntaxSelectionPolicy {
              .wikiTargetText, .embedTargetText,
              .interpolationText, .externalReferenceText,
              .schemaText, .templateText, .directiveText, .errorText:
-            return .structuralChildren
+            return .stop
+
+        // MARK: stop — structural nodes
+
+        case .root,
+             .blankLine, .frontmatter, .directive, .valueDeclaration,
+             .paragraph, .atxHeading, .thematicBreak,
+             .list, .listItem, .blockQuote,
+             .fencedCodeBlock, .mathBlock, .htmlBlock, .commentBlock,
+             .typedBlock,
+             .pipeTable, .pipeTableHeader, .pipeTableRow, .pipeTableCell,
+             .structuredEmbedBlock, .wikiEmbedBlock,
+             .blockIdSuffix,
+             .codeSpan, .escapedPunctuation,
+             .emphasis, .strong, .strikethrough, .highlight,
+             .mdLink, .mdImage, .autolink,
+             .wikilink, .wikiEmbed, .structuredEmbed,
+             .mathInline, .htmlInline, .inlineComment,
+             .footnoteInline, .interpolation, .typedInline,
+             .linkLabel, .linkDestination, .linkTitle,
+             .wikiTarget, .embedTarget,
+             .value, .typedConstructor, .fields, .field,
+             .listValue, .recordValue,
+             .inlineLiteral, .blockLiteral,
+             .reference, .externalReference,
+             .structuredEmbedValue,
+             .schemaBlock, .schemaHeader,
+             .schemaTypeDeclaration, .schemaTemplateTypeDeclaration,
+             .schemaTypeExpression, .schemaField, .schemaModifier,
+             .schemaBody, .schemaVariantCase,
+             .templateBlock, .templateSignature, .templateParameter,
+             .templateBody,
+             .useDirective,
+             .error:
+            return .stop
         }
     }
 }
@@ -191,10 +125,9 @@ public typealias LiminalForestResolution = ForestResolution<LiminalCSTPolicy>
 public extension SyntaxForest where Policy == LiminalCSTPolicy {
     /// Build the forest under the editor's block cursor.
     ///
-    /// A normal-mode block cursor visually occupies the character
-    /// starting at `offset`; when one child ends and another starts at
-    /// the same byte, editor targeting should prefer the downstream
-    /// child.
+    /// A normal-mode block cursor visually occupies the character starting at
+    /// `offset`; when one child ends and another starts at the same byte,
+    /// editor targeting should prefer the downstream child.
     static func cursorTarget(
         at offset: TextSize,
         in tree: SharedSyntaxTree<LiminalLanguage>
@@ -205,27 +138,21 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
     /// Build the entry-point forest for visual CST mode at a cursor byte
     /// offset.
     ///
-    /// `LiminalForest.cursorTarget(at:in:)` returns the smallest
-    /// navigable forest under the editor cursor — which inside markup
-    /// inline content resolves to a single `.inlineText` token under an
-    /// ``ChildSelectionPolicy/allChildren`` parent. That's the correct
-    /// foundation primitive but the wrong final selection for visual CST
-    /// mode's UX: a user who pressed the entry chord wants structural
-    /// reach, not a single-word selection.
+    /// `cursorTarget(at:in:)` returns the smallest stop under the cursor —
+    /// inside prose that resolves to a single inline-text run, inside a link to
+    /// its label/destination content. That's the correct foundation primitive
+    /// but the wrong final selection for visual-CST entry: a user who pressed
+    /// the entry chord wants structural reach, not a single word.
     ///
     /// This helper ascends from `cursorTarget(at:in:)`'s result until the
-    /// focused child kind is a meaningful structural unit — a paragraph,
-    /// list item, code block, heading, table row, field, etc. It ascends
-    /// past both ``ChildSelectionPolicy/allChildren`` parents (which
-    /// admit token siblings that aren't meaningful selection targets) and
-    /// structural-glue wrappers (``LiminalKind/inlineContent``,
-    /// ``LiminalKind/value``, ``LiminalKind/fields``, the typed-value
-    /// payload wrappers) that exist purely to host typed children. The
-    /// user can press `h` to ascend further from the resulting block.
+    /// focused element is a structural node that isn't buried inside an
+    /// inline-content stream — a paragraph, list item, table cell, code block,
+    /// etc. It lifts off bare payload leaf tokens (a word, a code body) and out
+    /// of ``NavigationRole/passThrough`` wrappers, but stops there; pressing
+    /// `l` then walks further down into the AST.
     ///
-    /// Returns `nil` only when no navigable forest contains `offset`
-    /// (empty tree, offset past document end). The Coordinator's entry
-    /// path treats `nil` as "decline to enter visual CST mode."
+    /// Returns `nil` only when no stop contains `offset` (empty tree, offset
+    /// past document end) — the Coordinator treats `nil` as "decline to enter."
     static func cstVisualEntry(
         at offset: TextSize,
         in tree: SharedSyntaxTree<LiminalLanguage>
@@ -240,35 +167,18 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
         return current
     }
 
-    /// `true` when `forest` is still inside an ascend-past target — its
-    /// parent is `.allChildren`, OR its focused child kind is a
-    /// structural-glue wrapper that exists to host typed children rather
-    /// than represent a selection unit on its own.
+    /// `true` while entry should keep lifting: the focused stop is inside an
+    /// inline-content stream (its parent is `passThrough`), or it is a bare
+    /// payload leaf token. Either way we'd rather land on the enclosing
+    /// structural node than on a single word or raw payload body.
     private static func shouldAscendForCSTEntry(_ forest: LiminalForest) -> Bool {
-        let parentKind = forest.parent.withCursor { $0.kind }
-        if LiminalCSTPolicy.childPolicy(of: parentKind) == .allChildren {
-            return true
-        }
-        let childKind = forest.parent.withCursor { cursor in
-            cursor.green { green in green.child(at: forest.anchorChildIndex) }
-        }.kind
-        return Self.isCSTStructuralGlueWrapper(childKind)
-    }
-
-    /// The set of kinds whose role is "host other typed children" rather
-    /// than "be a selection unit." Used by ``cstVisualEntry(at:in:)`` to
-    /// ascend past them on entry.
-    private static func isCSTStructuralGlueWrapper(_ kind: LiminalKind) -> Bool {
-        switch kind {
-        case .inlineContent,
-             .fields, .value,
-             .listValue, .recordValue, .scalarValue,
-             .schemaBody, .templateBody,
-             .typedConstructor:
-            return true
-        default:
+        forest.parent.withCursor { parent in
+            if LiminalCSTPolicy.navigationRole(parent.kind) == .passThrough {
+                return true
+            }
+            let element = parent.green { green in green.child(at: forest.anchorChildIndex) }
+            if case .token = element { return true }
             return false
         }
     }
-
 }

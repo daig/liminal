@@ -10,9 +10,11 @@ import CambiumSelection
 /// (looped with saturation).
 ///
 /// One "logical step" of a motion walks along its axis in its direction
-/// until the predicate matches or the axis exhausts. So `h` with
-/// `.ancestor(.excluding(.glueWrapper))` walks past as many glue
-/// ancestors as needed in a single step.
+/// until the predicate matches or the axis exhausts. So `]h` with
+/// `.ancestor(.containingAny(.heading))` walks past as many non-heading
+/// ancestors as needed in a single step. (Framing and pass-through wrappers
+/// are skipped intrinsically by the navigation primitives, so plain
+/// `.ancestor()` / `.descendant()` already move one AST level.)
 ///
 /// `ForestMotion` is intentionally NOT `Equatable`/`Hashable`: the
 /// `.custom` predicate carries a closure. Motions are transient
@@ -165,34 +167,6 @@ public extension ForestMotion {
     /// iteration as `.forward`). Backs vim-style `F<kind>`.
     static func subtreePreorderBackward(_ predicate: Predicate = .any) -> ForestMotion {
         ForestMotion(axis: .subtreePreorder, direction: .backward, predicate: predicate)
-    }
-}
-
-// MARK: - Additional forest navigation primitives
-
-public extension SyntaxForest where Policy == LiminalCSTPolicy {
-    /// Single-level descent to the LAST navigable child of the head's
-    /// pointed node. Mirrors Cambium's ``firstChildForest`` but lands on
-    /// the last sibling. Implemented as `firstChildForest()` +
-    /// `slidForward()` in a tight loop (Cambium doesn't expose a direct
-    /// primitive).
-    ///
-    /// Returns `nil` for the same reasons as `firstChildForest()`:
-    /// head pointing at a token, an opaque-policy parent, or a parent
-    /// with no navigable children.
-    ///
-    /// This is a primitive — it does NOT recurse through glue wrappers.
-    /// Callers that want "the user-facing last child" should drive the
-    /// kernel via `ForestMotion.descendantBackward(.excluding(.glueWrapper))`
-    /// (which loops this primitive at each level, mirroring the way
-    /// `:CSTFirstChild` peels through glue via `descendant(.excluding(...))`).
-    func lastChildForest() -> SyntaxForest<Policy>? {
-        guard let first = firstChildForest() else { return nil }
-        var current = first
-        while let next = current.slidForward() {
-            current = next
-        }
-        return current
     }
 }
 
@@ -420,11 +394,9 @@ public extension SyntaxForest where Policy == LiminalCSTPolicy {
         return nil
     }
 
-    /// One step down the child chain in the requested direction.
-    /// `.forward` is the Cambium primitive `firstChildForest()`;
-    /// `.backward` is its symmetric `lastChildForest()` (firstChild + slid
-    /// forward to the end). Both skip non-navigable glue siblings via the
-    /// underlying navigability policy.
+    /// One step down the child chain, landing on the first (`.forward`) or
+    /// last (`.backward`) stop. Both are Cambium primitives that skip framing
+    /// and recurse through pass-through wrappers to the stop beneath.
     private static func childChainStep(
         from forest: SyntaxForest<Policy>,
         direction: ForestMotion.Direction

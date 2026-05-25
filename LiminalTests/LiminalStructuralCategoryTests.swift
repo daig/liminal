@@ -185,20 +185,6 @@ struct LiminalStructuralCategoryTests {
 
     // MARK: - Parity with existing classifiers
 
-    @Test("`.opaquePayload` parity with LiminalCSTPolicy.childPolicy")
-    func opaquePayloadParity() {
-        // For every kind, `.opaquePayload` membership must match having an
-        // `.opaque` child policy. Keeps the two definitions in lockstep.
-        for kind in LiminalKind.allCases {
-            let isOpaque = LiminalCSTPolicy.childPolicy(of: kind) == .opaque
-            let inOpaqueCategory = kind.categories.contains(.opaquePayload)
-            #expect(
-                isOpaque == inOpaqueCategory,
-                "\(kind): opaque policy=\(isOpaque) vs .opaquePayload=\(inOpaqueCategory)"
-            )
-        }
-    }
-
     @Test("`.glueWrapper` is a superset of the existing cstVisualEntry glue set")
     func glueWrapperParity() {
         // Every kind in the existing isCSTStructuralGlueWrapper set must

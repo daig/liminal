@@ -94,6 +94,22 @@ final class VimTextView: NSTextView {
         let strength: ForestMarkStrength
     }
 
+    /// Transient visual feedback for a single active CST slot. This is
+    /// current-tree UI state, not persisted mark state.
+    struct ActiveCSTSlotOverlay: Equatable {
+        let parentRange: NSRange?
+        let insertionLocation: Int
+        let leftNeighborRange: NSRange?
+        let rightNeighborRange: NSRange?
+        let parentKind: LiminalKind
+        let presentation: Presentation
+
+        enum Presentation: Equatable {
+            case blockRule
+            case inlineCaret
+        }
+    }
+
     var forestMarkOverlays: [ForestMarkOverlay] = [] {
         didSet {
             guard oldValue != forestMarkOverlays else { return }
@@ -101,14 +117,23 @@ final class VimTextView: NSTextView {
         }
     }
 
+    var activeCSTSlotOverlay: ActiveCSTSlotOverlay? {
+        didSet {
+            guard oldValue != activeCSTSlotOverlay else { return }
+            needsDisplay = true
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         // Forest mark outlines first — they're the most ambient layer.
-        // CST selection + head accent paint on top so the live selection
-        // is always the dominant visual.
+        // The active slot's parent cue is also ambient; the slot boundary
+        // itself paints later so the insertion target stays dominant.
         drawForestMarkOverlays(in: dirtyRect)
+        drawActiveCSTSlotParentCue(in: dirtyRect)
         drawCSTSelectionOverlay(in: dirtyRect)
         drawCSTHeadAccent(in: dirtyRect)
+        drawActiveCSTSlotBoundary(in: dirtyRect)
         drawMarkIndicators(in: dirtyRect)
     }
 
@@ -243,6 +268,178 @@ final class VimTextView: NSTextView {
         }
     }
 
+    private func drawActiveCSTSlotParentCue(in dirtyRect: NSRect) {
+        guard let overlay = activeCSTSlotOverlay,
+              overlay.parentKind != .root,
+              let parentRange = overlay.parentRange,
+              parentRange.length > 0,
+              let layoutManager,
+              let textContainer
+        else { return }
+
+        let rects = lineFragmentRects(
+            forCharacterRange: parentRange,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        )
+        guard !rects.isEmpty else { return }
+
+        NSColor.systemOrange.withAlphaComponent(0.20).setStroke()
+        for rect in rects {
+            let drawRect = rect.insetBy(dx: 0.5, dy: 0.5)
+            guard drawRect.intersects(dirtyRect) else { continue }
+            let path = NSBezierPath(roundedRect: drawRect, xRadius: 3, yRadius: 3)
+            var dash: [CGFloat] = [3.0, 3.0]
+            dash.withUnsafeMutableBufferPointer { buffer in
+                path.setLineDash(buffer.baseAddress, count: buffer.count, phase: 0)
+            }
+            path.lineWidth = 1.0
+            path.stroke()
+        }
+    }
+
+    private func drawActiveCSTSlotBoundary(in dirtyRect: NSRect) {
+        guard let overlay = activeCSTSlotOverlay,
+              let layoutManager,
+              let textContainer
+        else { return }
+
+        switch overlay.presentation {
+        case .inlineCaret:
+            drawActiveSlotInlineCaret(
+                overlay,
+                dirtyRect: dirtyRect,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            )
+        case .blockRule:
+            drawActiveSlotBlockRule(
+                overlay,
+                dirtyRect: dirtyRect,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            )
+        }
+    }
+
+    private func drawActiveSlotInlineCaret(
+        _ overlay: ActiveCSTSlotOverlay,
+        dirtyRect: NSRect,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) {
+        guard let caret = caretRect(
+            forUTF16Location: overlay.insertionLocation,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        ) else { return }
+
+        let color = NSColor.systemOrange
+        color.setFill()
+
+        let barWidth: CGFloat = 2.0
+        let capHeight: CGFloat = 2.0
+        let capWidth: CGFloat = 8.0
+        let bar = NSRect(
+            x: caret.minX - barWidth / 2,
+            y: caret.minY + 1,
+            width: barWidth,
+            height: max(8, caret.height - 2)
+        )
+        let topCap = NSRect(
+            x: bar.midX - capWidth / 2,
+            y: bar.minY,
+            width: capWidth,
+            height: capHeight
+        )
+        let bottomCap = NSRect(
+            x: bar.midX - capWidth / 2,
+            y: bar.maxY - capHeight,
+            width: capWidth,
+            height: capHeight
+        )
+
+        let bounds = bar.union(topCap).union(bottomCap)
+        guard bounds.intersects(dirtyRect) else { return }
+        NSBezierPath(roundedRect: bar, xRadius: 1, yRadius: 1).fill()
+        topCap.fill()
+        bottomCap.fill()
+    }
+
+    private func drawActiveSlotBlockRule(
+        _ overlay: ActiveCSTSlotOverlay,
+        dirtyRect: NSRect,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) {
+        guard let rule = activeSlotBlockRuleRect(
+            for: overlay,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        ) else {
+            drawActiveSlotInlineCaret(
+                overlay,
+                dirtyRect: dirtyRect,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+            )
+            return
+        }
+
+        let notch = NSRect(
+            x: rule.minX - 1,
+            y: rule.midY - 4,
+            width: 3,
+            height: 8
+        )
+        guard rule.union(notch).intersects(dirtyRect) else { return }
+
+        NSColor.systemOrange.setFill()
+        NSBezierPath(roundedRect: rule, xRadius: 1, yRadius: 1).fill()
+        NSBezierPath(roundedRect: notch, xRadius: 1, yRadius: 1).fill()
+    }
+
+    private func activeSlotBlockRuleRect(
+        for overlay: ActiveCSTSlotOverlay,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> NSRect? {
+        if let rightRange = overlay.rightNeighborRange,
+           let rect = lineFragmentRects(
+                forCharacterRange: rightRange,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+           ).first {
+            return blockRuleRect(anchoredTo: rect, y: rect.minY)
+        }
+
+        if let leftRange = overlay.leftNeighborRange,
+           let rect = lineFragmentRects(
+                forCharacterRange: leftRange,
+                layoutManager: layoutManager,
+                textContainer: textContainer
+           ).last {
+            return blockRuleRect(anchoredTo: rect, y: rect.maxY)
+        }
+
+        guard let caret = caretRect(
+            forUTF16Location: overlay.insertionLocation,
+            layoutManager: layoutManager,
+            textContainer: textContainer
+        ) else { return nil }
+        return NSRect(
+            x: caret.minX,
+            y: caret.midY - 1,
+            width: 48,
+            height: 2
+        )
+    }
+
+    private func blockRuleRect(anchoredTo rect: NSRect, y: CGFloat) -> NSRect {
+        let width = min(max(rect.width, 44), 160)
+        return NSRect(x: rect.minX, y: y - 1, width: width, height: 2)
+    }
+
     private func drawMarkIndicators(in dirtyRect: NSRect) {
         guard !markPositions.isEmpty,
               let layoutManager,
@@ -278,6 +475,92 @@ final class VimTextView: NSTextView {
                 NSBezierPath(ovalIn: rect).fill()
             }
         }
+    }
+
+    private func lineFragmentRects(
+        forCharacterRange range: NSRange,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> [NSRect] {
+        guard range.length > 0 else { return [] }
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: range,
+            actualCharacterRange: nil
+        )
+        guard glyphRange.length > 0 else { return [] }
+
+        let origin = textContainerOrigin
+        var rects: [NSRect] = []
+        layoutManager.enumerateEnclosingRects(
+            forGlyphRange: glyphRange,
+            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+            in: textContainer
+        ) { rect, _ in
+            rects.append(rect.offsetBy(dx: origin.x, dy: origin.y))
+        }
+        return rects
+    }
+
+    private func caretRect(
+        forUTF16Location location: Int,
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer
+    ) -> NSRect? {
+        layoutManager.ensureLayout(for: textContainer)
+
+        let text = string as NSString
+        let origin = textContainerOrigin
+        guard text.length > 0, layoutManager.numberOfGlyphs > 0 else {
+            let height = defaultLineHeight()
+            return NSRect(x: origin.x, y: origin.y, width: 1, height: height)
+        }
+
+        let clampedLocation = max(0, min(location, text.length))
+        let glyphIndex: Int
+        let x: CGFloat
+        if clampedLocation < text.length {
+            glyphIndex = layoutManager.glyphIndexForCharacter(at: clampedLocation)
+            guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            let lineUsedRect = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            x = glyphRect.isEmpty ? lineUsedRect.maxX : glyphRect.minX
+        } else {
+            glyphIndex = layoutManager.numberOfGlyphs - 1
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            let lineUsedRect = layoutManager.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            x = glyphRect.isEmpty ? lineUsedRect.maxX : glyphRect.maxX
+        }
+
+        let lineUsedRect = layoutManager.lineFragmentUsedRect(
+            forGlyphAt: glyphIndex,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        return NSRect(
+            x: x + origin.x,
+            y: lineUsedRect.minY + origin.y,
+            width: 1,
+            height: max(defaultLineHeight(), lineUsedRect.height)
+        )
+    }
+
+    private func defaultLineHeight() -> CGFloat {
+        guard let font else { return 16 }
+        return max(12, ceil(font.ascender - font.descender + font.leading))
     }
 
     /// Map a UTF-16 location to the on-screen glyph rect (in view

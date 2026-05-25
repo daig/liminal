@@ -6,7 +6,7 @@ import Testing
 @Suite("LiminalCSTPolicy")
 struct LiminalCSTPolicyTests {
 
-    // MARK: - Wrapper-enum consistency
+    // MARK: - Wrapper-enum consistency (every wrapper kind is navigable)
 
     @Test("DocumentItemSyntax cases are all navigable per the policy")
     func documentItemKindsAreNavigable() {
@@ -48,52 +48,72 @@ struct LiminalCSTPolicyTests {
         }
     }
 
-    // MARK: - Opaque / allChildren correctness
+    // MARK: - Navigation roles
 
-    @Test("Raw-payload containers have opaque child policy")
-    func rawPayloadParentsAreOpaque() {
-        let opaque: [LiminalKind] = [
+    @Test("Former opaque blocks are now descendable stops")
+    func formerOpaqueBlocksAreStops() {
+        // `.opaque` is gone: code/math/HTML/comment/frontmatter blocks are
+        // navigable stops you can descend into (to their payload token).
+        let blocks: [LiminalKind] = [
             .fencedCodeBlock, .mathBlock, .htmlBlock,
             .commentBlock, .frontmatter,
         ]
-        for parent in opaque {
+        for block in blocks {
             #expect(
-                LiminalCSTPolicy.childPolicy(of: parent) == .opaque,
-                "\(parent) should have .opaque child policy"
+                LiminalCSTPolicy.navigationRole(block) == .stop,
+                "\(block) should be a stop"
+            )
+        }
+        // And their payload bodies are stops a descent can land on.
+        for payload in [LiminalKind.codeText, .mathText, .commentText, .frontmatterText] {
+            #expect(LiminalCSTPolicy.navigationRole(payload) == .stop)
+        }
+    }
+
+    @Test("inlineContent is a passThrough wrapper; inline text is a stop")
+    func inlineContentIsPassThrough() {
+        #expect(LiminalCSTPolicy.navigationRole(.inlineContent) == .passThrough)
+        #expect(LiminalCSTPolicy.navigationRole(.inlineText) == .stop)
+    }
+
+    @Test("Single-content wrappers are passThrough")
+    func soleContentWrappersArePassThrough() {
+        for wrapper in [LiminalKind.inlineContent, .scalarValue, .interpolationExpression] {
+            #expect(
+                LiminalCSTPolicy.navigationRole(wrapper) == .passThrough,
+                "\(wrapper) should be passThrough"
             )
         }
     }
 
-    @Test("inlineContent uses allChildren so inline text tokens participate")
-    func inlineContentUsesAllChildren() {
-        #expect(LiminalCSTPolicy.childPolicy(of: .inlineContent) == .allChildren)
-        #expect(LiminalCSTPolicy.isNavigable(.inlineText))
-    }
-
-    @Test("Typical containers default to structuralChildren")
-    func typicalContainersUseStructuralChildren() {
-        let typical: [LiminalKind] = [
+    @Test("Typical containers and inline wrappers are stops")
+    func typicalContainersAreStops() {
+        let stops: [LiminalKind] = [
             .root, .paragraph, .atxHeading, .list, .listItem,
-            .blockQuote, .typedBlock, .pipeTable, .pipeTableRow,
+            .blockQuote, .typedBlock, .pipeTable, .pipeTableRow, .pipeTableCell,
+            // The inline wrappers that used to be skipped as "glue" are now
+            // first-class stops — this is the fix for over-descent.
+            .linkLabel, .linkDestination, .wikiTarget,
         ]
-        for parent in typical {
+        for kind in stops {
             #expect(
-                LiminalCSTPolicy.childPolicy(of: parent) == .structuralChildren,
-                "\(parent) should have .structuralChildren policy"
+                LiminalCSTPolicy.navigationRole(kind) == .stop,
+                "\(kind) should be a stop"
             )
         }
     }
 
-    // MARK: - Token / trivia non-navigability
+    // MARK: - Skip classification
 
-    @Test("Trivia tokens are never navigable")
-    func triviaIsNotNavigable() {
+    @Test("Trivia tokens are skipped")
+    func triviaIsSkipped() {
+        #expect(LiminalCSTPolicy.navigationRole(.whitespace) == .skip)
+        #expect(LiminalCSTPolicy.navigationRole(.newline) == .skip)
         #expect(!LiminalCSTPolicy.isNavigable(.whitespace))
-        #expect(!LiminalCSTPolicy.isNavigable(.newline))
     }
 
-    @Test("Punctuation tokens are never navigable")
-    func punctuationIsNotNavigable() {
+    @Test("Punctuation / markers are skipped (framing)")
+    func punctuationIsSkipped() {
         let punctuation: [LiminalKind] = [
             .atSign, .bang, .ampersand, .hash, .caret, .dollar,
             .leftBracket, .rightBracket, .leftParen, .rightParen,
@@ -107,33 +127,47 @@ struct LiminalCSTPolicyTests {
         ]
         for token in punctuation {
             #expect(
-                !LiminalCSTPolicy.isNavigable(token),
-                "\(token) should not be navigable"
+                LiminalCSTPolicy.navigationRole(token) == .skip,
+                "\(token) should be skipped framing"
             )
         }
     }
 
-    @Test("Opaque payload tokens are not navigable on their own")
-    func opaquePayloadTokensAreNotNavigable() {
+    @Test("Breaks, the table delimiter row, and missing holes are skipped")
+    func structuralFillerIsSkipped() {
+        for kind in [LiminalKind.softBreak, .hardBreak, .pipeTableDelimiter, .missing] {
+            #expect(
+                LiminalCSTPolicy.navigationRole(kind) == .skip,
+                "\(kind) should be skipped"
+            )
+        }
+    }
+
+    @Test("Payload text tokens are navigable stops")
+    func payloadTokensAreStops() {
+        // These were non-navigable in the old model; they are now the AST-leaf
+        // content a descent lands on (a URL, a code body, a scalar).
         let payloads: [LiminalKind] = [
             .codeText, .mathText, .htmlText, .frontmatterText,
-            .commentText, .rawPayloadText,
+            .commentText, .rawPayloadText, .linkDestinationText,
+            .wikiTargetText, .identifier, .qname, .integerLiteral,
         ]
         for payload in payloads {
-            #expect(!LiminalCSTPolicy.isNavigable(payload))
+            #expect(
+                LiminalCSTPolicy.navigationRole(payload) == .stop,
+                "\(payload) should be a stop"
+            )
         }
     }
 
     // MARK: - Exhaustiveness via CaseIterable
 
-    @Test("Every LiminalKind classifies consistently (no compile-time gaps)")
+    @Test("Every LiminalKind classifies (no compile-time gaps)")
     func everyKindClassifies() {
-        // Touch both predicates on every kind. The compile-time exhaustive
-        // switches guarantee a result; this test is the runtime safety
-        // net that catches any future drift into a default-arm classification.
+        // The compile-time exhaustive switch guarantees a result; this is the
+        // runtime safety net against future drift.
         for kind in LiminalKind.allCases {
-            _ = LiminalCSTPolicy.isNavigable(kind)
-            _ = LiminalCSTPolicy.childPolicy(of: kind)
+            _ = LiminalCSTPolicy.navigationRole(kind)
         }
     }
 
@@ -146,17 +180,9 @@ struct LiminalCSTPolicyTests {
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: .zero, in: tree)
         )
-        // Smallest-navigable would have landed on .inlineText under an
-        // .allChildren inlineContent parent. cstVisualEntry should have
-        // ascended at least to inlineContent — and inlineContent itself
-        // sits inside a paragraph (.structuralChildren), so we expect
-        // the forest's parent to be paragraph (or some other block
-        // container) with .structuralChildren policy.
-        let parentKind = forest.parent.withCursor { $0.kind }
-        #expect(
-            LiminalCSTPolicy.childPolicy(of: parentKind) == .structuralChildren,
-            "cstVisualEntry should ascend out of .allChildren parents; landed under \(parentKind)"
-        )
+        // Smallest-stop would have landed on the inline-text run; entry ascends
+        // (through the inlineContent passThrough) to the enclosing paragraph.
+        #expect(Self.focusedKind(forest) == .paragraph)
     }
 
     @Test("cstVisualEntry inside a fenced code block lands on the block itself")
@@ -164,19 +190,11 @@ struct LiminalCSTPolicyTests {
         let source = "```swift\nlet x = 1\n```\n"
         let parsed = try LiminalParser().parse(CambiumSource(source))
         let tree = parsed.tree
-        // Pick an offset inside the code block.
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: TextSize(10), in: tree)
         )
-        // The fenced code block itself is the navigable child here; its
-        // parent is root (or whatever DocumentItem container). Both are
-        // .structuralChildren, so cstVisualEntry doesn't need to ascend
-        // from the singleton it found.
-        let parentKind = forest.parent.withCursor { $0.kind }
-        #expect(
-            LiminalCSTPolicy.childPolicy(of: parentKind) == .structuralChildren,
-            "Code-block entry should land under a structural-children parent, got \(parentKind)"
-        )
+        // Entry ascends from the code payload to the block (a `.blockItem`).
+        #expect(Self.focusedKind(forest) == .fencedCodeBlock)
     }
 
     @Test("cstVisualEntry at a block start after a blank line targets the downstream block")
@@ -188,11 +206,7 @@ struct LiminalCSTPolicyTests {
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: offset, in: tree)
         )
-
-        let childKind = forest.parent.withCursor {
-            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
-        }
-        #expect(childKind == .listItem)
+        #expect(Self.focusedKind(forest) == .listItem)
         #expect(forest.byteRange.start == offset)
     }
 
@@ -205,11 +219,7 @@ struct LiminalCSTPolicyTests {
         let forest = try #require(
             LiminalForest.cstVisualEntry(at: offset, in: tree)
         )
-
-        let childKind = forest.parent.withCursor {
-            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
-        }
-        #expect(childKind == .paragraph)
+        #expect(Self.focusedKind(forest) == .paragraph)
         #expect(forest.byteRange.start == offset)
     }
 
@@ -221,11 +231,15 @@ struct LiminalCSTPolicyTests {
         #expect(forest == nil)
     }
 
-    // MARK: - Wrapper-enum spec sources
+    // MARK: - Helpers / spec sources
 
-    /// Mirror of `DocumentItemSyntax`'s case list, kept here so the test
-    /// fails to compile if the test isn't updated when the wrapper enum
-    /// changes. (`DocumentItemSyntax` itself isn't `CaseIterable`.)
+    private static func focusedKind(_ forest: LiminalForest) -> LiminalKind {
+        forest.parent.withCursor {
+            $0.green { green in green.child(at: forest.anchorChildIndex) }.kind
+        }
+    }
+
+    /// Mirror of `DocumentItemSyntax`'s case list.
     private static let documentItemKinds: [LiminalKind] = [
         .blankLine, .frontmatter, .directive, .schemaBlock,
         .templateBlock, .paragraph, .atxHeading, .thematicBreak,
